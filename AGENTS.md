@@ -88,6 +88,16 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 Format: `<type>: <description>` or `<type>: <description>\n\n<body>`
 
+## Versioning
+
+The `version` field in the tool docstring follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
+
+- **Patch** (`1.0.0 → 1.0.1`): bug fixes, internal changes — bump on any `fix:` commit
+- **Minor** (`1.0.x → 1.1.0`): new features, new tool methods — bump on `feat:` commits
+- **Major** (`1.x.x → 2.0.0`): breaking changes to the tool API — bump on incompatible changes
+
+When bumping the version, update the `version:` line in the top-level docstring of the tool file.
+
 ## Adding a new tool
 
 1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above

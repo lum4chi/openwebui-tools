@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Read and search emails from a generic POP3 mailbox. Supports listing messages, reading full email content with headers, and searching by sender, subject, or date range.
 requirements:
-version: 1.0.0
+version: 1.0.1
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -184,7 +184,7 @@ class Tools:
             for i in range(msg_count, max(0, msg_count - count), -1):
                 try:
                     status, raw_msg_bytes, _ = server.retr(i)
-                    parsed = self._parse_email(raw_msg_bytes[0])
+                    parsed = self._parse_email(b"\n".join(raw_msg_bytes) + b"\n")
                     emails.append(parsed)
                 except Exception as e:
                     emails.append({
@@ -244,7 +244,7 @@ class Tools:
                 return f"Error: Email index {email_index} is out of range. Mailbox has {msg_count} message(s)."
 
             status, raw_msg_bytes, _ = server.retr(email_index)
-            parsed = self._parse_email(raw_msg_bytes[0])
+            parsed = self._parse_email(b"\n".join(raw_msg_bytes) + b"\n")
             server.quit()
 
             attachment_info = ""
@@ -316,7 +316,7 @@ class Tools:
                     break
                 try:
                     status, raw_msg_bytes, _ = server.retr(i)
-                    parsed = self._parse_email(raw_msg_bytes[0])
+                    parsed = self._parse_email(b"\n".join(raw_msg_bytes) + b"\n")
 
                     # Apply filters
                     if search_from and search_from not in parsed["from"].lower():

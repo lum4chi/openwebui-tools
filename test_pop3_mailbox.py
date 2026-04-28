@@ -33,16 +33,20 @@ def _make_mock_server(msg_count: int, emails: list) -> MagicMock:
     POP3 spec: index 1 = oldest, index N = newest.
     The tool iterates from msg_count down to 1 (newest to oldest).
     emails[0] = oldest, emails[-1] = newest.
+
+    Returns each email line as a separate list element, matching real
+    POP3 server behaviour (poplib.retr returns a list of lines).
     """
     mock_server = MagicMock()
     mock_server.stat.return_value = (msg_count, msg_count * 1000)
 
     def mock_retr(index):
         if 1 <= index <= msg_count:
-            # POP3 index 1 = oldest = emails[0], index N = newest = emails[-1]
             email_idx = index - 1
             if 0 <= email_idx < len(emails):
-                return ("220 OK", [emails[email_idx]], index)
+                # Real POP3 returns each line as a separate bytes element
+                lines = emails[email_idx].split(b"\r\n")
+                return ("220 OK", lines, len(emails[email_idx]))
         return ("500 Error", [], 0)
 
     mock_server.retr.side_effect = mock_retr
@@ -85,7 +89,9 @@ class TestPOP3MailboxTool:
         """Test listing emails with actual messages."""
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob, how are you?"),
-            _make_raw_email("carol@example.com", "bob@example.com", "Invoice #123", "Please find attached the invoice."),
+            _make_raw_email(
+                "carol@example.com", "bob@example.com", "Invoice #123", "Please find attached the invoice."
+            ),
         ]
         mock_server = _make_mock_server(2, emails)
         with patch("poplib.POP3_SSL", return_value=mock_server):
@@ -101,7 +107,9 @@ class TestPOP3MailboxTool:
         """Test reading a specific email by index."""
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob, how are you?"),
-            _make_raw_email("carol@example.com", "bob@example.com", "Invoice #123", "Please find attached the invoice."),
+            _make_raw_email(
+                "carol@example.com", "bob@example.com", "Invoice #123", "Please find attached the invoice."
+            ),
         ]
         mock_server = _make_mock_server(2, emails)
         with patch("poplib.POP3_SSL", return_value=mock_server):
@@ -157,6 +165,7 @@ class TestPOP3MailboxTool:
     async def test_pop3_connection_error(self, tools):
         """Test handling of POP3 connection errors."""
         import poplib
+
         mock_server = MagicMock()
         mock_server.stat.side_effect = poplib.error_proto("535 Authentication failed")
         with patch("poplib.POP3_SSL", return_value=mock_server):
@@ -189,6 +198,32 @@ class TestPOP3MailboxTool:
         assert "has_attachments" in parsed
         assert "attachment_count" in parsed
         assert "headers" in parsed
+
+    @pytest.mark.asyncio
+    async def test_regression_full_email_parsed_not_first_line_only(self, tools):
+        """Regression: verify the full email is parsed, not just the first line.
+
+        poplib.POP3.retr() returns a list where each element is one line of the
+        raw email (matching real POP3 wire behaviour).  A prior bug passed only
+        raw_msg_bytes[0] — the first line — to the parser, producing empty
+        headers and body for every email.
+
+        This test uses a mock that returns lines separately (like a real server)
+        and asserts that all fields are present in the parsed output.
+        """
+        raw = _make_raw_email(
+            "regression@test.com",
+            "user@test.com",
+            "Regression Test Subject",
+            "This body text must appear in the output, proving the full email "
+            "was parsed and not truncated to the first header line.",
+        )
+        mock_server = _make_mock_server(1, [raw])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.read_email(email_index=1)
+        assert "regression@test.com" in result, "From header missing — email was not fully parsed"
+        assert "Regression Test Subject" in result, "Subject header missing — email was not fully parsed"
+        assert "This body text must appear" in result, "Body missing — only the first line was parsed"
 
 
 if __name__ == "__main__":

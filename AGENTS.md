@@ -75,6 +75,19 @@ Order matters for CI: `ruff check -> ruff format -> pyright -> pytest`.
 - Mock the POP3 server with `unittest.mock.MagicMock` — no real server needed
 - Tests use `@pytest.mark.asyncio` for async tool methods
 
+## Commit convention
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+- `feat:` new tool or feature
+- `fix:` bug fix or type error resolution
+- `test:` test additions or changes
+- `docs:` README, AGENTS.md, or other documentation
+- `style:` formatting, trailing whitespace, unused imports
+- `chore:` deps, config, CI, project setup
+
+Format: `<type>: <description>` or `<type>: <description>\n\n<body>`
+
 ## Adding a new tool
 
 1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above

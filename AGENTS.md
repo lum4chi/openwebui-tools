@@ -4,6 +4,8 @@
 
 Each `.py` file in the root is a standalone Open WebUI Workspace Tool — not a library or app. Tools are imported into Open WebUI via Workspace → Tools → Import.
 
+Tool spec: https://docs.openwebui.com/features/extensibility/plugin/tools/
+
 ## Tool format (non-negotiable)
 
 Every tool must have:

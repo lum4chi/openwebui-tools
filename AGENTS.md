@@ -71,7 +71,7 @@ Order matters for CI: `ruff check -> ruff format -> pyright -> pytest`.
 
 ## Testing
 
-- Tests go in `test_<tool_name>.py` alongside the tool
+- Tests go in `tests/test_<tool_name>.py` (in a `tests/` directory at the repo root)
 - Mock the POP3 server with `unittest.mock.MagicMock` — no real server needed
 - Tests use `@pytest.mark.asyncio` for async tool methods
 
@@ -101,6 +101,6 @@ When bumping the version, update the `version:` line in the top-level docstring 
 ## Adding a new tool
 
 1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above
-2. Create `test_<tool_name>.py` with mocked tests
+2. Create `tests/test_<tool_name>.py` with mocked tests
 3. Run `uv run ruff check . && uv run pyright && uv run pytest -v` — all must pass
 4. Update README.md with installation and usage instructions

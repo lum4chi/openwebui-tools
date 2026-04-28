@@ -9,13 +9,23 @@ licence: MIT
 required_open_webui_version: 0.5.0
 """
 
+import email.message
 import poplib
-import email
-from email.header import decode_header
-from email.utils import parseaddr, parsedate_to_datetime
-from typing import Optional, List
+from contextlib import suppress
 from datetime import datetime, timedelta
+from email.header import decode_header
+from email.utils import parsedate_to_datetime
+from typing import TYPE_CHECKING, Union
+
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from email.message import EmailMessage, Message
+else:
+    # At runtime, email.message_from_bytes returns EmailMessage
+    # but type stubs for poplib use the older Message type
+    EmailMessage = email.message.EmailMessage
+    Message = email.message.Message
 
 
 class Tools:
@@ -49,7 +59,7 @@ class Tools:
             description="Connection timeout in seconds"
         )
 
-    def _decode_mime_header(self, header_value: Optional[str]) -> str:
+    def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""
         if not header_value:
             return ""
@@ -66,7 +76,7 @@ class Tools:
                 result.append(part)
         return " ".join(result)
 
-    def _get_email_body(self, msg: email.message.EmailMessage, max_chars: int = 10000) -> str:
+    def _get_email_body(self, msg: Union["Message", "EmailMessage"], max_chars: int = 10000) -> str:
         """Extract the plain text body from an email message."""
         body = ""
         if msg.is_multipart():
@@ -77,7 +87,7 @@ class Tools:
                     charset = part.get_content_charset() or "utf-8"
                     try:
                         payload = part.get_payload(decode=True)
-                        if payload:
+                        if isinstance(payload, bytes):
                             body = payload.decode(charset, errors="replace")
                             break
                     except (LookupError, UnicodeDecodeError, AttributeError):
@@ -86,7 +96,7 @@ class Tools:
             charset = msg.get_content_charset() or "utf-8"
             try:
                 payload = msg.get_payload(decode=True)
-                if payload:
+                if isinstance(payload, bytes):
                     body = payload.decode(charset, errors="replace")
             except (LookupError, UnicodeDecodeError, AttributeError):
                 pass
@@ -101,10 +111,8 @@ class Tools:
         date_str = msg.get("Date", "")
         date_parsed = None
         if date_str:
-            try:
+            with suppress(ValueError, TypeError):
                 date_parsed = parsedate_to_datetime(date_str)
-            except (ValueError, TypeError):
-                pass
 
         from_addr = self._decode_mime_header(msg.get("From", ""))
         to_addr = self._decode_mime_header(msg.get("To", ""))
@@ -152,7 +160,7 @@ class Tools:
 
     async def list_emails(
         self,
-        count: Optional[int] = Field(default=10, description="Number of recent emails to list (default: 10)")
+        count: int = Field(default=10, description="Number of recent emails to list (default: 10)")
     ) -> str:
         """
         List emails in the POP3 mailbox. Returns a summary of the most recent emails.
@@ -194,7 +202,7 @@ class Tools:
             server.quit()
 
             result_lines = [f"Mailbox: {msg_count} total message(s) ({mailbox_size} bytes)\n"]
-            for idx, email_data in enumerate(emails):
+            for _idx, email_data in enumerate(emails):
                 attachment_info = ""
                 if email_data["has_attachments"]:
                     attachment_info = f" [{email_data['attachment_count']} attachment(s)]"
@@ -289,15 +297,11 @@ class Tools:
             elif part.lower().startswith("subject:"):
                 search_subject = part[8:].lower()
             elif part.lower().startswith("after:"):
-                try:
+                with suppress(ValueError):
                     search_after = datetime.strptime(part[6:], "%Y-%m-%d")
-                except ValueError:
-                    pass
             elif part.lower().startswith("before:"):
-                try:
+                with suppress(ValueError):
                     search_before = datetime.strptime(part[7:], "%Y-%m-%d") + timedelta(days=1)
-                except ValueError:
-                    pass
             else:
                 # Fallback: search in subject and body
                 search_subject = part.lower()
@@ -321,7 +325,7 @@ class Tools:
                         continue
                     if search_after or search_before:
                         try:
-                            msg_date = parsed_date = parsed["date"]
+                            parsed_date = parsed["date"]
                             if parsed_date:
                                 dt = parsedate_to_datetime(parsed_date)
                                 if search_after and dt.date() < search_after.date():
@@ -341,7 +345,7 @@ class Tools:
                 return f"No emails found matching criteria: {query}"
 
             result_lines = [f"Found {len(matches)} email(s) matching: {query}\n"]
-            for idx, email_data in enumerate(matches):
+            for _idx, email_data in enumerate(matches):
                 attachment_info = ""
                 if email_data["has_attachments"]:
                     attachment_info = f" [{email_data['attachment_count']} attachment(s)]"

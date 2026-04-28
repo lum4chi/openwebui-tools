@@ -1,0 +1,37 @@
+[project]
+name = "openwebui-tools"
+version = "0.1.0"
+description = "Custom tools for Open WebUI"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pyright>=1.1.390",
+    "ruff>=0.9.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "T201",   # print statements
+]
+ignore = [
+    "E501",   # line too long (ruff handles formatting)
+    "B008",   # do not perform function calls in argument defaults
+]

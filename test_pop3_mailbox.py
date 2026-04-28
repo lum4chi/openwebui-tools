@@ -3,15 +3,15 @@ Tests for the POP3 Mailbox Reader tool.
 Uses mocked POP3 responses so no real server is required.
 """
 
-import asyncio
-import email
-from email.mime.text import MIMEText
-from unittest.mock import patch, MagicMock
-import pytest
+import os
 
 # Ensure the tool module can be imported
 import sys
-import os
+from email.mime.text import MIMEText
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from pop3_mailbox import Tools

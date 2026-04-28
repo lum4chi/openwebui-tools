@@ -1,9 +1,9 @@
 """
 title: POP3 Mailbox Reader
-author: 
-author_url: 
+author: lum4chi
+author_url: https://github.com/lum4chi/openwebui-tools
 description: Read and search emails from a generic POP3 mailbox. Supports listing messages, reading full email content with headers, and searching by sender, subject, or date range.
-requirements: 
+requirements:
 version: 1.0.0
 licence: MIT
 required_open_webui_version: 0.5.0

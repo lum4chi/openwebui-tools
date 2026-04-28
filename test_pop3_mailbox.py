@@ -67,7 +67,7 @@ def tools():
 
 
 class TestPOP3MailboxTool:
-    """Test suite for POP3 Mailbox Reader tool."""
+    """Test suite for POP3 Mailbox Manager tool."""
 
     @pytest.mark.asyncio
     async def test_list_emails_no_credentials(self):
@@ -224,6 +224,72 @@ class TestPOP3MailboxTool:
         assert "regression@test.com" in result, "From header missing — email was not fully parsed"
         assert "Regression Test Subject" in result, "Subject header missing — email was not fully parsed"
         assert "This body text must appear" in result, "Body missing — only the first line was parsed"
+
+    @pytest.mark.asyncio
+    async def test_delete_email_no_credentials(self):
+        """Test that delete_email returns error when credentials are missing."""
+        t = Tools()
+        result = await t.delete_email(email_index=1)
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_success(self, tools):
+        """Test deleting a specific email."""
+        emails = [
+            _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
+            _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay."),
+        ]
+        mock_server = _make_mock_server(2, emails)
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_email(email_index=1)
+        assert "deleted successfully" in result
+        mock_server.dele.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_delete_email_out_of_range(self, tools):
+        """Test deleting an email with an out-of-range index."""
+        mock_server = _make_mock_server(2, [])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_email(email_index=99)
+        assert "out of range" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_email_invalid_index(self, tools):
+        """Test deleting an email with an invalid index (0 or negative)."""
+        mock_server = _make_mock_server(2, [])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_email(email_index=0)
+        assert "out of range" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_no_credentials(self):
+        """Test that delete_all_emails returns error when credentials are missing."""
+        t = Tools()
+        result = await t.delete_all_emails()
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_success(self, tools):
+        """Test deleting all emails from mailbox."""
+        emails = [
+            _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
+            _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay."),
+            _make_raw_email("dave@example.com", "bob@example.com", "Meeting", "See you tomorrow."),
+        ]
+        mock_server = _make_mock_server(3, emails)
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_all_emails()
+        assert "deleted successfully" in result
+        assert "3 email" in result
+        assert mock_server.dele.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_empty_mailbox(self, tools):
+        """Test deleting all emails from an empty mailbox."""
+        mock_server = _make_mock_server(0, [])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_all_emails()
+        assert "already empty" in result.lower() or "No emails" in result
 
 
 if __name__ == "__main__":

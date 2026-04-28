@@ -1,10 +1,10 @@
 """
-title: POP3 Mailbox Reader
+title: POP3 Mailbox Manager
 author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
-description: Read and search emails from a generic POP3 mailbox. Supports listing messages, reading full email content with headers, and searching by sender, subject, or date range.
+description: Manage a generic POP3 mailbox. Supports listing, reading, searching, and deleting emails.
 requirements:
-version: 1.0.1
+version: 1.1.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -34,30 +34,12 @@ class Tools:
         self.citation = False
 
     class Valves(BaseModel):
-        pop3_server: str = Field(
-            default="localhost",
-            description="POP3 server hostname (e.g., mail.example.com)"
-        )
-        pop3_port: int = Field(
-            default=995,
-            description="POP3 server port (995 for SSL, 110 for non-SSL)"
-        )
-        username: str = Field(
-            default="",
-            description="POP3 mailbox username"
-        )
-        password: str = Field(
-            default="",
-            description="POP3 mailbox password or app-specific password"
-        )
-        use_ssl: bool = Field(
-            default=True,
-            description="Use SSL/TLS connection (set False for port 110)"
-        )
-        timeout: int = Field(
-            default=30,
-            description="Connection timeout in seconds"
-        )
+        pop3_server: str = Field(default="localhost", description="POP3 server hostname (e.g., mail.example.com)")
+        pop3_port: int = Field(default=995, description="POP3 server port (995 for SSL, 110 for non-SSL)")
+        username: str = Field(default="", description="POP3 mailbox username")
+        password: str = Field(default="", description="POP3 mailbox password or app-specific password")
+        use_ssl: bool = Field(default=True, description="Use SSL/TLS connection (set False for port 110)")
+        timeout: int = Field(default=30, description="Connection timeout in seconds")
 
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""
@@ -144,7 +126,7 @@ class Tools:
                 "To": to_addr,
                 "Subject": subject,
                 "Message-ID": msg.get("Message-ID", ""),
-            }
+            },
         }
 
     def _connect(self):
@@ -159,8 +141,7 @@ class Tools:
         return server
 
     async def list_emails(
-        self,
-        count: int = Field(default=10, description="Number of recent emails to list (default: 10)")
+        self, count: int = Field(default=10, description="Number of recent emails to list (default: 10)")
     ) -> str:
         """
         List emails in the POP3 mailbox. Returns a summary of the most recent emails.
@@ -187,17 +168,19 @@ class Tools:
                     parsed = self._parse_email(b"\n".join(raw_msg_bytes) + b"\n")
                     emails.append(parsed)
                 except Exception as e:
-                    emails.append({
-                        "date": "",
-                        "from": "",
-                        "to": "",
-                        "subject": f"Error reading message {i}: {str(e)}",
-                        "body": "",
-                        "has_attachments": False,
-                        "attachment_count": 0,
-                        "message_id": "",
-                        "headers": {}
-                    })
+                    emails.append(
+                        {
+                            "date": "",
+                            "from": "",
+                            "to": "",
+                            "subject": f"Error reading message {i}: {str(e)}",
+                            "body": "",
+                            "has_attachments": False,
+                            "attachment_count": 0,
+                            "message_id": "",
+                            "headers": {},
+                        }
+                    )
 
             server.quit()
 
@@ -206,7 +189,7 @@ class Tools:
                 attachment_info = ""
                 if email_data["has_attachments"]:
                     attachment_info = f" [{email_data['attachment_count']} attachment(s)]"
-                body_preview = email_data['body'][:200] + "..." if len(email_data['body']) > 200 else email_data['body']
+                body_preview = email_data["body"][:200] + "..." if len(email_data["body"]) > 200 else email_data["body"]
                 result_lines.append(
                     f"---\n"
                     f"  From:    {email_data['from']}\n"
@@ -223,8 +206,7 @@ class Tools:
             return f"Error connecting to POP3 server '{self.valves.pop3_server}': {str(e)}"
 
     async def read_email(
-        self,
-        email_index: int = Field(description="Index of the email to read (1-based, 1 = most recent)")
+        self, email_index: int = Field(description="Index of the email to read (1-based, 1 = most recent)")
     ) -> str:
         """
         Read a specific email by its index in the mailbox.
@@ -271,8 +253,10 @@ class Tools:
 
     async def search_emails(
         self,
-        query: str = Field(description="Search query to filter emails. Can specify 'from:<sender>', 'subject:<text>', 'before:<YYYY-MM-DD>', 'after:<YYYY-MM-DD>'"),
-        count: int = Field(default=10, description="Maximum number of results to return (default: 10)")
+        query: str = Field(
+            description="Search query to filter emails. Can specify 'from:<sender>', 'subject:<text>', 'before:<YYYY-MM-DD>', 'after:<YYYY-MM-DD>'"
+        ),
+        count: int = Field(default=10, description="Maximum number of results to return (default: 10)"),
     ) -> str:
         """
         Search emails in the mailbox by sender, subject, or date range.
@@ -321,7 +305,11 @@ class Tools:
                     # Apply filters
                     if search_from and search_from not in parsed["from"].lower():
                         continue
-                    if search_subject and search_subject not in parsed["subject"].lower() and search_subject not in parsed["body"].lower():
+                    if (
+                        search_subject
+                        and search_subject not in parsed["subject"].lower()
+                        and search_subject not in parsed["body"].lower()
+                    ):
                         continue
                     if search_after or search_before:
                         try:
@@ -349,7 +337,7 @@ class Tools:
                 attachment_info = ""
                 if email_data["has_attachments"]:
                     attachment_info = f" [{email_data['attachment_count']} attachment(s)]"
-                body_preview = email_data['body'][:200] + "..." if len(email_data['body']) > 200 else email_data['body']
+                body_preview = email_data["body"][:200] + "..." if len(email_data["body"]) > 200 else email_data["body"]
                 result_lines.append(
                     f"---\n"
                     f"  From:    {email_data['from']}\n"
@@ -365,9 +353,7 @@ class Tools:
         except Exception as e:
             return f"Error searching emails: {str(e)}"
 
-    async def get_email_count(
-        self
-    ) -> str:
+    async def get_email_count(self) -> str:
         """
         Get the total number of emails in the mailbox.
         """
@@ -385,3 +371,62 @@ class Tools:
             return f"POP3 Error: {str(e)}"
         except Exception as e:
             return f"Error checking mailbox: {str(e)}"
+
+    async def delete_email(
+        self, email_index: int = Field(description="Index of the email to delete (1-based, 1 = most recent)")
+    ) -> str:
+        """
+        Delete a specific email from the mailbox.
+        :param email_index: 1-based index (1 = most recent email)
+        """
+        if not self.valves.username or not self.valves.password:
+            return "Error: POP3 credentials (username and password) are not configured in Valves."
+        if not self.valves.pop3_server:
+            return "Error: POP3 server is not configured in Valves."
+
+        try:
+            server = self._connect()
+            msg_count, _ = server.stat()
+
+            if email_index < 1 or email_index > msg_count:
+                server.quit()
+                return f"Error: Email index {email_index} is out of range. Mailbox has {msg_count} message(s)."
+
+            server.dele(email_index)
+            server.quit()
+            return f"Email {email_index} has been deleted successfully."
+
+        except poplib.error_proto as e:
+            return f"POP3 Error: {str(e)}"
+        except Exception as e:
+            return f"Error deleting email: {str(e)}"
+
+    async def delete_all_emails(
+        self,
+    ) -> str:
+        """
+        Delete all emails from the mailbox.
+        """
+        if not self.valves.username or not self.valves.password:
+            return "Error: POP3 credentials (username and password) are not configured in Valves."
+        if not self.valves.pop3_server:
+            return "Error: POP3 server is not configured in Valves."
+
+        try:
+            server = self._connect()
+            msg_count, _ = server.stat()
+
+            if msg_count == 0:
+                server.quit()
+                return "Mailbox is already empty. No emails to delete."
+
+            for i in range(1, msg_count + 1):
+                server.dele(i)
+
+            server.quit()
+            return f"All {msg_count} email(s) have been deleted successfully."
+
+        except poplib.error_proto as e:
+            return f"POP3 Error: {str(e)}"
+        except Exception as e:
+            return f"Error deleting emails: {str(e)}"

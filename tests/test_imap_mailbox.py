@@ -119,7 +119,7 @@ def tools():
     t.valves.password = "testpass"
     t.valves.use_ssl = True
     t.valves.timeout = 5
-    t.valves.folder = "INBOX"
+    t.valves.inbox_folder = "INBOX"
     return t
 
 
@@ -365,9 +365,9 @@ class TestIMAPMailboxTool:
         assert "IMAP Error" in result
 
     @pytest.mark.asyncio
-    async def test_select_folder(self, tools):
-        """Test that a custom folder name is used in IMAP select."""
-        tools.valves.folder = "Sent"
+    async def test_select_inbox_folder(self, tools):
+        """Test that a custom inbox folder name is used in IMAP select."""
+        tools.valves.inbox_folder = "Sent"
         mock_server = _make_mock_server([])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             await tools.get_email_count()
@@ -497,6 +497,377 @@ class TestIMAPMailboxTool:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.archive_email(email_index=1)
         assert "archived" in result.lower() and "successfully" in result.lower()
+
+
+class TestAccessGuard:
+    """Test the _access_guard helper for folder access control."""
+
+    @pytest.mark.asyncio
+    async def test_access_guard_archive_disabled(self, tools):
+        """Test _access_guard returns error when archive access is disabled."""
+        tools.valves.allow_list_archive = False
+        assert tools._access_guard("archive", tools.valves.archive_folder) is not None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_archive_enabled(self, tools):
+        """Test _access_guard allows access when archive toggle is on."""
+        tools.valves.allow_list_archive = True
+        result = tools._access_guard("archive", tools.valves.archive_folder)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_trash_disabled(self, tools):
+        """Test _access_guard returns error when trash access is disabled."""
+        tools.valves.allow_list_trash = False
+        assert tools._access_guard("trash", tools.valves.trash_folder) is not None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_trash_enabled(self, tools):
+        """Test _access_guard allows access when trash toggle is on."""
+        tools.valves.allow_list_trash = True
+        result = tools._access_guard("trash", tools.valves.trash_folder)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_sent_disabled(self, tools):
+        """Test _access_guard returns error when sent access is disabled."""
+        tools.valves.allow_list_sent = False
+        assert tools._access_guard("sent", tools.valves.sent_folder) is not None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_sent_enabled(self, tools):
+        """Test _access_guard allows access when sent toggle is on."""
+        tools.valves.allow_list_sent = True
+        result = tools._access_guard("sent", tools.valves.sent_folder)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_drafts_disabled(self, tools):
+        """Test _access_guard returns error when drafts access is disabled."""
+        tools.valves.allow_list_drafts = False
+        assert tools._access_guard("drafts", tools.valves.drafts_folder) is not None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_drafts_enabled(self, tools):
+        """Test _access_guard allows access when drafts toggle is on."""
+        tools.valves.allow_list_drafts = True
+        result = tools._access_guard("drafts", tools.valves.drafts_folder)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_wrong_folder_returns_error(self, tools):
+        """Test _access_guard returns error when folder differs from configured default."""
+        tools.valves.allow_list_trash = True
+        tools.valves.trash_folder = "Trash"
+        result = tools._access_guard("trash", "Different/Trash")
+        assert result is not None
+        assert "disabled" in result.lower()
+
+
+class TestResolveFolder:
+    """Test the _resolve_folder helper."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_folder_explicit(self, tools):
+        """Test _resolve_folder returns explicit folder when provided."""
+        assert tools._resolve_folder(folder="Some/Folder", fallback="INBOX") == "Some/Folder"
+
+    @pytest.mark.asyncio
+    async def test_resolve_folder_fallback(self, tools):
+        """Test _resolve_folder falls back to valve folder."""
+        tools.valves.inbox_folder = "INBOX"
+        assert tools._resolve_folder(folder=None, fallback="INBOX") == "INBOX"
+
+    @pytest.mark.asyncio
+    async def test_resolve_folder_none_fallback(self, tools):
+        """Test _resolve_folder returns default when nothing is set."""
+        assert tools._resolve_folder(folder=None, fallback=None) == "INBOX"
+
+
+class TestArchiveMethods:
+    """Test the list_archive_emails and read_archive_email convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_archive_disabled_by_default(self, tools):
+        """Test list_archive_emails is blocked when allow_list_archive is False."""
+        assert tools.valves.allow_list_archive is False
+        result = await tools.list_archive_emails(count=5)
+        assert "disabled" in result.lower() and "allow_list_archive" in result
+
+    @pytest.mark.asyncio
+    async def test_list_archive_enabled_with_messages(self, tools):
+        """Test listing archived emails when access is enabled."""
+        tools.valves.allow_list_archive = True
+        raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Archived A", "Body A")
+        raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Archived B", "Body B")
+        emails = [(raw1, "1"), (raw2, "2")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_archive_emails(count=10)
+        assert "Archived A" in result
+        assert "Archived B" in result
+        assert "Archive" in result
+
+    @pytest.mark.asyncio
+    async def test_list_archive_enabled_custom_folder(self, tools):
+        """Test listing archived emails from a custom folder path."""
+        tools.valves.allow_list_archive = True
+        tools.valves.archive_folder = "Gmail/All Mail"
+        raw = _make_raw_email("sender@test.com", "receiver@test.com", "Test", "Body")
+        emails = [(raw, "1")]
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1"])
+            elif cmd == "fetch":
+                return ("OK", [_make_mock_email_data(raw, "1")])
+            return ("OK", [b""])
+
+        mock_server = _make_mock_server(emails, override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_archive_emails(count=10)
+        assert "Test" in result
+        assert "Gmail/All Mail" in result
+
+    @pytest.mark.asyncio
+    async def test_list_archive_empty(self, tools):
+        """Test listing archived emails from an empty archive folder."""
+        tools.valves.allow_list_archive = True
+        mock_server = _make_mock_server([])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_archive_emails(count=10)
+        assert "empty" in result.lower() or "No emails" in result
+
+    @pytest.mark.asyncio
+    async def test_read_archive_disabled_by_default(self, tools):
+        """Test read_archive_email is blocked when allow_list_archive is False."""
+        assert tools.valves.allow_list_archive is False
+        result = await tools.read_archive_email(email_index=1)
+        assert "disabled" in result.lower() and "allow_list_archive" in result
+
+    @pytest.mark.asyncio
+    async def test_read_archive_enabled(self, tools):
+        """Test reading an archived email when access is enabled."""
+        tools.valves.allow_list_archive = True
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Archived Message", "This is body content.")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_archive_email(email_index=1)
+        assert "Archived Message" in result
+        assert "Archive" in result
+        assert "This is body content" in result
+
+    @pytest.mark.asyncio
+    async def test_read_archive_out_of_range(self, tools):
+        """Test reading an archived email with an out-of-range index."""
+        tools.valves.allow_list_archive = True
+        raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
+        mock_server = _make_mock_server([(raw, "1")])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_archive_email(email_index=99)
+        assert "out of range" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_read_archive_empty_folder(self, tools):
+        """Test reading from an empty archive folder."""
+        tools.valves.allow_list_archive = True
+        mock_server = _make_mock_server([])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_archive_email(email_index=1)
+        assert "empty" in result.lower() or "No emails" in result
+
+    @pytest.mark.asyncio
+    async def test_list_archive_no_credentials(self):
+        """Test list_archive_emails returns error when credentials are missing."""
+        t = Tools()
+        t.valves.allow_list_archive = True
+        result = await t.list_archive_emails()
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_archive_custom_folder_default(self, tools):
+        """Test default archive folder is 'Archive'."""
+        assert tools.valves.archive_folder == "Archive"
+
+
+class TestTrashMethods:
+    """Test the list_trash_emails and read_trash_email convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_trash_disabled_by_default(self, tools):
+        """Test list_trash_emails is blocked when allow_list_trash is False."""
+        assert tools.valves.allow_list_trash is False
+        result = await tools.list_trash_emails(count=5)
+        assert "disabled" in result.lower() and "allow_list_trash" in result
+
+    @pytest.mark.asyncio
+    async def test_list_trash_enabled(self, tools):
+        """Test listing trash emails when access is enabled."""
+        tools.valves.allow_list_trash = True
+        raw = _make_raw_email("sender@test.com", "recv@test.com", "Trashed", "Trash body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_trash_emails(count=10)
+        assert "Trashed" in result
+        assert "Trash" in result
+
+    @pytest.mark.asyncio
+    async def test_list_trash_custom_folder(self, tools):
+        """Test listing trash emails from a custom folder like 'Deleted Items'."""
+        tools.valves.allow_list_trash = True
+        tools.valves.trash_folder = "Deleted Items"
+        raw = _make_raw_email("sender@test.com", "recv@test.com", "Deleted", "Body")
+        emails = [(raw, "1")]
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1"])
+            elif cmd == "fetch":
+                return ("OK", [_make_mock_email_data(raw, "1")])
+            return ("OK", [b""])
+
+        mock_server = _make_mock_server(emails, override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_trash_emails(count=10)
+        assert "Deleted" in result
+        assert "Deleted Items" in result
+
+    @pytest.mark.asyncio
+    async def test_read_trash_enabled(self, tools):
+        """Test reading a trash email when access is enabled."""
+        tools.valves.allow_list_trash = True
+        raw = _make_raw_email("sender@test.com", "recv@test.com", "Trash Msg", "Trash body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_trash_email(email_index=1)
+        assert "Trash Msg" in result
+        assert "Trash" in result
+
+
+class TestSentMethods:
+    """Test the list_sent_emails and read_sent_email convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_sent_disabled_by_default(self, tools):
+        """Test list_sent_emails is blocked when allow_list_sent is False."""
+        assert tools.valves.allow_list_sent is False
+        result = await tools.list_sent_emails(count=5)
+        assert "disabled" in result.lower() and "allow_list_sent" in result
+
+    @pytest.mark.asyncio
+    async def test_list_sent_enabled(self, tools):
+        """Test listing sent emails when access is enabled."""
+        tools.valves.allow_list_sent = True
+        raw = _make_raw_email("me@test.com", "you@test.com", "Sent Msg", "Sent body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_sent_emails(count=10)
+        assert "Sent Msg" in result
+        assert "Sent" in result
+
+    @pytest.mark.asyncio
+    async def test_read_sent_enabled(self, tools):
+        """Test reading a sent email when access is enabled."""
+        tools.valves.allow_list_sent = True
+        raw = _make_raw_email("me@test.com", "you@test.com", "Outgoing", "Outgoing body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_sent_email(email_index=1)
+        assert "Outgoing" in result
+        assert "Sent" in result
+
+
+class TestDraftsMethods:
+    """Test the list_draft_emails convenience method."""
+
+    @pytest.mark.asyncio
+    async def test_list_drafts_disabled_by_default(self, tools):
+        """Test list_draft_emails is blocked when allow_list_drafts is False."""
+        assert tools.valves.allow_list_drafts is False
+        result = await tools.list_draft_emails(count=5)
+        assert "disabled" in result.lower() and "allow_list_drafts" in result
+
+    @pytest.mark.asyncio
+    async def test_list_drafts_enabled(self, tools):
+        """Test listing draft emails when access is enabled."""
+        tools.valves.allow_list_drafts = True
+        raw = _make_raw_email("me@test.com", "you@test.com", "Draft Msg", "Draft body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_draft_emails(count=10)
+        assert "Draft Msg" in result
+        assert "Drafts" in result
+
+    @pytest.mark.asyncio
+    async def test_list_drafts_no_read_method(self, tools):
+        """Verify read_draft_email convenience does not exist (drafts are typically read-only)."""
+        assert not hasattr(tools, "read_draft_email")
+
+
+class TestFolderParamOverride:
+    """Test passing explicit folder parameter to existing methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_folder_param(self, tools):
+        """Test list_emails respects explicit folder param."""
+        raw = _make_raw_email("test@example.com", "u@example.com", "Hello", "Body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(count=10, folder="Custom/Folder")
+        assert "Custom/Folder" in result
+        assert "Hello" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_folder_param(self, tools):
+        """Test read_email respects explicit folder param."""
+        raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_email(email_index=1, folder="Custom/Folder")
+        assert "Custom/Folder" in result
+        assert "Test" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_folder_param(self, tools):
+        """Test search_emails respects explicit folder param."""
+        raw = _make_raw_email("test@example.com", "u@example.com", "Search Me", "Body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="Search Me", count=10, folder="Custom/Folder")
+        assert "Search Me" in result
+        assert "Custom/Folder" in result
+
+
+class TestDefaultValueToggles:
+    """Test that all new toggles default to False and folder names are reasonable."""
+
+    @pytest.mark.asyncio
+    async def test_all_toggles_disabled_by_default(self):
+        """Test that all folder read-access toggles default to False."""
+        t = Tools()
+        assert t.valves.allow_list_archive is False
+        assert t.valves.allow_list_trash is False
+        assert t.valves.allow_list_sent is False
+        assert t.valves.allow_list_drafts is False
+
+    @pytest.mark.asyncio
+    async def test_default_folder_names(self):
+        """Test that default folder names are reasonable."""
+        t = Tools()
+        assert t.valves.inbox_folder == "INBOX"
+        assert t.valves.archive_folder == "Archive"
+        assert t.valves.trash_folder == "Trash"
+        assert t.valves.sent_folder == "Sent"
+        assert t.valves.drafts_folder == "Drafts"
 
 
 if __name__ == "__main__":

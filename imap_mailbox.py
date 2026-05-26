@@ -20,10 +20,7 @@ from typing import TYPE_CHECKING, Union
 from pydantic import BaseModel, Field
 
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
-try:
-    _IMAP_EXCEPTION = imaplib.IMAP4Exception  # pyright: ignore[reportAttributeAccessIssue]
-except AttributeError:
-    _IMAP_EXCEPTION = Exception
+_IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
 
 
 if TYPE_CHECKING:
@@ -49,10 +46,16 @@ class Tools:
 
         # folders
         inbox_folder: str = Field(default="INBOX", description="Inbox folder name (default: 'INBOX')")
-        archive_folder: str = Field(default="Archive", description="Archive folder name (e.g., 'Archive', '[Gmail]/All Mail')")
-        trash_folder: str = Field(default="Trash", description="Trash folder name; differs by provider (e.g., 'Deleted Items')")
+        archive_folder: str = Field(
+            default="Archive", description="Archive folder name (e.g., 'Archive', '[Gmail]/All Mail')"
+        )
+        trash_folder: str = Field(
+            default="Trash", description="Trash folder name; differs by provider (e.g., 'Deleted Items')"
+        )
         sent_folder: str = Field(default="Sent", description="Sent folder name (e.g., 'Sent', 'Sent Items')")
-        drafts_folder: str = Field(default="Drafts", description="Drafts folder name (e.g., 'Drafts', '[Gmail]/Drafts')")
+        drafts_folder: str = Field(
+            default="Drafts", description="Drafts folder name (e.g., 'Drafts', '[Gmail]/Drafts')"
+        )
 
         allow_list_archive: bool = Field(
             default=False, description="Allow reading emails from the archive folder (default: False for safety)"
@@ -206,7 +209,7 @@ class Tools:
         """Return the effective folder name; falls back to valve config."""
         if folder:
             return folder
-        return fallback or (getattr(self.valves, 'inbox_folder', None) or 'INBOX')
+        return fallback or (getattr(self.valves, "inbox_folder", None) or "INBOX")
 
     def _access_guard(self, folder_type: str, effective_folder: str) -> str | None:
         """Check whether LLM is allowed to access the given folder type.
@@ -558,7 +561,7 @@ class Tools:
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
-         return "Error: IMAP server is not configured in Valves."
+            return "Error: IMAP server is not configured in Valves."
 
         try:
             conn = self._connect()

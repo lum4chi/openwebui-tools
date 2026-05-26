@@ -3,6 +3,7 @@ Tests for the IMAP Mailbox Reader tool.
 Uses mocked IMAP responses so no real server is required.
 """
 
+import imaplib as _imaplib
 import os
 import sys
 from collections.abc import Callable
@@ -15,10 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from imap_mailbox import Tools
 
-try:
-    from imaplib import IMAP4Exception as IMAP4Error
-except ImportError:
-    IMAP4Error = Exception  # type: ignore[misc,assignment]
+_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
 
 
 def _make_raw_email(from_addr: str, to_addr: str, subject: str, body: str) -> bytes:
@@ -359,7 +357,7 @@ class TestIMAPMailboxTool:
     async def test_connection_error(self, tools):
         """Test handling of IMAP connection errors."""
         mock_server = MagicMock()
-        mock_server.login.side_effect = IMAP4Error("535 Authentication failed")
+        mock_server.login.side_effect = _IMAP_EXCEPTION("535 Authentication failed")
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.get_email_count()
         assert "IMAP Error" in result
@@ -868,6 +866,573 @@ class TestDefaultValueToggles:
         assert t.valves.trash_folder == "Trash"
         assert t.valves.sent_folder == "Sent"
         assert t.valves.drafts_folder == "Drafts"
+
+
+class TestMimeHeaderDecodingEncoded:
+    """Test MIME header decoding with RFC 2047 encoded values."""
+
+    @pytest.mark.asyncio
+    async def test_decode_mime_header_encoded_utf8(self, tools):
+        """Test decoding RFC 2047 encoded UTF-8 header."""
+        encoded = "=?utf-8?b?VGVzdCBzdWJqZWN0?="
+        result = tools._decode_mime_header(encoded)
+        assert result == "Test subject"
+
+    @pytest.mark.asyncio
+    async def test_decode_mime_header_encoded_q(self, tools):
+        """Test decoding RFC 2047 encoded-Q header."""
+        encoded = "=?utf-8?q?Test_Subject?="
+        result = tools._decode_mime_header(encoded)
+        assert result == "Test Subject"
+
+    @pytest.mark.asyncio
+    async def test_decode_mime_header_multiple_encoded_parts(self, tools):
+        """Test decoding header with multiple encoded parts."""
+        encoded = "=?utf-8?b?VGVzdA==?= =?utf-8?b?IFN1YmplY3Q?="
+        result = tools._decode_mime_header(encoded)
+        assert "Test" in result
+
+    @pytest.mark.asyncio
+    async def test_decode_mime_header_unknown_charset(self, tools):
+        """Test decoding with unknown charset falls back to utf-8."""
+        encoded = rb"=\?unknown-charset?b?dGVzdA=="
+        result = tools._decode_mime_header(encoded.decode())
+        assert result != ""
+
+
+class TestGetEmailBody:
+    """Test _get_email_body extraction logic."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_multipart_plain_only(self, tools):
+        """Test extracting body from a multipart email with plain text part."""
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart("mixed")
+        msg["From"] = "a@b.com"
+        msg["To"] = "c@d.com"
+        msg["Subject"] = "Multibody"
+        text_part = MIMEText("Plain body content", "plain")
+        html_part = MIMEText("<p>HTML body</p>", "html")
+        msg.attach(text_part)
+        msg.attach(html_part)
+        body = tools._get_email_body(msg)
+        assert body == "Plain body content"
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_multipart_html_only(self, tools):
+        """Test extracting body — if no plain part, should return empty string."""
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart("mixed")
+        msg["From"] = "a@b.com"
+        msg["To"] = "c@d.com"
+        msg["Subject"] = "HtOnly"
+        html_part = MIMEText("<p>HTML only</p>", "html")
+        msg.attach(html_part)
+        body = tools._get_email_body(msg)
+        assert body == ""
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_multipart_with_attachment(self, tools):
+        """Test that attachment parts in multipart are skipped."""
+        from email.mime.base import MIMEBase
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart("mixed")
+        msg["From"] = "a@b.com"
+        msg["To"] = "c@d.com"
+        msg["Subject"] = "Attach test"
+        plain_part = MIMEText("Real content here", "plain")
+        msg.attach(plain_part)
+        attachment = MIMEBase("application", "pdf")
+        attachment.set_payload(b"fake pdf data")
+        attachment.add_header("Content-Disposition", "attachment", filename="doc.pdf")
+        msg.attach(attachment)
+        body = tools._get_email_body(msg)
+        assert body == "Real content here"
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_truncation(self, tools):
+        """Test that body is truncated at max_chars."""
+        from email.mime.text import MIMEText
+
+        msg = MIMEText("A" * 500, "plain")
+        msg["From"] = "a@b.com"
+        msg["To"] = "c@d.com"
+        msg["Subject"] = "Long"
+        body = tools._get_email_body(msg, max_chars=50)
+        assert len(body) <= 50 + len("\n\n... [truncated]")
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_single_non_multipart(self, tools):
+        """Test extracting body from a non-multipart email."""
+        from email.mime.text import MIMEText
+
+        msg = MIMEText("Hello world plain text", "plain")
+        msg["From"] = "a@b.com"
+        msg["To"] = "c@d.com"
+        msg["Subject"] = "Simple"
+        body = tools._get_email_body(msg)
+        assert body == "Hello world plain text"
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_binary_payload_decode(self, tools):
+        """Test body extraction when payload is bytes with a charset."""
+        from email.mime.text import MIMEText
+
+        msg = MIMEText("Accents: caf\u00e9 r\u00e9sum\u00e9", "plain")
+        msg["From"] = "a@b.com"
+        msg["To"] = "c@d.com"
+        msg["Subject"] = "Accents"
+        body = tools._get_email_body(msg)
+        assert "caf\u00e9" in body
+
+
+class TestNonSSLConnection:
+    """Test non-SSL connection path."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_non_ssl(self, tools):
+        """Test that use_ssl=False connects via imaplib.IMAP4."""
+        tools.valves.use_ssl = False
+        tools.valves.imap_port = 143
+        raw = _make_raw_email("sender@test.com", "recv@test.com", "Hello", "Body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with (
+            patch("imaplib.IMAP4", return_value=mock_server) as mock_imap4,
+            patch("imaplib.IMAP4_SSL"),
+        ):
+            result = await tools.list_emails(count=10)
+        mock_imap4.assert_called_once()
+        assert "Hello" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_ssl_true_uses_ssl(self, tools):
+        """Test that use_ssl=True (default) connects via imaplib.IMAP4_SSL."""
+        tools.valves.use_ssl = True
+        raw = _make_raw_email("sender@test.com", "recv@test.com", "Hello", "Body")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with (
+            patch("imaplib.IMAP4_SSL", return_value=mock_server) as mock_imap4_ssl,
+            patch("imaplib.IMAP4"),
+        ):
+            result = await tools.list_emails(count=10)
+        mock_imap4_ssl.assert_called_once()
+        assert "Hello" in result
+
+
+class TestSearchEmailsAdditional:
+    """Additional search_emails tests: date queries, combined criteria, no results."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_no_results(self, tools):
+        """Test search returning no matching emails."""
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b""])
+            return ("OK", [b""])
+
+        mock_server = _make_mock_server([], override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query='subject:"nonexistent"')
+        assert "No emails found matching criteria" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_after_date(self, tools):
+        """Test search with after: date filter."""
+        raw = _make_raw_email(
+            "alice@example.com", "bob@example.com", "After test", "Hi"
+        )
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            # We expect the uid search call to contain SINCE
+            result = await tools.search_emails(query="after:2025-04-01", count=10)
+        # The mock server handles search with ANY criteria via the ALL branch
+        assert "alice@example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_before_date(self, tools):
+        """Test search with before: date filter."""
+        raw = _make_raw_email(
+            "alice@example.com", "bob@example.com", "Before test", "Hi"
+        )
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="before:2025-12-01", count=10)
+        assert "alice@example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_before_after_combined(self, tools):
+        """Test search combining before: and after:."""
+        raw = _make_raw_email(
+            "alice@example.com", "bob@example.com", "Range test", "Hi"
+        )
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(
+                query="after:2025-01-01 before:2025-12-31", count=10
+            )
+        assert "alice@example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_combined_from_and_subject(self, tools):
+        """Test search with both from: and subject:."""
+        raw = _make_raw_email(
+            "alice@example.com", "bob@example.com", "Pay me", "Invoice"
+        )
+        raw2 = _make_raw_email(
+            "carol@example.com", "bob@example.com", "Hello", "Invoice"
+        )
+        emails = [(raw, "1"), (raw2, "2")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(
+                query='from:"alice@example.com" subject:"Invoice"', count=10
+            )
+        assert "alice@example.com" in result
+        assert "carol@example.com" not in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_free_text_no_match(self, tools):
+        """Test free-text search that matches no email."""
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "World")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="xyznotfound", count=10)
+        assert "No emails found" in result
+
+
+class TestAttachmentDisplay:
+    """Test attachment info display in listing and reading."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_with_attachments(self, tools):
+        """Test that list_emails shows attachment count."""
+        from email.mime.base import MIMEBase
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart("mixed")
+        msg["From"] = "sender@test.com"
+        msg["To"] = "recv@test.com"
+        msg["Subject"] = "AttachMsg"
+        plain = MIMEText("Body text", "plain")
+        msg.attach(plain)
+
+        for i in range(3):
+            att = MIMEBase("application", "octet-stream")
+            att.set_payload(f"data{i}".encode())
+            att.add_header("Content-Disposition", "attachment", filename=f"file{i}.pdf")
+            msg.attach(att)
+
+        emails = [(msg.as_bytes(), "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(count=10)
+
+        assert "AttachMsg" in result
+        assert "3 attachment(s)" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_with_attachments(self, tools):
+        """Test that read_email shows attachment info."""
+        from email.mime.base import MIMEBase
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart("mixed")
+        msg["From"] = "sender@test.com"
+        msg["To"] = "recv@test.com"
+        msg["Subject"] = "ReadAttach"
+        plain = MIMEText("Body text here", "plain")
+        msg.attach(plain)
+
+        att = MIMEBase("application", "pdf")
+        att.set_payload(b"data")
+        att.add_header("Content-Disposition", "attachment", filename="doc.pdf")
+        msg.attach(att)
+
+        emails = [(msg.as_bytes(), "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_email(email_index=1)
+
+        assert "ReadAttach" in result
+        assert "Attachments:" in result
+        assert "1 file(s) attached" in result
+
+
+class TestIMAPErrorsInOtherMethods:
+    """Test IMAP exceptions are caught and returned as error strings in all public methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_imap_error(self, tools):
+        """Test IMAP error handling in list_emails."""
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Connection refused")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(count=5)
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_imap_error(self, tools):
+        """Test IMAP error handling in read_email."""
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Authentication failed")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_email(email_index=1)
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_imap_error(self, tools):
+        """Test IMAP error handling in search_emails."""
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Timeout")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="test", count=10)
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_imap_error(self, tools):
+        """Test IMAP error handling in delete_email."""
+        tools.valves.allow_delete_single = True
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Disk error")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.delete_email(email_index=1)
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_imap_error(self, tools):
+        """Test IMAP error handling in delete_all_emails."""
+        tools.valves.allow_delete_all = True
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Disk error")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.delete_all_emails()
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_archive_email_imap_error(self, tools):
+        """Test IMAP error handling in archive_email."""
+        tools.valves.allow_archive = True
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Disk error")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.archive_email(email_index=1)
+        assert "IMAP Error" in result
+
+
+class TestGenericExceptionErrors:
+    """Test that generic (non-IMAP) exceptions are caught and returned properly."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_generic_error(self, tools):
+        """Test generic exception handling in list_emails."""
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.list_emails(count=5)
+            assert "Error connecting to IMAP server" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_generic_error(self, tools):
+        """Test generic exception handling in read_email."""
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.read_email(email_index=1)
+            assert "Error reading email" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_generic_error(self, tools):
+        """Test generic exception handling in search_emails."""
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.search_emails(query="test", count=10)
+            assert "Error searching emails" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_generic_error(self, tools):
+        """Test generic exception handling in delete_email."""
+        tools.valves.allow_delete_single = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.delete_email(email_index=1)
+            assert "Error deleting email" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_generic_error(self, tools):
+        """Test generic exception handling in delete_all_emails."""
+        tools.valves.allow_delete_all = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.delete_all_emails()
+            assert "Error deleting emails" in result
+
+    @pytest.mark.asyncio
+    async def test_archive_email_generic_error(self, tools):
+        """Test generic exception handling in archive_email."""
+        tools.valves.allow_archive = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.archive_email(email_index=1)
+            assert "Error archiving email" in result
+
+    @pytest.mark.asyncio
+    async def test_list_archive_emails_generic_error(self, tools):
+        """Test generic exception handling in list_archive_emails."""
+        tools.valves.allow_list_archive = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.list_archive_emails(count=10)
+            assert "Error connecting to IMAP server" in result
+
+    @pytest.mark.asyncio
+    async def test_read_archive_email_generic_error(self, tools):
+        """Test generic exception handling in read_archive_email."""
+        tools.valves.allow_list_archive = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.read_archive_email(email_index=1)
+            assert "Error reading email" in result
+
+    @pytest.mark.asyncio
+    async def test_list_trash_emails_generic_error(self, tools):
+        """Test generic exception handling in list_trash_emails."""
+        tools.valves.allow_list_trash = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.list_trash_emails(count=10)
+            assert "Error connecting to IMAP server" in result
+
+    @pytest.mark.asyncio
+    async def test_read_trash_email_generic_error(self, tools):
+        """Test generic exception handling in read_trash_email."""
+        tools.valves.allow_list_trash = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.read_trash_email(email_index=1)
+            assert "Error reading email" in result
+
+    @pytest.mark.asyncio
+    async def test_list_sent_emails_generic_error(self, tools):
+        """Test generic exception handling in list_sent_emails."""
+        tools.valves.allow_list_sent = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.list_sent_emails(count=10)
+            assert "Error connecting to IMAP server" in result
+
+    @pytest.mark.asyncio
+    async def test_read_sent_email_generic_error(self, tools):
+        """Test generic exception handling in read_sent_email."""
+        tools.valves.allow_list_sent = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.read_sent_email(email_index=1)
+            assert "Error reading email" in result
+
+    @pytest.mark.asyncio
+    async def test_list_draft_emails_generic_error(self, tools):
+        """Test generic exception handling in list_draft_emails."""
+        tools.valves.allow_list_drafts = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.list_draft_emails(count=10)
+            assert "Error connecting to IMAP server" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_server_not_configured(self, tools):
+        """Test that list_emails returns error when imap_server is empty."""
+        tools = Tools()
+        tools.valves.username = "testuser"
+        tools.valves.password = "testpass"
+        result = await tools.list_emails(count=5)
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_server_not_configured(self, tools):
+        """Test that read_email returns error when imap_server is empty."""
+        tools = Tools()
+        tools.valves.username = "testuser"
+        tools.valves.password = "testpass"
+        result = await tools.read_email(email_index=1)
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_server_not_configured(self, tools):
+        """Test that search_emails returns error when imap_server is empty."""
+        tools = Tools()
+        tools.valves.username = "testuser"
+        tools.valves.password = "testpass"
+        result = await tools.search_emails(query="test", count=10)
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_server_not_configured(self, tools):
+        """Test that delete_email returns error when imap_server is empty."""
+        tools = Tools()
+        tools.valves.username = "testuser"
+        tools.valves.password = "testpass"
+        tools.valves.allow_delete_single = True
+        result = await tools.delete_email(email_index=1)
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_server_not_configured(self, tools):
+        """Test that delete_all_emails returns error when imap_server is empty."""
+        tools = Tools()
+        tools.valves.username = "testuser"
+        tools.valves.password = "testpass"
+        tools.valves.allow_delete_all = True
+        result = await tools.delete_all_emails()
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_archive_email_server_not_configured(self, tools):
+        """Test that archive_email returns error when imap_server is empty."""
+        tools = Tools()
+        tools.valves.username = "testuser"
+        tools.valves.password = "testpass"
+        tools.valves.allow_archive = True
+        result = await tools.archive_email(email_index=1)
+        assert "Error" in result and "server" in result
 
 
 if __name__ == "__main__":

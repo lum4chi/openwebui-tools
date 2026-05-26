@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP.
 requirements:
-version: 1.0.0
+version: 1.1.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -46,6 +46,12 @@ class Tools:
         use_ssl: bool = Field(default=True, description="Use SSL/TLS connection (set False for port 143)")
         timeout: int = Field(default=30, description="Connection timeout in seconds")
         folder: str = Field(default="INBOX", description="IMAP folder to work with (default: INBOX)")
+        allow_delete_single: bool = Field(
+            default=False, description="Allow deleting individual emails (default: False for safety)"
+        )
+        allow_delete_all: bool = Field(
+            default=False, description="Allow deleting all emails (default: False for safety)"
+        )
 
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""
@@ -475,6 +481,8 @@ class Tools:
         Delete a specific email from the mailbox.
         :param email_index: 1-based index (1 = most recent email by UID)
         """
+        if not self.valves.allow_delete_single:
+            return "Delete operations are disabled. Enable 'allow_delete_single' in Valves to use this feature."
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
@@ -516,6 +524,8 @@ class Tools:
         """
         Delete all emails from the mailbox folder.
         """
+        if not self.valves.allow_delete_all:
+            return "Delete operations are disabled. Enable 'allow_delete_all' in Valves to use this feature."
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:

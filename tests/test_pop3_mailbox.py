@@ -229,12 +229,52 @@ class TestPOP3MailboxTool:
     async def test_delete_email_no_credentials(self):
         """Test that delete_email returns error when credentials are missing."""
         t = Tools()
+        t.valves.allow_delete_single = True
         result = await t.delete_email(email_index=1)
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
+    async def test_delete_email_disabled_by_default(self, tools):
+        """Test that delete_email is blocked when allow_delete_single is False (default)."""
+        assert tools.valves.allow_delete_single is False
+        result = await tools.delete_email(email_index=1)
+        assert "disabled" in result.lower() and "allow_delete_single" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_enabled(self, tools):
+        """Test deleting a specific email when allow_delete_single is True."""
+        tools.valves.allow_delete_single = True
+        emails = [
+            _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
+        ]
+        mock_server = _make_mock_server(1, emails)
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_email(email_index=1)
+        assert "deleted successfully" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_disabled_by_default(self, tools):
+        """Test that delete_all_emails is blocked when allow_delete_all is False (default)."""
+        assert tools.valves.allow_delete_all is False
+        result = await tools.delete_all_emails()
+        assert "disabled" in result.lower() and "allow_delete_all" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_enabled(self, tools):
+        """Test deleting all emails when allow_delete_all is True."""
+        tools.valves.allow_delete_all = True
+        emails = [
+            _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
+        ]
+        mock_server = _make_mock_server(1, emails)
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.delete_all_emails()
+        assert "deleted successfully" in result
+
+    @pytest.mark.asyncio
     async def test_delete_email_success(self, tools):
         """Test deleting a specific email."""
+        tools.valves.allow_delete_single = True
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
             _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay."),
@@ -248,6 +288,7 @@ class TestPOP3MailboxTool:
     @pytest.mark.asyncio
     async def test_delete_email_out_of_range(self, tools):
         """Test deleting an email with an out-of-range index."""
+        tools.valves.allow_delete_single = True
         mock_server = _make_mock_server(2, [])
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.delete_email(email_index=99)
@@ -256,6 +297,7 @@ class TestPOP3MailboxTool:
     @pytest.mark.asyncio
     async def test_delete_email_invalid_index(self, tools):
         """Test deleting an email with an invalid index (0 or negative)."""
+        tools.valves.allow_delete_single = True
         mock_server = _make_mock_server(2, [])
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.delete_email(email_index=0)
@@ -265,12 +307,14 @@ class TestPOP3MailboxTool:
     async def test_delete_all_emails_no_credentials(self):
         """Test that delete_all_emails returns error when credentials are missing."""
         t = Tools()
+        t.valves.allow_delete_all = True
         result = await t.delete_all_emails()
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_success(self, tools):
         """Test deleting all emails from mailbox."""
+        tools.valves.allow_delete_all = True
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
             _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay."),
@@ -286,6 +330,7 @@ class TestPOP3MailboxTool:
     @pytest.mark.asyncio
     async def test_delete_all_emails_empty_mailbox(self, tools):
         """Test deleting all emails from an empty mailbox."""
+        tools.valves.allow_delete_all = True
         mock_server = _make_mock_server(0, [])
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.delete_all_emails()

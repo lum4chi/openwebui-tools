@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP.
 requirements:
-version: 1.1.0
+version: 1.2.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -51,6 +51,10 @@ class Tools:
         )
         allow_delete_all: bool = Field(
             default=False, description="Allow deleting all emails (default: False for safety)"
+        )
+        allow_archive: bool = Field(default=False, description="Allow archiving emails (default: False for safety)")
+        archive_folder: str = Field(
+            default="Archive", description="Target folder for archived emails (used when allow_archive is True)"
         )
 
     def _decode_mime_header(self, header_value: str | None) -> str:
@@ -553,3 +557,45 @@ class Tools:
             return f"IMAP Error: {str(e)}"
         except Exception as e:
             return f"Error deleting emails: {str(e)}"
+
+    async def archive_email(
+        self, email_index: int = Field(description="Index of the email to archive (1-based, 1 = most recent by UID)")
+    ) -> str:
+        """
+        Archive a specific email by moving it to the configured archive folder.
+        :param email_index: 1-based index (1 = most recent email by UID)
+        """
+        if not self.valves.allow_archive:
+            return "Archive operations are disabled. Enable 'allow_archive' in Valves to use this feature."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        try:
+            conn = self._connect()
+            conn.select(self.valves.folder)
+
+            uid_map = self._refresh_uid_index(conn)
+
+            if not uid_map:
+                conn.close()
+                return f"Error: Mailbox '{self.valves.folder}' is empty. Nothing to archive."
+
+            try:
+                reversed_map: dict[int, str] = {v: k for k, v in uid_map.items()}
+                uid = reversed_map[email_index]
+            except (KeyError, TypeError):
+                conn.close()
+                return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
+
+            conn.uid("COPY", uid, self.valves.archive_folder)  # pyright: ignore[reportArgumentType]
+            conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
+            conn.expunge()
+            conn.close()
+            return f"Email [{uid}] has been archived to '{self.valves.archive_folder}' successfully."
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            return f"Error archiving email: {str(e)}"

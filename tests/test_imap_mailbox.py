@@ -1047,9 +1047,7 @@ class TestSearchEmailsAdditional:
     @pytest.mark.asyncio
     async def test_search_emails_after_date(self, tools):
         """Test search with after: date filter."""
-        raw = _make_raw_email(
-            "alice@example.com", "bob@example.com", "After test", "Hi"
-        )
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "After test", "Hi")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
@@ -1061,9 +1059,7 @@ class TestSearchEmailsAdditional:
     @pytest.mark.asyncio
     async def test_search_emails_before_date(self, tools):
         """Test search with before: date filter."""
-        raw = _make_raw_email(
-            "alice@example.com", "bob@example.com", "Before test", "Hi"
-        )
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Before test", "Hi")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
@@ -1073,32 +1069,22 @@ class TestSearchEmailsAdditional:
     @pytest.mark.asyncio
     async def test_search_emails_before_after_combined(self, tools):
         """Test search combining before: and after:."""
-        raw = _make_raw_email(
-            "alice@example.com", "bob@example.com", "Range test", "Hi"
-        )
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Range test", "Hi")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(
-                query="after:2025-01-01 before:2025-12-31", count=10
-            )
+            result = await tools.search_emails(query="after:2025-01-01 before:2025-12-31", count=10)
         assert "alice@example.com" in result
 
     @pytest.mark.asyncio
     async def test_search_emails_combined_from_and_subject(self, tools):
         """Test search with both from: and subject:."""
-        raw = _make_raw_email(
-            "alice@example.com", "bob@example.com", "Pay me", "Invoice"
-        )
-        raw2 = _make_raw_email(
-            "carol@example.com", "bob@example.com", "Hello", "Invoice"
-        )
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Pay me", "Invoice")
+        raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Hello", "Invoice")
         emails = [(raw, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(
-                query='from:"alice@example.com" subject:"Invoice"', count=10
-            )
+            result = await tools.search_emails(query='from:"alice@example.com" subject:"Invoice"', count=10)
         assert "alice@example.com" in result
         assert "carol@example.com" not in result
 

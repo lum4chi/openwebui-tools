@@ -2,9 +2,13 @@
 
 ## Repo structure
 
-Each `.py` file in the root is a standalone Open WebUI Workspace Tool — not a library or app. Tools are imported into Open WebUI via Workspace → Tools → Import.
+Each `.py` file in the root is a standalone Open WebUI Workspace Tool — not a library or app. Import via Workspace → Tools → Import.
 
 Tool spec: https://docs.openwebui.com/features/extensibility/plugin/tools/
+
+Existing tools:
+- `imap_mailbox.py` — IMAP mailbox manager (list, read, search, delete, archive, folder access control)
+- `pop3_mailbox.py` — POP3 mailbox manager (list, read, search, delete)
 
 ## Tool format (non-negotiable)
 
@@ -17,7 +21,7 @@ Every tool must have:
    author: Your Name
    author_url: https://...
    description: One-line description
-   requirements: comma, separated, deps
+   requirements:
    version: 1.0.0
    licence: MIT
    required_open_webui_version: 0.5.0
@@ -32,18 +36,16 @@ Every tool must have:
            self.citation = False  # disable auto-citations if using custom ones
 
        class Valves(BaseModel):
-           server: str = Field(default="", description="POP3 host")
-           port: int = Field(default=995, description="POP3 port")
+           server: str = Field(default="", description="SMTP/IMAP/POP3 host")
+           port: int = Field(default=993, description="Server port")
 
        async def list_emails(self, count: int = Field(default=10)) -> str:
            """Docstring describes the tool for the model."""
    ```
 
 3. **Type hints required** — no type hints = poor model tool selection. Use `int`, `str`, `str | None`, `list[str]`, etc.
-
-4. **Async methods** — use `async def` for future compatibility.
-
-5. **Valves** for config — use `pydantic.BaseModel` with `Field()`. Users edit these in Open WebUI UI.
+4. **Async methods** — use `async def`.
+5. **Valves** for config — use `pydantic.BaseModel` with `Field()`.
 
 ## Commands
 
@@ -56,13 +58,13 @@ uv run ruff format .             # format
 uv run pyright                   # type check
 ```
 
-Order matters for CI: `ruff check -> ruff format -> pyright -> pytest`.
+CI order: `ruff check -> ruff format -> pyright -> pytest`.
 
 ## Lint rules (ruff)
 
 - Line length: 120
-- Enabled: E, W, F, I, N, UP, B, SIM, T201
-- Ignored: E501 (line length), B008 (call in arg default)
+- Select: E, W, F, I, N, UP, B, SIM, T201
+- Ignore: E501, B008
 - Trailing whitespace is an error (W291)
 - Unused imports are errors (F401)
 - Use `X | None` not `Optional[X]` (py311+)
@@ -71,9 +73,22 @@ Order matters for CI: `ruff check -> ruff format -> pyright -> pytest`.
 
 ## Testing
 
-- Tests go in `tests/test_<tool_name>.py` (in a `tests/` directory at the repo root)
-- Mock the POP3 server with `unittest.mock.MagicMock` — no real server needed
-- Tests use `@pytest.mark.asyncio` for async tool methods
+- Tests go in `tests/test_<tool_name>.py`
+- Mock with `unittest.mock.MagicMock` + `patch` — no real mail server needed
+- Tests use `@pytest.mark.asyncio`
+- Set tool valves on fixture instances; don't set them on bare `Tools()` unless testing defaults
+- Email index is **1-based, newest first**. For IMAP, "newest" = highest UID. For POP3, "newest" = highest server index.
+
+## Email tool implementation notes
+
+- Both IMAP and POP3 tools use UID/index ordering where index 1 = most recent email (highest UID for IMAP, highest server index for POP3)
+- Write operations (delete, archive) are gated by valve toggles that default to `False` for safety
+- IMAP uses `imaplib.IMAP4Exception` compatibility shim for older Python (`getattr(imaplib, "IMAP4Exception", Exception)`)
+- Mock the correct connection class: `imaplib.IMAP4_SSL` / `imaplib.IMAP4` for IMAP, `poplib.POP3_SSL` / `poplib.POP3` for POP3
+- IMAP RFC822 fetch responses wrap payload as `[prefix_bytes, raw_bytes]`; POP3 `retr()` returns `[status, [line1, line2, ...], size]`
+- IMAP has per-folder access guards (`allow_list_archive`, `allow_list_trash`, etc.); POP3 does not (no folder concept)
+- IMAP supports optional `folder` param on list/read/search methods; POP3 does not
+- `pyright` config uses `basic` type checking mode with missing types relaxed
 
 ## Commit convention
 
@@ -90,17 +105,17 @@ Format: `<type>: <description>` or `<type>: <description>\n\n<body>`
 
 ## Versioning
 
-The `version` field in the tool docstring follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
+The `version` field in each tool's docstring follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
-- **Patch** (`1.0.0 → 1.0.1`): bug fixes, internal changes — bump on any `fix:` commit
-- **Minor** (`1.0.x → 1.1.0`): new features, new tool methods — bump on `feat:` commits
-- **Major** (`1.x.x → 2.0.0`): breaking changes to the tool API — bump on incompatible changes
+- **Patch** (`1.0.0 → 1.0.1`): bug fixes — bump on `fix:` commits
+- **Minor** (`1.0.x → 1.1.0`): new features/methods — bump on `feat:` commits
+- **Major** (`1.x.x → 2.0.0`): breaking API changes
 
-When bumping the version, update the `version:` line in the top-level docstring of the tool file.
+Update `version:` in the tool's top-level docstring when bumping.
 
 ## Adding a new tool
 
 1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above
 2. Create `tests/test_<tool_name>.py` with mocked tests
 3. Run `uv run ruff check . && uv run pyright && uv run pytest -v` — all must pass
-4. Update README.md with installation and usage instructions
+4. Update README.md and AGENTS.md accordingly

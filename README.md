@@ -2,7 +2,84 @@
 
 Custom tools for [Open WebUI](https://github.com/open-webui/open-webui).
 
+Each `.py` file is a standalone tool. Import via Workspace → Tools → Import.
+
 ## Available Tools
+
+### IMAP Mailbox Manager
+
+Manage a generic IMAP mailbox with folder access.
+
+#### Features
+
+- **List emails** - View recent messages with sender, subject, date, UID, and body preview
+- **Read email** - Retrieve full email content by index (folder-aware)
+- **Search emails** - Filter by sender (`from:`), subject (`subject:`), date (`after:`, `before:`), or free text (folder-aware)
+- **Get count** - Check total mailbox size
+- **Delete email** - Remove individual messages or all messages (gated by valves)
+- **Archive email** - Move messages to archive folder (gated by valves)
+- **Folder access** - Separate toggles for archive, trash, sent, drafts folders
+- **Folder param override** - All list/read/search methods accept optional `folder` parameter
+
+#### Installation
+
+1. Copy `imap_mailbox.py` into your Open WebUI tools directory, or import it via:
+   - Open WebUI → **Workspace** → **Tools** → **Import**
+   - Paste the file content or provide a URL
+
+2. Configure your IMAP credentials in the tool's **Valves**:
+
+   | Setting | Default | Description |
+   |---------|---------|-------------|
+   | `imap_server` | `""` | IMAP server hostname |
+   | `imap_port` | `993` | Port (993 for SSL, 143 for non-SSL) |
+   | `username` | `""` | Mailbox username |
+   | `password` | `""` | Mailbox password or app-specific password |
+   | `use_ssl` | `True` | Enable SSL/TLS |
+   | `timeout` | `30` | Connection timeout in seconds |
+   | `inbox_folder` | `INBOX` | Default inbox folder name |
+   | `archive_folder` | `Archive` | Archive folder path |
+   | `trash_folder` | `Trash` | Trash folder path |
+   | `sent_folder` | `Sent` | Sent folder path |
+   | `drafts_folder` | `Drafts` | Drafts folder path |
+
+   Read-access toggles (default `False`):
+   - `allow_list_archive`, `allow_list_trash`, `allow_list_sent`, `allow_list_drafts`
+
+   Write-access toggles (default `False`):
+   - `allow_delete_single`, `allow_delete_all`, `allow_archive`
+
+3. Enable the tool for your model:
+   - Go to **Workspace** → **Models** → select your model → **Tools**
+   - Check "IMAP Mailbox Manager"
+
+#### Usage Examples
+
+```
+# List the 5 most recent emails
+list_emails(count=5)
+
+# Read email at index 1 (most recent by UID)
+read_email(email_index=1)
+
+# Search by sender or free text
+search_emails(query="from:alice@example.com", count=10)
+
+# Search with date range
+search_emails(query="after:2025-01-01 before:2025-04-01", count=10)
+
+# List emails from a custom folder
+list_emails(count=5, folder="Custom/Folder")
+
+# Archive an email (requires allow_archive valve)
+archive_email(email_index=1)
+
+# Delete an email (requires allow_delete_single valve)
+delete_email(email_index=1)
+
+# Check total inbox count
+get_email_count()
+```
 
 ### POP3 Mailbox Reader
 
@@ -60,7 +137,9 @@ get_email_count()
 
 ## Development
 
-This project uses [uv](https://github.com/astral-sh/uv) for dependency management.
+Requires Python ≥3.11. Uses [uv](https://github.com/astral-sh/uv) for dependency management.
+
+Run order matters for CI: `ruff check -> ruff format -> pyright -> pytest`.
 
 #### Setup
 

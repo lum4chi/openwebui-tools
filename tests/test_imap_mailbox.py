@@ -1421,5 +1421,303 @@ class TestGenericExceptionErrors:
         assert "Error" in result and "server" in result
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class TestSieveTools:
+    """Tests for ManageSieve filter management features."""
+
+    @pytest.fixture
+    def sieve_tools(self):
+        t = Tools()
+        t.valves.imap_server = "sieve.example.com"
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        t.valves.manage_sieve_server = ""
+        t.valves.manage_sieve_port = 4190
+        t.valves.manage_sieve_use_ssl = True
+        t.valves.manage_sieve_timeout = 30
+        return t
+
+    def _make_sieve_mock(self, active="filter1", scripts=None):
+        """Create a mock ManageSieve client with script data."""
+        client = MagicMock()
+        _scripts = scripts or ["filter1", "filter2", "spam_block"]
+        client.listscripts.return_value = (active if active else None, _scripts)
+        client.getscript.return_value = (
+            'require "fileinto";\nif header :contains "Subject" "invoice" {\n  fileinto "Invoices";\n}'
+        )
+        client.return_value = client
+        return client
+
+    @pytest.mark.asyncio
+    async def test_list_sieve_scripts_success(self, sieve_tools):
+        """Test listing Sieve scripts on the server."""
+        mock_client = self._make_sieve_mock(active="filter1", scripts=["filter1", "filter2"])
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.list_sieve_scripts()
+        assert "filter1" in result
+        assert "filter2" in result
+        assert ">>>" in result or "filter1" in result
+        assert "active" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_list_sieve_scripts_empty(self, sieve_tools):
+        """Test listing when no Sieve scripts exist."""
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, [])
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.list_sieve_scripts()
+        assert "No Sieve scripts" in result
+
+    @pytest.mark.asyncio
+    async def test_list_sieve_scripts_no_sievelib(self):
+        """Test error when sievelib is not installed."""
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = None
+            t = Tools()
+            result = await t.list_sieve_scripts()
+            assert "sievelib" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_get_sieve_script_success(self, sieve_tools):
+        """Test retrieving a Sieve script by name."""
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.get_sieve_script(name="filter1")
+        assert "Sieve Script: filter1" in result
+        assert "fileinto" in result
+
+    @pytest.mark.asyncio
+    async def test_get_sieve_script_not_found(self, sieve_tools):
+        """Test retrieving a non-existent script."""
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.get_sieve_script(name="nonexistent")
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_sieve_script_empty_scripts(self, sieve_tools):
+        """Test retrieving a script when none exist."""
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, [])
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.get_sieve_script(name="any")
+        assert "No Sieve scripts" in result
+
+    @pytest.mark.asyncio
+    async def test_create_sieve_script_success(self, sieve_tools):
+        """Test creating a new Sieve script."""
+        sieve_tools.valves.allow_create_sieve = True
+        mock_client = self._make_sieve_mock()
+        mock_client.listscripts.return_value = (None, [])  # no scripts yet
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.create_sieve_script(name="auto_filter", content="require 'fileinto';")
+        assert "created successfully" in result
+        mock_client.putscript.assert_called_once_with("auto_filter", "require 'fileinto';")
+
+    @pytest.mark.asyncio
+    async def test_create_sieve_script_already_exists(self, sieve_tools):
+        """Test creating a script that already exists."""
+        sieve_tools.valves.allow_create_sieve = True
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.create_sieve_script(name="filter1", content="new content")
+        assert "already exists" in result
+
+    @pytest.mark.asyncio
+    async def test_create_sieve_script_disabled(self, sieve_tools):
+        """Test creating a script when create permission is disabled."""
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.create_sieve_script(name="new_script", content="ignore")
+        assert "disabled" in result.lower() and "allow_create_sieve" in result
+
+    @pytest.mark.asyncio
+    async def test_update_sieve_script_success(self, sieve_tools):
+        """Test updating an existing Sieve script."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.update_sieve_script(name="filter1", content="updated content here")
+        assert "updated successfully" in result
+        mock_client.putscript.assert_called_once_with("filter1", "updated content here")
+
+    @pytest.mark.asyncio
+    async def test_update_sieve_script_not_found(self, sieve_tools):
+        """Test updating a non-existent script."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.update_sieve_script(name="ghost", content="stuff")
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_update_sieve_script_disabled(self, sieve_tools):
+        """Test updating a script when update permission is disabled."""
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.update_sieve_script(name="x", content="y")
+        assert "disabled" in result.lower() and "allow_update_sieve" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_success(self, sieve_tools):
+        """Test deleting a Sieve script."""
+        sieve_tools.valves.allow_delete_sieve = True
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.delete_sieve_script(name="filter2")
+        assert "deleted successfully" in result
+        mock_client.deletescript.assert_called_once_with("filter2")
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_active_deactivates(self, sieve_tools):
+        """Test that deleting an active script also deactivates it."""
+        sieve_tools.valves.allow_delete_sieve = True
+        mock_client = self._make_sieve_mock(active="filter2", scripts=["filter1", "filter2"])
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.delete_sieve_script(name="filter2")
+        assert "deleted successfully" in result
+        mock_client.deletescript.assert_called_once_with("filter2")
+        mock_client.setactive.assert_called_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_not_found(self, sieve_tools):
+        """Test deleting a non-existent script."""
+        sieve_tools.valves.allow_delete_sieve = True
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.delete_sieve_script(name="ghost_script")
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_disabled(self, sieve_tools):
+        """Test deleting when delete permission is disabled."""
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=MagicMock(return_value=MagicMock()))):
+            result = await sieve_tools.delete_sieve_script(name="x")
+        assert "disabled" in result.lower() and "allow_delete_sieve" in result
+
+    @pytest.mark.asyncio
+    async def test_set_active_sieve_script_success(self, sieve_tools):
+        """Test activating a Sieve script."""
+        sieve_tools.valves.allow_activate_sieve = True
+        mock_client = self._make_sieve_mock()
+        mock_client.listscripts.return_value = (None, ["filter1", "filter2"])
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.set_active_sieve_script(name="filter2")
+        assert "now active" in result
+        mock_client.setactive.assert_called_once_with("filter2")
+
+    @pytest.mark.asyncio
+    async def test_set_active_sieve_script_not_found(self, sieve_tools):
+        """Test activating a non-existent script."""
+        sieve_tools.valves.allow_activate_sieve = True
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.set_active_sieve_script(name="phantom")
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_set_active_sieve_script_disabled(self, sieve_tools):
+        """Test activating when permission is disabled."""
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.set_active_sieve_script(name="x")
+        assert "disabled" in result.lower() and "allow_activate_sieve" in result
+
+    @pytest.mark.asyncio
+    async def test_deactivate_sieve_script_success(self, sieve_tools):
+        """Test deactivating the active Sieve script."""
+        sieve_tools.valves.allow_activate_sieve = True
+        mock_client = self._make_sieve_mock(active="filter1")
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.deactivate_sieve_script()
+        assert "deactivated" in result.lower()
+        mock_client.setactive.assert_called_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_deactivate_sieve_script_none_active(self, sieve_tools):
+        """Test deactivating when no script is active."""
+        sieve_tools.valves.allow_activate_sieve = True
+        mock_client = self._make_sieve_mock(active=None)
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.deactivate_sieve_script()
+        assert "No Sieve script is currently active" in result
+
+    @pytest.mark.asyncio
+    async def test_deactivate_sieve_script_disabled(self, sieve_tools):
+        """Test deactivating when permission is disabled."""
+        mock_client = self._make_sieve_mock()
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools.deactivate_sieve_script()
+        assert "disabled" in result.lower() and "allow_activate_sieve" in result
+
+    @pytest.mark.asyncio
+    async def test_sieve_no_credentials(self):
+        """Test Sieve methods return error when credentials are missing."""
+        t = Tools()
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            # Mock to avoid ImportError but still get credential error
+            mock_cls = MagicMock()
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await t.list_sieve_scripts()
+            assert "credentials" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_sieve_no_server(self, sieve_tools):
+        """Test Sieve methods return error when imap_server is empty."""
+        sieve_tools.valves.imap_server = ""
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            mock_cls = MagicMock()
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await sieve_tools.list_sieve_scripts()
+            assert "server" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_sieve_default_valves(self):
+        """Test that Sieve write valves default to False."""
+        t = Tools()
+        assert t.valves.allow_create_sieve is False
+        assert t.valves.allow_update_sieve is False
+        assert t.valves.allow_delete_sieve is False
+        assert t.valves.allow_activate_sieve is False
+
+    @pytest.mark.asyncio
+    async def test_sieve_default_port(self):
+        """Test that ManageSieve default port is 4190."""
+        t = Tools()
+        assert t.valves.manage_sieve_port == 4190
+        assert t.valves.manage_sieve_use_ssl is True
+
+    @pytest.mark.asyncio
+    async def test_sieve_fallback_uses_imap_server(self, sieve_tools):
+        """Test that missing manage_sieve_server falls back to imap_server."""
+        sieve_tools.valves.imap_server = "imap.example.com"
+        sieve_tools.valves.manage_sieve_server = ""
+        sieve_tools.valves.allow_create_sieve = True
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, [])
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            await sieve_tools.create_sieve_script(name="x", content="y")
+            mock_cls.assert_called_once_with("imap.example.com", srvport=4190)
+        finally:
+            imap_mailbox._try_sievelib_client = original

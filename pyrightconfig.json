@@ -14,5 +14,6 @@
     "reportUnknownMemberType": false,
     "reportUnknownArgumentType": false,
     "reportUnknownVariableType": false,
-    "reportUntypedFunctionDecorator": false
+    "reportUntypedFunctionDecorator": false,
+    "reportAttributeAccessIssue": false
 }

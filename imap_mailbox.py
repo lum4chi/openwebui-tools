@@ -2,9 +2,9 @@
 title: IMAP Mailbox Manager
 author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
-description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP.
-requirements:
-version: 1.3.0
+description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
+requirements: sievelib>=1.5.0
+version: 1.4.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -21,6 +21,15 @@ from pydantic import BaseModel, Field
 
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
 _IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
+
+# ManageSieve client — imported conditionally since it's an optional dependency
+_try_sievelib_client: type | None = None
+try:
+    from sievelib.managesieve import Client as _SievelibClient  # pyright: ignore[reportMissingImports]
+
+    _try_sievelib_client = _SievelibClient
+except ImportError:
+    _try_sievelib_client = None
 
 
 if TYPE_CHECKING:
@@ -78,6 +87,234 @@ class Tools:
             default=False, description="Allow deleting all emails (default: False for safety)"
         )
         allow_archive: bool = Field(default=False, description="Allow archiving emails (default: False for safety)")
+
+        # manage sieve
+        manage_sieve_server: str = Field(
+            default="", description="ManageSieve server hostname (default: same as imap_server)"
+        )
+        manage_sieve_port: int = Field(
+            default=4190, description="ManageSieve server port (4190 for SSL, 20000 for non-SSL)"
+        )
+        manage_sieve_use_ssl: bool = Field(
+            default=True, description="Use SSL/TLS for ManageSieve connection (set False for port 20000)"
+        )
+        manage_sieve_timeout: int = Field(default=30, description="ManageSieve connection timeout in seconds")
+
+        # write permissions for sieve
+        allow_create_sieve: bool = Field(
+            default=False, description="Allow creating or uploading Sieve scripts (default: False for safety)"
+        )
+        allow_update_sieve: bool = Field(
+            default=False, description="Allow updating existing Sieve scripts (default: False for safety)"
+        )
+        allow_delete_sieve: bool = Field(
+            default=False, description="Allow deleting Sieve scripts (default: False for safety)"
+        )
+        allow_activate_sieve: bool = Field(
+            default=False, description="Allow activating/deactivating Sieve scripts (default: False for safety)"
+        )
+
+    def _manage_sieve_connect(self) -> str | object:
+        """Establish connection to ManageSieve server.
+
+        Returns a sievelib Client object on success, or an error string on failure.
+        """
+        if not _try_sievelib_client:
+            return "Error: sievelib is not installed. Install it with: pip install sievelib"
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves. ManageSieve reuses IMAP credentials."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves. ManageSieve reuses IMAP host by default."
+
+        server = self.valves.manage_sieve_server or self.valves.imap_server
+        port = self.valves.manage_sieve_port
+        use_ssl = self.valves.manage_sieve_use_ssl
+
+        try:
+            client = _try_sievelib_client(server, srvport=port)
+            client.connect(
+                self.valves.username,
+                self.valves.password,
+                starttls=use_ssl,
+            )
+            return client
+        except Exception as e:
+            return f"ManageSieve Error: {str(e)}. Check your server settings and credentials."
+
+    async def list_sieve_scripts(self) -> str:
+        """List all available Sieve filters/scripts on the server."""
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the server."
+            active_label = " (active)" if active else " (none active)"
+            result_lines = [f"Available Sieve scripts{active_label}:"]
+            for name in sorted(scripts):
+                marker = ">>>" if name == active else "   "
+                result_lines.append(f"  {marker} {name}")
+            client.logout()
+            return "\n".join(result_lines)
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error listing Sieve scripts: {str(e)}"
+
+    async def get_sieve_script(self, name: str = Field(description="Name of the Sieve script to retrieve")) -> str:
+        """Get the content of a Sieve script."""
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the server."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            script_content = client.getscript(name)
+            client.logout()
+            return f"=== Sieve Script: {name} ===\n{script_content}"
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error retrieving Sieve script: {str(e)}"
+
+    async def create_sieve_script(
+        self,
+        name: str = Field(description="Name for the new Sieve script"),
+        content: str = Field(description="Sieve script content (Sieve DSL format)"),
+    ) -> str:
+        """Create or upload a new Sieve script."""
+        if not self.valves.allow_create_sieve:
+            return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if name in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it."
+            client.putscript(name, content)
+            client.logout()
+            return f"Sieve script '{name}' has been created successfully."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error creating Sieve script: {str(e)}"
+
+    async def update_sieve_script(
+        self,
+        name: str = Field(description="Name of the existing Sieve script to update"),
+        content: str = Field(description="Updated Sieve script content"),
+    ) -> str:
+        """Update an existing Sieve script."""
+        if not self.valves.allow_update_sieve:
+            return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the server."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            client.putscript(name, content)
+            client.logout()
+            return f"Sieve script '{name}' has been updated successfully."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error updating Sieve script: {str(e)}"
+
+    async def delete_sieve_script(self, name: str = Field(description="Name of the Sieve script to delete")) -> str:
+        """Delete a Sieve script from the server."""
+        if not self.valves.allow_delete_sieve:
+            return "Delete script operations are disabled. Enable 'allow_delete_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the server."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            client.deletescript(name)
+            if active == name:
+                client.setactive(None)
+            client.logout()
+            return f"Sieve script '{name}' has been deleted successfully."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error deleting Sieve script: {str(e)}"
+
+    async def set_active_sieve_script(
+        self, name: str = Field(description="Name of the Sieve script to activate")
+    ) -> str:
+        """Activate a Sieve script (make it the active filter)."""
+        if not self.valves.allow_activate_sieve:
+            return (
+                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
+            )
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the server."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            client.setactive(name)
+            client.logout()
+            return f"Sieve script '{name}' is now active."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error activating Sieve script: {str(e)}"
+
+    async def deactivate_sieve_script(self) -> str:
+        """Deactivate the currently active Sieve script (no scripts will filter mail)."""
+        if not self.valves.allow_activate_sieve:
+            return (
+                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
+            )
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts = client.listscripts()
+            if not active:
+                client.logout()
+                return "No Sieve script is currently active."
+            client.setactive(None)
+            client.logout()
+            return f"Sieve script '{active}' has been deactivated. No scripts are currently active."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error deactivating Sieve script: {str(e)}"
 
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""

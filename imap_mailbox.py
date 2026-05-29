@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 1.4.0
+version: 1.5.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -66,6 +66,9 @@ class Tools:
             default="Drafts", description="Drafts folder name (e.g., 'Drafts', '[Gmail]/Drafts')"
         )
 
+        allow_list_inbox: bool = Field(
+            default=False, description="Allow reading emails from the inbox folder (default: False for safety)"
+        )
         allow_list_archive: bool = Field(
             default=False, description="Allow reading emails from the archive folder (default: False for safety)"
         )
@@ -471,24 +474,32 @@ class Tools:
 
         return None
 
-    async def list_emails(
-        self,
-        count: int = Field(default=10, description="Number of recent emails to list (default: 10)"),
-        folder: str | None = Field(
-            default=None, description="Optional IMAP folder to read from (uses valve 'folder' by default)"
-        ),
+    async def list_inbox_emails(
+        self, count: int = Field(default=10, description="Number of recent emails to list (default: 10)")
     ) -> str:
         """
-        List emails in the IMAP mailbox. Returns a summary of the most recent emails.
+        List emails in the inbox folder.
         :param count: Number of recent emails to retrieve and display
-        :param folder: Optional folder override (e.g. 'Archive', 'Sent'). Defaults to valve setting.
+        """
+        error = self._access_guard("inbox", self.valves.inbox_folder)
+        if error:
+            return error
+        return await self._list_folder_emails(self.valves.inbox_folder, count)
+
+    async def list_emails(
+        self,
+        folder: str,
+        count: int = Field(default=10, description="Number of recent emails to list (default: 10)"),
+    ) -> str:
+        """
+        List emails in a specific IMAP folder. Requires explicit folder name — no fallback.
         """
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        target_folder = self._resolve_folder(folder)
+        target_folder = self._resolve_folder(folder, fallback=folder)
 
         try:
             conn = self._connect()
@@ -498,9 +509,8 @@ class Tools:
 
             if not uid_map:
                 conn.close()
-                return "Mailbox is empty. No emails found."
+                return "Folder is empty. No emails found."
 
-            # Get top N UIDs by index (1-based = newest first)
             reversed_map = {v: k for k, v in uid_map.items()}
             target_uids = []
             for idx in range(1, min(count + 1, len(reversed_map) + 1)):
@@ -534,7 +544,7 @@ class Tools:
 
             total_count = len(uid_map)
 
-            result_lines = [f"Mailbox: {total_count} total message(s) in '{target_folder}'\n"]
+            result_lines = [f"Folder '{target_folder}': {total_count} total message(s)\n"]
             for _idx, email_data in enumerate(emails):
                 attachment_info = ""
                 if email_data["has_attachments"]:
@@ -555,6 +565,19 @@ class Tools:
             return f"IMAP Error: {str(e)}. Check your credentials and server settings."
         except Exception as e:
             return f"Error connecting to IMAP server '{self.valves.imap_server}': {str(e)}"
+
+    async def read_inbox_email(
+        self,
+        email_index: int = Field(description="Index of the email to read (1-based, 1 = most recent by UID)"),
+    ) -> str:
+        """
+        Read a specific inbox email by index.
+        :param email_index: 1-based index (1 = most recent inbox email by UID)
+        """
+        error = self._access_guard("inbox", self.valves.inbox_folder)
+        if error:
+            return error
+        return await self._read_folder_email(email_index, self.valves.inbox_folder)
 
     async def read_email(
         self,

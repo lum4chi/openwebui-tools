@@ -125,18 +125,30 @@ class TestIMAPMailboxTool:
     """Test suite for IMAP Mailbox Manager tool."""
 
     @pytest.mark.asyncio
-    async def test_list_emails_no_credentials(self):
-        """Test that list_emails returns error when credentials are missing."""
+    async def test_list_inbox_emails_no_credentials(self):
+        """Test that list_inbox_emails returns error when credentials are missing."""
         t = Tools()
-        result = await t.list_emails(count=5)
+        t.valves.allow_list_inbox = True
+        result = await t.list_inbox_emails(count=5)
         assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_no_folder_required(self):
+        """Test that list_emails requires a folder parameter."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.imap_port = 993
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        with pytest.raises(TypeError):
+            await t.list_emails(count=5)
 
     @pytest.mark.asyncio
     async def test_list_emails_empty_mailbox(self, tools):
         """Test listing emails in an empty mailbox."""
         mock_server = _make_mock_server([])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.list_emails(count=10)
+            result = await tools.list_emails(folder="INBOX", count=10)
         assert "empty" in result.lower() or "No emails" in result
 
     @pytest.mark.asyncio
@@ -149,7 +161,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.list_emails(count=10)
+            result = await tools.list_emails(folder="INBOX", count=10)
         assert "alice@example.com" in result
         assert "carol@example.com" in result
         assert "Hello" in result
@@ -507,6 +519,19 @@ class TestAccessGuard:
         assert tools._access_guard("archive", tools.valves.archive_folder) is not None
 
     @pytest.mark.asyncio
+    async def test_access_guard_inbox_disabled(self, tools):
+        """Test _access_guard returns error when inbox access is disabled."""
+        tools.valves.allow_list_inbox = False
+        assert tools._access_guard("inbox", tools.valves.inbox_folder) is not None
+
+    @pytest.mark.asyncio
+    async def test_access_guard_inbox_enabled(self, tools):
+        """Test _access_guard allows access when inbox toggle is on."""
+        tools.valves.allow_list_inbox = True
+        result = tools._access_guard("inbox", tools.valves.inbox_folder)
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_access_guard_archive_enabled(self, tools):
         """Test _access_guard allows access when archive toggle is on."""
         tools.valves.allow_list_archive = True
@@ -818,7 +843,8 @@ class TestFolderParamOverride:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.list_emails(count=10, folder="Custom/Folder")
+            result = await tools.list_emails(folder="Custom/Folder", count=10)
+        assert "Hello" in result
         assert "Custom/Folder" in result
         assert "Hello" in result
 
@@ -845,6 +871,136 @@ class TestFolderParamOverride:
         assert "Custom/Folder" in result
 
 
+class TestListInboxEmails:
+    """Test the list_inbox_emails convenience method."""
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_disabled_by_default(self, tools):
+        """Test list_inbox_emails is blocked when allow_list_inbox is False."""
+        assert tools.valves.allow_list_inbox is False
+        result = await tools.list_inbox_emails(count=5)
+        assert "disabled" in result.lower() and "allow_list_inbox" in result
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_enabled_with_messages(self, tools):
+        """Test listing inbox emails when access is enabled."""
+        tools.valves.allow_list_inbox = True
+        raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob, how are you?")
+        raw2 = _make_raw_email(
+            "carol@example.com", "bob@example.com", "Invoice #123", "Please find attached the invoice."
+        )
+        emails = [(raw1, "1"), (raw2, "2")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_inbox_emails(count=10)
+        assert "alice@example.com" in result
+        assert "carol@example.com" in result
+        assert "Hello" in result
+        assert "Invoice #123" in result
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_empty(self, tools):
+        """Test listing inbox emails from an empty inbox."""
+        tools.valves.allow_list_inbox = True
+        mock_server = _make_mock_server([])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_inbox_emails(count=10)
+        assert "empty" in result.lower() or "No emails" in result
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_no_credentials(self):
+        """Test list_inbox_emails returns error when credentials are missing."""
+        t = Tools()
+        t.valves.allow_list_inbox = True
+        result = await t.list_inbox_emails(count=5)
+        assert "Error" in result and "credentials" in result
+
+
+class TestReadInboxEmail:
+    """Test the read_inbox_email convenience method."""
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_disabled_by_default(self, tools):
+        """Test read_inbox_email is blocked when allow_list_inbox is False."""
+        assert tools.valves.allow_list_inbox is False
+        result = await tools.read_inbox_email(email_index=1)
+        assert "disabled" in result.lower() and "allow_list_inbox" in result
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_enabled(self, tools):
+        """Test reading an inbox email when access is enabled."""
+        tools.valves.allow_list_inbox = True
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Inbox Message", "This is inbox body content.")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_inbox_email(email_index=1)
+        assert "Inbox Message" in result
+        assert "INBOX" in result
+        assert "This is inbox body content" in result
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_out_of_range(self, tools):
+        """Test reading an inbox email with an out-of-range index."""
+        tools.valves.allow_list_inbox = True
+        raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
+        mock_server = _make_mock_server([(raw, "1")])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_inbox_email(email_index=99)
+        assert "out of range" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_empty_folder(self, tools):
+        """Test reading from an empty inbox folder."""
+        tools.valves.allow_list_inbox = True
+        mock_server = _make_mock_server([])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_inbox_email(email_index=1)
+        assert "empty" in result.lower() or "No emails" in result
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_no_credentials(self):
+        """Test read_inbox_email returns error when credentials are missing."""
+        t = Tools()
+        t.valves.allow_list_inbox = True
+        result = await t.read_inbox_email(email_index=1)
+        assert "Error" in result and "credentials" in result
+
+
+class TestListEmailsExplicitFolder:
+    """Test the list_emails method with required folder parameter."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_requires_folder(self):
+        """Test that list_emails raises TypeError when folder is not provided."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.imap_port = 993
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        with pytest.raises(TypeError):
+            await t.list_emails(count=5)
+
+    @pytest.mark.asyncio
+    async def test_list_emails_with_custom_folder(self, tools):
+        """Test list_emails with a custom folder."""
+        raw = _make_raw_email("sender@test.com", "recv@test.com", "Custom Folder", "Body content")
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(folder="Custom/Folder", count=10)
+        assert "Custom/Folder" in result
+        assert "Custom Folder" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_empty_custom_folder(self, tools):
+        """Test list_emails with empty custom folder."""
+        mock_server = _make_mock_server([])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(folder="Empty/Folder", count=10)
+        assert "empty" in result.lower() or "No emails" in result
+
+
 class TestDefaultValueToggles:
     """Test that all new toggles default to False and folder names are reasonable."""
 
@@ -852,6 +1008,7 @@ class TestDefaultValueToggles:
     async def test_all_toggles_disabled_by_default(self):
         """Test that all folder read-access toggles default to False."""
         t = Tools()
+        assert t.valves.allow_list_inbox is False
         assert t.valves.allow_list_archive is False
         assert t.valves.allow_list_trash is False
         assert t.valves.allow_list_sent is False
@@ -996,10 +1153,11 @@ class TestNonSSLConnection:
     """Test non-SSL connection path."""
 
     @pytest.mark.asyncio
-    async def test_list_emails_non_ssl(self, tools):
+    async def test_list_inbox_emails_non_ssl(self, tools):
         """Test that use_ssl=False connects via imaplib.IMAP4."""
         tools.valves.use_ssl = False
         tools.valves.imap_port = 143
+        tools.valves.allow_list_inbox = True
         raw = _make_raw_email("sender@test.com", "recv@test.com", "Hello", "Body")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
@@ -1007,14 +1165,15 @@ class TestNonSSLConnection:
             patch("imaplib.IMAP4", return_value=mock_server) as mock_imap4,
             patch("imaplib.IMAP4_SSL"),
         ):
-            result = await tools.list_emails(count=10)
+            result = await tools.list_inbox_emails(count=10)
         mock_imap4.assert_called_once()
         assert "Hello" in result
 
     @pytest.mark.asyncio
-    async def test_list_emails_ssl_true_uses_ssl(self, tools):
+    async def test_list_inbox_emails_ssl_true_uses_ssl(self, tools):
         """Test that use_ssl=True (default) connects via imaplib.IMAP4_SSL."""
         tools.valves.use_ssl = True
+        tools.valves.allow_list_inbox = True
         raw = _make_raw_email("sender@test.com", "recv@test.com", "Hello", "Body")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
@@ -1022,7 +1181,7 @@ class TestNonSSLConnection:
             patch("imaplib.IMAP4_SSL", return_value=mock_server) as mock_imap4_ssl,
             patch("imaplib.IMAP4"),
         ):
-            result = await tools.list_emails(count=10)
+            result = await tools.list_inbox_emails(count=10)
         mock_imap4_ssl.assert_called_once()
         assert "Hello" in result
 
@@ -1103,8 +1262,8 @@ class TestAttachmentDisplay:
     """Test attachment info display in listing and reading."""
 
     @pytest.mark.asyncio
-    async def test_list_emails_with_attachments(self, tools):
-        """Test that list_emails shows attachment count."""
+    async def test_list_inbox_emails_with_attachments(self, tools):
+        """Test that list_inbox_emails shows attachment count."""
         from email.mime.base import MIMEBase
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
@@ -1123,9 +1282,10 @@ class TestAttachmentDisplay:
             msg.attach(att)
 
         emails = [(msg.as_bytes(), "1")]
+        tools.valves.allow_list_inbox = True
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.list_emails(count=10)
+            result = await tools.list_inbox_emails(count=10)
 
         assert "AttachMsg" in result
         assert "3 attachment(s)" in result
@@ -1168,7 +1328,17 @@ class TestIMAPErrorsInOtherMethods:
         mock_server = MagicMock()
         mock_server.login.side_effect = _IMAP_EXCEPTION("Connection refused")
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.list_emails(count=5)
+            result = await tools.list_emails(folder="INBOX", count=5)
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_imap_error(self, tools):
+        """Test IMAP error handling in list_inbox_emails."""
+        tools.valves.allow_list_inbox = True
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Connection refused")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_inbox_emails(count=5)
         assert "IMAP Error" in result
 
     @pytest.mark.asyncio
@@ -1178,6 +1348,16 @@ class TestIMAPErrorsInOtherMethods:
         mock_server.login.side_effect = _IMAP_EXCEPTION("Authentication failed")
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.read_email(email_index=1)
+        assert "IMAP Error" in result
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_imap_error(self, tools):
+        """Test IMAP error handling in read_inbox_email."""
+        tools.valves.allow_list_inbox = True
+        mock_server = MagicMock()
+        mock_server.login.side_effect = _IMAP_EXCEPTION("Authentication failed")
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_inbox_email(email_index=1)
         assert "IMAP Error" in result
 
     @pytest.mark.asyncio
@@ -1230,7 +1410,18 @@ class TestGenericExceptionErrors:
             mock_server = MagicMock()
             mock_server.login.side_effect = NotImplementedError("Generic error")
             with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-                result = await tools.list_emails(count=5)
+                result = await tools.list_emails(folder="INBOX", count=5)
+            assert "Error connecting to IMAP server" in result
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_generic_error(self, tools):
+        """Test generic exception handling in list_inbox_emails."""
+        tools.valves.allow_list_inbox = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.list_inbox_emails(count=5)
             assert "Error connecting to IMAP server" in result
 
     @pytest.mark.asyncio
@@ -1241,6 +1432,17 @@ class TestGenericExceptionErrors:
             mock_server.login.side_effect = NotImplementedError("Generic error")
             with patch("imaplib.IMAP4_SSL", return_value=mock_server):
                 result = await tools.read_email(email_index=1)
+            assert "Error reading email" in result
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_generic_error(self, tools):
+        """Test generic exception handling in read_inbox_email."""
+        tools.valves.allow_list_inbox = True
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await tools.read_inbox_email(email_index=1)
             assert "Error reading email" in result
 
     @pytest.mark.asyncio
@@ -1369,7 +1571,17 @@ class TestGenericExceptionErrors:
         tools = Tools()
         tools.valves.username = "testuser"
         tools.valves.password = "testpass"
-        result = await tools.list_emails(count=5)
+        result = await tools.list_emails(folder="INBOX", count=5)
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_emails_server_not_configured(self, tools):
+        """Test that list_inbox_emails returns error when imap_server is empty."""
+        t = Tools()
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        t.valves.allow_list_inbox = True
+        result = await t.list_inbox_emails(count=5)
         assert "Error" in result and "server" in result
 
     @pytest.mark.asyncio

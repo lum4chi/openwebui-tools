@@ -1633,6 +1633,70 @@ class TestGenericExceptionErrors:
         assert "Error" in result and "server" in result
 
 
+class TestArchiveEmailFunctional:
+    """Test the archive_email method (the action, not read/list)."""
+
+    @pytest.mark.asyncio
+    async def test_archive_email_enabled_success(self, tools):
+        """Test archiving an email when permission is enabled."""
+        tools.valves.allow_archive = True
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Invoice", "Please pay.")
+        mock_server = _make_mock_server([(raw, "3")])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.archive_email(email_index=1)
+        assert "archived" in result.lower()
+        assert mock_server.uid.call_args_list[-2][0][0] == "COPY"
+        assert mock_server.expunge.called
+
+    @pytest.mark.asyncio
+    async def test_archive_email_disabled_by_default(self, tools):
+        """Test archive_email is blocked when allow_archive is False."""
+        assert tools.valves.allow_archive is False
+        result = await tools.archive_email(email_index=1)
+        assert "disabled" in result.lower() and "allow_archive" in result
+
+    @pytest.mark.asyncio
+    async def test_archive_email_out_of_range(self, tools):
+        """Test archiving an email with an out-of-range index."""
+        tools.valves.allow_archive = True
+        raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
+        mock_server = _make_mock_server([(raw, "1")])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.archive_email(email_index=99)
+        assert "out of range" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_archive_email_empty_mailbox(self, tools):
+        """Test archiving from an empty mailbox."""
+        tools.valves.allow_archive = True
+        mock_server = _make_mock_server([])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.archive_email(email_index=1)
+        assert "empty" in result.lower() or "Nothing to archive" in result
+
+    @pytest.mark.asyncio
+    async def test_archive_email_custom_folder(self, tools):
+        """Test archiving with a custom archive folder."""
+        tools.valves.allow_archive = True
+        tools.valves.archive_folder = "Gmail/All Mail"
+        raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
+        mock_server = _make_mock_server([(raw, "1")])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.archive_email(email_index=1)
+        assert "Gmail/All Mail" in result
+        copy_call = [c for c in mock_server.uid.call_args_list if c[0][0] == "COPY"]
+        assert len(copy_call) == 1
+        assert copy_call[0][0][2] == "Gmail/All Mail"
+
+    @pytest.mark.asyncio
+    async def test_archive_email_no_credentials(self):
+        """Test archiving returns error when credentials are missing."""
+        t = Tools()
+        t.valves.allow_archive = True
+        result = await t.archive_email(email_index=1)
+        assert "Error" in result and "credentials" in result
+
+
 class TestSieveTools:
     """Tests for ManageSieve filter management features."""
 

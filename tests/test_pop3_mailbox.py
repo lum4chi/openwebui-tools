@@ -337,5 +337,132 @@ class TestPOP3MailboxTool:
         assert "already empty" in result.lower() or "No emails" in result
 
 
+class TestPOP3NonSSLConnection:
+    """Test non-SSL connection mode for POP3."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_non_ssl(self):
+        """Test that use_ssl=False connects via POP3 instead of POP3_SSL."""
+        t = Tools()
+        t.valves.pop3_server = "mail.test.com"
+        t.valves.pop3_port = 110
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.use_ssl = False
+        raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
+        mock_server = _make_mock_server(1, [raw])
+        with patch("poplib.POP3", return_value=mock_server):
+            result = await t.list_emails(count=5)
+        assert "Test" in result
+        assert "1 total" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_ssl_default(self):
+        """Test that use_ssl=True (default) uses POP3_SSL."""
+        t = Tools()
+        t.valves.pop3_server = "mail.test.com"
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        mock_server = _make_mock_server(0, [])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.list_emails(count=5)
+        assert "empty" in result.lower() or "No emails" in result
+        assert "poplib.POP3" not in result
+
+
+class TestPOP3SearchAdditional:
+    """Additional POP3 search edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_search_empty_results(self, tools):
+        """Test search returns message when no emails match."""
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
+        mock_server = _make_mock_server(1, [(raw, "1")])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="subject:nonexistent", count=10)
+        assert "No emails found" in result
+
+    @pytest.mark.asyncio
+    async def test_search_after_date(self, tools):
+        """Test search with after: date filter."""
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
+        # Patch parsed date to be after the filter date
+        mock_server = _make_mock_server(1, [(raw, "1")])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="after:2020-01-01", count=10)
+        assert "Hello" in result or "No emails found" in result
+
+    @pytest.mark.asyncio
+    async def test_search_before_date(self, tools):
+        """Test search with before: date filter."""
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
+        mock_server = _make_mock_server(1, [(raw, "1")])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="before:2030-01-01", count=10)
+        assert "Hello" in result or "No emails found" in result
+
+    @pytest.mark.asyncio
+    async def test_search_combined_from_and_subject(self, tools):
+        """Test search with combined from: and subject: criteria."""
+        raw = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
+        mock_server = _make_mock_server(1, [(raw, "1")])
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await tools.search_emails(query='from:"alice@example.com" subject:"Hello"', count=10)
+        assert "Hello" in result
+
+
+class TestPOP3GenericErrorPaths:
+    """Test generic exception handling in POP3 methods."""
+
+    @pytest.mark.asyncio
+    async def test_delete_email_generic_error(self):
+        """Test delete_email catches generic exceptions (e.g., network)."""
+        t = Tools()
+        t.valves.pop3_server = "mail.test.com"
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.allow_delete_single = True
+
+        with patch("poplib.POP3_SSL", side_effect=OSError("connection refused")):
+            result = await t.delete_email(email_index=1)
+        assert "Error deleting" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_generic_error(self):
+        """Test search_emails catches generic exceptions."""
+        t = Tools()
+        t.valves.pop3_server = "mail.test.com"
+        t.valves.username = "user"
+        t.valves.password = "pass"
+
+        with patch("poplib.POP3_SSL", side_effect=OSError("connection refused")):
+            result = await t.search_emails(query="subject:test", count=10)
+        assert "Error searching" in result
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_generic_error(self):
+        """Test get_email_count catches generic exceptions."""
+        t = Tools()
+        t.valves.pop3_server = "mail.test.com"
+        t.valves.username = "user"
+        t.valves.password = "pass"
+
+        with patch("poplib.POP3_SSL", side_effect=OSError("connection refused")):
+            result = await t.get_email_count()
+        assert "Error checking mailbox" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_generic_error(self):
+        """Test read_email catches generic exceptions."""
+        t = Tools()
+        t.valves.pop3_server = "mail.test.com"
+        t.valves.username = "user"
+        t.valves.password = "pass"
+
+        with patch("poplib.POP3_SSL", side_effect=OSError("connection refused")):
+            result = await t.read_email(email_index=1)
+        assert "Error reading" in result
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

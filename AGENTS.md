@@ -51,14 +51,14 @@ Every tool must have:
 
 ```bash
 uv sync                          # install deps
-uv run pytest -v                 # run tests
+uv run pytest -v --cov           # run tests with coverage
 uv run ruff check .              # lint
 uv run ruff check --fix .        # auto-fix lint
 uv run ruff format .             # format
 uv run pyright                   # type check
 ```
 
-CI order: `ruff check -> ruff format -> pyright -> pytest`.
+CI order: `ruff check -> ruff format -> pyright -> pytest -v --cov`.
 
 ## Lint rules (ruff)
 
@@ -117,5 +117,5 @@ Update `version:` in the tool's top-level docstring when bumping.
 
 1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above
 2. Create `tests/test_<tool_name>.py` with mocked tests
-3. Run `uv run ruff check . && uv run pyright && uv run pytest -v` — all must pass
+3. Run `uv run ruff check . && uv run pyright && uv run pytest -v --cov` — all must pass
 4. Update README.md and AGENTS.md accordingly

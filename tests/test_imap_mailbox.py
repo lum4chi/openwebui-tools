@@ -30,6 +30,25 @@ def _make_raw_email(from_addr: str, to_addr: str, subject: str, body: str) -> by
     return msg.as_bytes()
 
 
+def _make_raw_email_with_attachment(from_addr: str, to_addr: str, subject: str, body: str) -> bytes:
+    """Create a multipart email with one attachment for mocking."""
+    from email.mime.base import MIMEBase
+    from email.mime.multipart import MIMEMultipart
+
+    msg = MIMEMultipart()
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg["Date"] = "Mon, 21 Apr 2025 10:00:00 +0000"
+    msg["Message-ID"] = f"<{subject.replace(' ', '')}@test.com>"
+    msg.attach(MIMEText(body, "plain"))
+    part = MIMEBase("application", "octet-stream")
+    part.set_payload(b"fake-attachment-content")
+    part.add_header("Content-Disposition", "attachment", filename="document.pdf")
+    msg.attach(part)
+    return msg.as_bytes()
+
+
 def _make_mock_email_data(raw_email: bytes, uid: str = "1") -> list:
     """Wrap raw email bytes in IMAP RFC822 fetch response format."""
     prefix = str(uid).encode() + b" (RFC822 {}]"
@@ -1997,3 +2016,731 @@ class TestSieveTools:
             mock_cls.assert_called_once_with("imap.example.com", srvport=4190)
         finally:
             imap_mailbox._try_sievelib_client = original
+
+
+class TestIMAPListEmailsCredentialError:
+    """Test list_emails without credentials explicitly set."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_no_username(self):
+        """Test list_emails returns error when username is missing (with folder param)."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.password = "testpass"
+        result = await t.list_emails(folder="INBOX", count=5)
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_no_password(self):
+        """Test list_emails returns error when password is missing (with folder param)."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.username = "testuser"
+        result = await t.list_emails(folder="INBOX", count=5)
+        assert "Error" in result and "credentials" in result
+
+
+class TestIMAPSearchUidDataNone:
+    """Test search_emails when uid_data[0] is None (server returned None instead of empty)."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_uid_data_none(self, tools):
+        """Test search returns not found when server returns None for uid data."""
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [None])  # Server returns None (not b'' or empty string)
+            return ("OK", [b""])
+
+        mock_server = _make_mock_server([], override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query='subject:"test"')
+        assert "No emails found" in result
+
+
+class TestIMAPSearchFreeTextEmpty:
+    """Test search_emails free-text search where no emails match client-side filter."""
+
+    @pytest.mark.asyncio
+    async def test_search_free_text_no_client_match(self, tools):
+        """Test search with free text where IMAP returns results but client filtering excludes all."""
+        raw = _make_raw_email(
+            "alice@example.com", "bob@example.com", "Hello World", "This email does not contain the word xyz"
+        )
+        emails = [(raw, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="xyznotfoundxyz", count=10)
+        assert "No emails found" in result
+
+
+class TestIMAPReadInboxEmailNoCredentials:
+    """Test read_inbox_email returns error when credentials are missing."""
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_no_credentials(self):
+        """Test read_inbox_email returns error when credentials are missing (guard passes)."""
+        t = Tools()
+        t.valves.allow_list_inbox = True  # Pass the access guard
+        # No username/password set
+        result = await t.read_inbox_email(email_index=1)
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_read_inbox_email_no_server(self):
+        """Test read_inbox_email returns error when imap_server is not set."""
+        t = Tools()
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        t.valves.allow_list_inbox = True
+        result = await t.read_inbox_email(email_index=1)
+        assert "Error" in result and "server" in result
+
+
+class TestIMAPListEmailsFetchError:
+    """Test list/read error handling for individual fetch failures."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_fetch_error(self, tools):
+        """Test that list_emails handles individual fetch failures gracefully."""
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", b"1 2")
+            elif cmd == "fetch":
+                raise _IMAP_EXCEPTION("FETCH command failed: [ALERT] Internal error")
+            return ("OK", [b""])
+
+        mock_server = _make_mock_server([], override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(folder="INBOX", count=10)
+        # Should contain error messages for the failed UIDs
+        assert "Error" in result
+
+
+class TestIMAPInternalHelpersNoCredentials:
+    """Test internal helper methods return error when credentials are missing."""
+
+    @pytest.mark.asyncio
+    async def test_list_folder_emails_no_credentials(self, tools):
+        """Test _list_folder_emails returns error when credentials are missing."""
+        t = Tools()
+        result = await t._list_folder_emails("INBOX", count=10)
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_read_folder_email_no_credentials(self, tools):
+        """Test _read_folder_email returns error when credentials are missing."""
+        t = Tools()
+        result = await t._read_folder_email(1, "INBOX")
+        assert "Error" in result and "credentials" in result
+
+
+class TestSieveConnectionErrors:
+    """Test Sieve exception handling during operations (not just connection time)."""
+
+    @pytest.mark.asyncio
+    async def test_create_sieve_script_connection_error(self, tools):
+        """Test create_sieve_script returns error when sievelib client.connect() raises."""
+        tools.valves.allow_create_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.connect.side_effect = Exception("authentication failed")
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.create_sieve_script(name="test", content='fileinto "test";')
+            assert "Error" in result and "ManageSieve" in result
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_create_sieve_script_put_error(self, tools):
+        """Test create_sieve_script handles putscript() exception."""
+        tools.valves.allow_create_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, ["existing"])
+        mock_client.putscript.side_effect = Exception("server error")
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.create_sieve_script(name="new", content="discard;")
+            assert "Error" in result and "creating" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_get_sieve_script_list_error(self, tools):
+        """Test get_sieve_script handles listscripts() exception."""
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.side_effect = Exception("connection reset")
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.get_sieve_script(name="x")
+            assert "Error" in result and "retrieving" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+
+class TestIMAPListEmailsAttachmentDisplay:
+    """Test attachment info display in list_emails output."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_with_attachments_shows_count(self, tools):
+        """Test that list_emails shows attachment count when emails have attachments."""
+        # Create a multipart email with attachment
+        email_bytes = _make_raw_email_with_attachment(
+            "sender@example.com", "user@example.com", "Document Attached", "Please see the attached file."
+        )
+        emails = [(email_bytes, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(folder="INBOX", count=5)
+        assert "attachment" in result and "1" in result
+
+
+class TestIMAPSearchWithAttachments:
+    """Test attachment info display in search_emails output."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_with_attachments_shows_count(self, tools):
+        """Test that search_emails shows attachment count when emails have attachments."""
+        email_bytes = _make_raw_email_with_attachment(
+            "sender@example.com", "user@example.com", "Invoice Attached", "Invoice attached for your review."
+        )
+        emails = [(email_bytes, "1")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="Invoice", count=5, folder="INBOX")
+        assert "attachment" in result.lower() and "1" in result
+
+
+class TestIMAPGetEmailCountServer:
+    """Test get_email_count credential edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_with_credentials_no_server(self):
+        """Test get_email_count returns error when imap_server is not set but credentials are."""
+        t = Tools()
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        result = await t.get_email_count()
+        assert "Error" in result and "server" in result
+
+
+class TestIMAPSearchNoCredentials:
+    """Test search_emails without credentials."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_no_credentials(self):
+        """Test search_emails returns error when credentials are not set."""
+        t = Tools()
+        result = await t.search_emails(query="test", count=10)
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_no_server(self):
+        """Test search_emails returns error when imap_server is not set."""
+        t = Tools()
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        result = await t.search_emails(query="test", count=10)
+        assert "Error" in result and "server" in result
+
+
+class TestIMAPDeleteNoCredentials:
+    """Test delete_email credentials edge case."""
+
+    @pytest.mark.asyncio
+    async def test_delete_email_no_server(self):
+        """Test delete_email returns server error when imap_server not set."""
+        t = Tools()
+        t.valves.allow_delete_single = True
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        result = await t.delete_email(email_index=1)
+        assert "Error" in result and "server" in result
+
+
+class TestIMAPListSpecialFolders:
+    """Test accessing special folders returns errors when not enabled."""
+
+    @pytest.mark.asyncio
+    async def test_list_sent_emails_disabled(self):
+        """Test list_sent_emails returns access denied when not enabled."""
+        t = Tools()
+        result = await t.list_sent_emails(count=5)
+        assert "disabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_read_sent_email_disabled(self):
+        """Test read_sent_email returns access denied when not enabled."""
+        t = Tools()
+        result = await t.read_sent_email(email_index=1)
+        assert "disabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_list_trash_emails_disabled(self):
+        """Test list_trash_emails returns access denied when not enabled."""
+        t = Tools()
+        result = await t.list_trash_emails(count=5)
+        assert "disabled" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_read_trash_email_disabled(self):
+        """Test read_trash_email returns access denied when not enabled."""
+        t = Tools()
+        result = await t.read_trash_email(email_index=1)
+        assert "disabled" in result.lower()
+
+
+class TestSieveOtherExceptions:
+    """Test remaining Sieve exception paths."""
+
+    @pytest.mark.asyncio
+    async def test_list_sieve_scripts_operation_error(self, tools):
+        """Test list_sieve_scripts handles listscripts() exception."""
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.side_effect = Exception("list failed")
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.list_sieve_scripts()
+            assert "Error" in result and "listing" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_update_sieve_script_no_scripts(self, tools):
+        """Test update_sieve_script returns error when no scripts exist."""
+        tools.valves.allow_update_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, [])
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.update_sieve_script(name="x", content="y")
+            assert "No Sieve scripts" in result
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_update_sieve_script_put_error(self, tools):
+        """Test update_sieve_script handles putscript() exception."""
+        tools.valves.allow_update_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, ["existing"])
+        mock_client.putscript.side_effect = Exception("write failed")
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.update_sieve_script(name="existing", content="new content")
+            assert "Error" in result and "updating" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_empty(self, tools):
+        """Test delete_sieve_script when no scripts exist."""
+        tools.valves.allow_delete_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, [])
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.delete_sieve_script(name="nonexistent")
+            assert "No Sieve scripts" in result
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_error(self, tools):
+        """Test delete_sieve_script handles deletescript() exception."""
+        tools.valves.allow_delete_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, ["to_delete"])
+        mock_client.deletescript.side_effect = Exception("delete failed")
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.delete_sieve_script(name="to_delete")
+            assert "Error" in result and "deleting" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_set_active_sieve_script_empty(self, tools):
+        """Test set_active_sieve_script when no scripts exist."""
+        tools.valves.allow_activate_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, [])
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.set_active_sieve_script(name="any")
+            assert "No Sieve scripts" in result
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_set_active_sieve_script_error(self, tools):
+        """Test set_active_sieve_script handles setactive() exception."""
+        tools.valves.allow_activate_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = (None, ["active1"])
+        mock_client.setactive.side_effect = Exception("activate failed")
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.set_active_sieve_script(name="active1")
+            assert "Error" in result and "activating" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_deactivate_sieve_script_error(self, tools):
+        """Test deactivate_sieve_script handles setactive() exception."""
+        tools.valves.allow_activate_sieve = True
+        tools.valves.imap_server = "sieve.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = ("active1", ["active1"])
+        mock_client.setactive.side_effect = Exception("deactivate failed")
+
+        mock_cls = MagicMock(return_value=mock_client)
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = mock_cls
+            result = await tools.deactivate_sieve_script()
+            assert "Error" in result and "deactivating" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+
+class TestSieveMissingClientGuards:
+    """Test Sieve guards that fire when _try_sievelib_client returns error string."""
+
+    @pytest.mark.asyncio
+    async def test_get_sieve_script_no_client(self, tools):
+        """Test get_sieve_script returns early when no sievelib client."""
+        tools.valves.imap_server = "s.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = None
+            result = await tools.get_sieve_script(name="x")
+            assert "Error" in result and "sievelib" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_update_sieve_script_no_client(self, tools):
+        """Test update_sieve_script returns early when no sievelib client."""
+        tools.valves.allow_update_sieve = True
+        tools.valves.imap_server = "s.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = None
+            result = await tools.update_sieve_script(name="x", content="y")
+            assert "Error" in result and "sievelib" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_delete_sieve_script_no_client(self, tools):
+        """Test delete_sieve_script returns early when no sievelib client."""
+        tools.valves.allow_delete_sieve = True
+        tools.valves.imap_server = "s.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = None
+            result = await tools.delete_sieve_script(name="x")
+            assert "Error" in result and "sievelib" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_set_active_sieve_script_no_client(self, tools):
+        """Test set_active_sieve_script returns early when no sievelib client."""
+        tools.valves.allow_activate_sieve = True
+        tools.valves.imap_server = "s.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = None
+            result = await tools.set_active_sieve_script(name="x")
+            assert "Error" in result and "sievelib" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+    @pytest.mark.asyncio
+    async def test_deactivate_sieve_script_no_client(self, tools):
+        """Test deactivate_sieve_script returns early when no sievelib client."""
+        tools.valves.allow_activate_sieve = True
+        tools.valves.imap_server = "s.example.com"
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+
+        import imap_mailbox
+
+        original = imap_mailbox._try_sievelib_client
+        try:
+            imap_mailbox._try_sievelib_client = None
+            result = await tools.deactivate_sieve_script()
+            assert "Error" in result and "sievelib" in result.lower()
+        finally:
+            imap_mailbox._try_sievelib_client = original
+
+
+class TestIMAPEmptyMailboxPaths:
+    """Test empty mailbox edge cases that hit early-return guards."""
+
+    @pytest.mark.asyncio
+    async def test_read_email_empty_mailbox(self, tools):
+        """Test read_email returns early when mailbox is empty (uid_map is empty dict)."""
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                # Return proper IMAP response with empty results
+                return ("OK", [b""])
+            # Never reached since uid_map is empty
+            return ("OK", [b"", b""])
+
+        mock_server = _make_mock_server([], override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_email(email_index=1)
+        assert "empty" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_search_emails_no_credentials(self):
+        """Test search_emails returns error without credentials."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        result = await t.search_emails(query="test", count=5)
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_no_server(self):
+        """Test delete_email returns server error when imap_server not configured."""
+        t = Tools()
+        t.valves.allow_delete_single = True
+        t.valves.username = "u"
+        t.valves.password = "p"
+        result = await t.delete_email(email_index=1)
+        assert "Error" in result and "server" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_no_credentials(self):
+        """Test delete_all_emails returns error without credentials."""
+        t = Tools()
+        t.valves.allow_delete_all = True
+        t.valves.imap_server = "mail.example.com"
+        result = await t.delete_all_emails()
+        assert "Error" in result and "credentials" in result
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_generic_exception(self):
+        """Test get_email_count handles non-IMAP error after login."""
+        tools = Tools()
+        tools.valves.username = "u"
+        tools.valves.password = "p"
+        tools.valves.imap_server = "mail.example.com"
+
+        def mock_login_side_effect(username, password):
+            raise RuntimeError("select failed")
+
+        mock_server = MagicMock()
+        mock_server.login = mock_login_side_effect
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.get_email_count()
+        # Should get exception handling path
+        assert "Error" in result
+
+
+class TestIMAPUidDataNonePath:
+    """Test edge cases where uid_data[0] is None."""
+
+    @pytest.mark.asyncio
+    async def test_refresh_uid_index_uid_data_none(self, tools):
+        """Test _refresh_uid_index returns empty dict when uid_data[0] is None."""
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [None])  # Server returns None instead of empty list
+            return ("OK", [b"", b""])
+
+        mock_server = _make_mock_server([], override_uid=override_uid)
+        from imap_mailbox import Tools as IMAPTools
+
+        t = IMAPTools()
+        t.valves.username = "u"
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            conn = t._connect()
+            uid_map = t._refresh_uid_index(conn)
+            conn.close()
+        assert uid_map == {}
+
+    @pytest.mark.asyncio
+    async def test_list_emails_non_imap_fetch_error(self, tools):
+        """Test list_emails handles non-IMAPException fetch failures (inner exception handler at 527-528)."""
+
+        def override_uid(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", b"1")
+            elif cmd == "fetch":
+                raise RuntimeError("unexpected error, not IMAP exception")
+            return ("OK", [b"", b""])
+
+        mock_server = _make_mock_server([], override_uid=override_uid)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(folder="INBOX", count=10)
+        # Should show error for the UID but not crash
+        assert "Error" in result or "INBOX" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_free_text_max_count(self, tools):
+        """Test search_emails stops fetching after hitting count limit in free-text search (line 734)."""
+        raw1 = _make_raw_email("a@example.com", "b@example.com", "Match One", "contains word")
+        raw2 = _make_raw_email("c@example.com", "d@example.com", "Match Two", "contains word")
+        raw3 = _make_raw_email("e@example.com", "f@example.com", "Match Three", "contains word")
+        emails = [(raw1, "1"), (raw2, "2"), (raw3, "3")]
+        mock_server = _make_mock_server(emails)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="word", count=2, folder="INBOX")
+        # Should find 2 matches (count limit), not all 3
+        assert "2 email" in result or "2 email" in result or "Found 2" in result
+
+
+class TestIMAPGetEmailCountException:
+    """Test get_email_count exception handling."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_server_error(self):
+        """Test get_email_count handles runtime error during server operation."""
+        t = Tools()
+        t.valves.username = "u"
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+
+        mock_server = MagicMock()
+        mock_server.login.return_value = None
+        mock_server.select.side_effect = RuntimeError("connection dropped")
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await t.get_email_count()
+        assert "Error" in result

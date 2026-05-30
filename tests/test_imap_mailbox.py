@@ -2255,6 +2255,55 @@ class TestIMAPGetEmailCountServer:
         assert "Error" in result and "server" in result
 
 
+class TestGenericExceptionEmailCount:
+    """Test generic exception in get_email_count (lines 835-836)."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_generic_exception(self):
+        """Test get_email_count catches generic Exception (lines 835-836)."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+
+        with patch("imap_mailbox._IMAP_EXCEPTION", OSError):
+            mock_server = MagicMock()
+            mock_server.login.side_effect = NotImplementedError("Generic error")
+            with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+                result = await t.get_email_count()
+            assert "Error checking mailbox" in result
+
+
+class TestDeleteEmailEmptyMailbox:
+    """Test delete_email when mailbox is empty (lines 859-860)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_email_empty_mailbox(self):
+        """Test delete_email when mailbox is empty (lines 859-860)."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        t.valves.allow_delete_single = True
+
+        mock_server = MagicMock()
+        mock_server.login.return_value = ("OK", [b"Login successful"])
+        mock_server.select.return_value = ("OK", [b"0 Messages"])
+        mock_server.close.return_value = None
+        mock_server.expunge.return_value = ("OK", [b"EXPUNGE"])
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b""])
+            return ("OK", [b""])
+
+        mock_server.uid.side_effect = uid_side_effect
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await t.delete_email(email_index=1)
+        assert "empty" in result.lower() or "Nothing to delete" in result
+
+
 class TestIMAPSearchNoCredentials:
     """Test search_emails without credentials."""
 

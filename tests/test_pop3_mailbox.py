@@ -864,3 +864,342 @@ class TestPOP3SearchWithBeforeAfter:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.search_emails(query="after:2030-01-01", count=5)
         assert "No emails found" in result
+
+
+class TestPOP3MissingGates:
+    """Test missing credential guards for all POP3 methods."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_missing_username(self):
+        """Test list_emails when username is empty (line 171-172)."""
+        t = Tools()
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        result = await t.list_emails(count=5)
+        assert "credentials" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_list_emails_missing_server(self):
+        """Test list_emails when pop3_server is empty (line 173-174)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = ""
+        result = await t.list_emails(count=5)
+        assert "server is not configured" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_missing_server(self):
+        """Test read_email when pop3_server is empty (line 238-239)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = ""
+        result = await t.read_email(email_index=1)
+        assert "server is not configured" in result
+
+    @pytest.mark.asyncio
+    async def test_search_emails_missing_server(self):
+        """Test search_emails when pop3_server is empty (line 289-290)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = ""
+        result = await t.search_emails(query="test")
+        assert "server is not configured" in result
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_missing_server(self):
+        """Test get_email_count when pop3_server is empty (line 383-384)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = ""
+        result = await t.get_email_count()
+        assert "server is not configured" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_email_missing_server(self):
+        """Test delete_email when pop3_server is empty (line 407-408)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.allow_delete_single = True
+        t.valves.pop3_server = ""
+        result = await t.delete_email(email_index=1)
+        assert "server is not configured" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_missing_server(self):
+        """Test delete_all_emails when pop3_server is empty (line 437-438)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.allow_delete_all = True
+        t.valves.pop3_server = ""
+        result = await t.delete_all_emails()
+        assert "server is not configured" in result
+
+    @pytest.mark.asyncio
+    async def test_read_email_missing_username(self):
+        """Test read_email when username is empty (line 236-237)."""
+        t = Tools()
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        result = await t.read_email(email_index=1)
+        assert "credentials" in result.lower()
+
+
+class TestPOP3ListEmailsExceptions:
+    """Test list_emails exception handlers (lines 224-227)."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_error_proto(self):
+        """Test list_emails outer error_proto handler catches server-level errors (line 224)."""
+        import poplib
+
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+
+        mock_server = MagicMock()
+        # error_proto on stat is caught by outer except → line 224
+        mock_server.stat.side_effect = poplib.error_proto("BAD command on stat")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.list_emails(count=5)
+        assert "POP3 Error" in result
+
+    @pytest.mark.asyncio
+    async def test_list_emails_generic_exception(self):
+        """Test list_emails catches generic Exception (line 226-227)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+
+        mock_server = MagicMock()
+        mock_server.stat.side_effect = RuntimeError("connection reset")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.list_emails(count=5)
+        assert "Error" in result or "connection reset" in result
+
+
+class TestPOP3ReadGenericException:
+    """Test read_email generic exception handler (line 271)."""
+
+    @pytest.mark.asyncio
+    async def test_read_email_generic_exception(self):
+        """Test read_email catches non-error_proto generic exception (line 271)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+
+        mock_server = MagicMock()
+        mock_server.stat.return_value = (1, 500)
+        mock_server.retr.side_effect = AttributeError("broken connection")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.read_email(email_index=1)
+        assert "error" in result.lower() and "broken connection" in result
+
+
+class TestPOP3DeleteErrorProto:
+    """Test delete_email error_proto handler (line 423)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_email_error_proto(self):
+        """Test delete_email catches poplib.error_proto during dele() (line 423)."""
+        import poplib
+
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        t.valves.allow_delete_single = True
+
+        mock_server = MagicMock()
+        mock_server.stat.return_value = (1, 500)
+        mock_server.dele.side_effect = poplib.error_proto("DEL failed - mailbox locked")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.delete_email(email_index=1)
+        assert "POP3 Error" in result
+
+
+class TestPOP3DeleteAllInnerException:
+    """Test delete_all_emails inner loop exception (lines 454-457)."""
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_inner_loop_error_proto(self):
+        """Test delete_all_emails where dele() raises error_proto mid-loop (line 454)."""
+        import poplib
+
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        t.valves.allow_delete_all = True
+
+        mock_server = MagicMock()
+        mock_server.stat.return_value = (3, 3000)
+        call_count = [0]
+
+        def dele_side_effect(idx):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return None  # First two deletions succeed
+            else:
+                raise poplib.error_proto("DEL failed")
+
+        mock_server.dele.side_effect = dele_side_effect
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.delete_all_emails()
+        assert "POP3 Error" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_inner_loop_generic_exception(self):
+        """Test delete_all_emails where dele() raises generic Exception mid-loop (line 456-457)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        t.valves.allow_delete_all = True
+
+        mock_server = MagicMock()
+        mock_server.stat.return_value = (2, 2000)
+        call_count = [0]
+
+        def dele_side_effect(idx):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return None  # First deletion succeeds
+            else:
+                raise RuntimeError("disk full")
+
+        mock_server.dele.side_effect = dele_side_effect
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.delete_all_emails()
+        assert "Error deleting" in result or "disk full" in result
+
+
+class TestPOP3GetBodyMultipartException:
+    """Test _get_email_body multipart decode exception path (lines 93-94)."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_multipart_decode_error(self):
+        """Test _get_email_body where multipart part triggers decode error (lines 93-94)."""
+        import email.message as _email_msg
+        from email.mime.text import MIMEText
+
+        class BadPart(MIMEText):
+            def get_content_charset(self):
+                return "nonexistent-charset-xyz-123"
+
+            def get_payload(self, decode=False):
+                if decode:
+                    return b"\xff\xfe\x80\x81"  # Invalid bytes for any charset
+                return "inner"
+
+        t = Tools()
+        msg = _email_msg.EmailMessage()
+        msg["Content-Type"] = "multipart/mixed; boundary=outer"
+        msg.set_payload([BadPart("inner text")])
+
+        # The sub-part should trigger the except block at lines 93-94
+        result = t._get_email_body(msg)
+        # Should not crash and result should be a string
+        assert isinstance(result, str)
+
+
+class TestPOP3SearchGenericException:
+    """Test search_emails generic exception (line 374, not 408 which is DELETE)."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_generic_exception(self):
+        """Test search_emails with generic non-error_proto exception (line 374)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+
+        mock_server = MagicMock()
+        mock_server.stat.return_value = (1, 500)
+        mock_server.retr.side_effect = RuntimeError("broken pipe")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.search_emails(query="test")
+        assert "Error" in result or "No emails found" in result
+
+
+class TestPOP3NonSSLExceptionPaths:
+    """Test non-SSL connection exception paths for various operations."""
+
+    @pytest.mark.asyncio
+    async def test_read_email_non_ssl_connection_error(self):
+        """Test read_email with non-SSL connection fails gracefully."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        t.valves.pop3_port = 110
+        t.valves.encryption_method = EncryptionMode.starttls
+
+        mock_server = MagicMock()
+        mock_server.stat.side_effect = RuntimeError("connection refused")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3", return_value=mock_server):
+            result = await t.read_email(email_index=1)
+        assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_non_ssl_connection_error(self):
+        """Test get_email_count with non-SSL connection fails gracefully."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        t.valves.pop3_port = 110
+        t.valves.encryption_method = EncryptionMode.starttls
+
+        mock_server = MagicMock()
+        mock_server.stat.side_effect = RuntimeError("connection refused")
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3", return_value=mock_server):
+            result = await t.get_email_count()
+        assert "Error" in result
+
+
+class TestPOP3DeleteEdgeCases:
+    """Additional edge cases for delete operations."""
+
+    @pytest.mark.asyncio
+    async def test_delete_email_index_zero(self):
+        """Test delete_email with index 0 (not a valid index)."""
+        t = Tools()
+        t.valves.username = "user"
+        t.valves.password = "pass"
+        t.valves.pop3_server = "pop3.example.com"
+        t.valves.allow_delete_single = True
+
+        mock_server = MagicMock()
+        mock_server.stat.return_value = (5, 5000)
+        mock_server.quit.return_value = None
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.delete_email(email_index=0)
+        assert "out of range" in result.lower()

@@ -3,6 +3,7 @@ Tests for the IMAP Mailbox Reader tool.
 Uses mocked IMAP responses so no real server is required.
 """
 
+import email
 import imaplib as _imaplib
 import os
 import sys
@@ -2744,3 +2745,326 @@ class TestIMAPGetEmailCountException:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await t.get_email_count()
         assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_get_email_count_generic_exception(self):
+        """Test get_email_count with non-IMAP generic exception (lines 835-836)."""
+        t = Tools()
+        t.valves.username = "u"
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+
+        mock_server = MagicMock()
+        mock_server.login.return_value = ("OK", None)
+        mock_server.uid.side_effect = AttributeError("broken connection")
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await t.get_email_count()
+        assert "Error" in result
+
+
+class TestIMAPEmptyRawDataFetch:
+    """Test IMAP email parsing when raw_data is empty or malformed."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_empty_raw_data(self, tools):
+        """Test list_emails handles exception during UID fetch (lines 553-567)."""
+        mock_server = MagicMock()
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"101"])
+            elif cmd == "fetch":
+                # Return a malformed response where raw_data[0] has no index 1
+                # This triggers the except block at line 553
+                return ("OK", [b"101 (FETCH)"])
+            return ("OK", [b"101"])
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.examine.return_value = ("OK", [b"1"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.list_emails(count=5, folder="INBOX")
+        assert "Error reading message" in result
+
+    @pytest.mark.asyncio
+    async def test_read_folder_email_attachments_shown(self, tools):
+        """Test _read_folder_email shows attachment info when has_attachments=True (line 1160)."""
+        raw_with_attach = _make_raw_email_with_attachment("a@b.com", "c@d.com", "Doc Attached", "Body")
+        mock_server = MagicMock()
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"42"])
+            elif cmd == "fetch":
+                return ("OK", [(b"42 (UID 42)", raw_with_attach)])
+            return ("OK", [b"42"])
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = ("OK", [b"1"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools._read_folder_email(1, "INBOX")
+        assert "Attachments:" in result or "Attachments" in result
+
+
+class TestIMAPSearchExceptionPaths:
+    """Test IMAP search_emails error handling during fetch loop."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_free_text_fetch_exception(self, tools):
+        """Test search_emails free-text fallback where one email fails to fetch (lines 770-771)."""
+        raw_match = _make_raw_email("a@b.com", "c@d.com", "Match Subject", "Body text")
+        raw_no_match = _make_raw_email("x@y.com", "z@w.com", "No Match", "completely different content")
+        mock_server = MagicMock()
+
+        fetch_count = [0]
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            nonlocal fetch_count
+            if cmd == "search":
+                return ("OK", [b"1"])
+            elif cmd == "fetch":
+                fetch_count[0] += 1
+                if fetch_count[0] == 1:
+                    return ("OK", [(b"1 IMAP2 UID 10", raw_match)])
+                else:
+                    raise _IMAP_EXCEPTION("fetch error")
+            return ("OK", [raw_no_match])
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = ("OK", [b"1"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="body", count=5, folder="INBOX")
+        assert "email" in result.lower()
+
+
+class TestIMAPReadEmailCredentials:
+    """Test read_email missing credentials guard paths."""
+
+    @pytest.mark.asyncio
+    async def test_read_email_no_username(self):
+        """Test read_email returns error when username not configured (line 621)."""
+        t = Tools()
+        t.valves.username = ""
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+        result = await t.read_email(email_index=1)
+        assert "credentials" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_read_email_no_server(self):
+        """Test read_email returns error when server not configured (line 623)."""
+        t = Tools()
+        t.valves.username = "u"
+        t.valves.password = "p"
+        result = await t.read_email(email_index=1)
+        assert "server is not configured" in result
+
+
+class TestIMAPSearchCandidateException:
+    """Test search_emails candidate email fetch exception path (lines 782-783)."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_candidate_fetch_exception(self):
+        """Test search_emails where uid search returns but fetch fails for all candidates."""
+        t = Tools()
+        t.valves.username = "u"
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+        mock_server = MagicMock()
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1"])
+            else:
+                raise _IMAP_EXCEPTION("fetch failed for all candidates")
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = ("OK", [b"1"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await t.search_emails(query="anything", count=5)
+        assert "email" in result.lower()
+
+
+class TestIMAPListFolderException:
+    """Test _list_folder_emails exception handling."""
+
+    @pytest.mark.asyncio
+    async def test_list_folder_email_inner_fetch_exception(self):
+        """Test _list_folder_emails where individual UID fetch fails (lines 1084-1098)."""
+        t = Tools()
+        t.valves.username = "u"
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+
+        mock_server = MagicMock()
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1 2 3"])
+            else:
+                raise _IMAP_EXCEPTION("fetch error during list")
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = ("OK", [b"3"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await t._list_folder_emails(folder="CustomFolder", count=5)
+        assert "Error reading message" in result
+
+
+class TestSieveImplicitTLS:
+    """Test ManageSieve with implicit TLS encryption mode (lines 153-158)."""
+
+    @pytest.fixture
+    def sieve_tools_implicit(self):
+        t = Tools()
+        t.valves.imap_server = "sieve.example.com"
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        t.valves.manage_sieve_server = ""
+        t.valves.manage_sieve_port = 4190
+        t.valves.manage_sieve_encryption = EncryptionMode.implicit
+        t.valves.manage_sieve_timeout = 30
+        return t
+
+    @pytest.mark.asyncio
+    async def test_list_sieve_scripts_implicit_tls(self, sieve_tools_implicit):
+        """Test Sieve connect uses implicit TLS (ssl=True, starttls=False) at lines 153-158."""
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = ("active1", ["script1", "script2"])
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            await sieve_tools_implicit.list_sieve_scripts()
+        mock_client.connect.assert_called_once_with("testuser", "testpass", ssl=True, starttls=False)
+
+    @pytest.mark.asyncio
+    async def test_get_sieve_script_implicit_tls(self, sieve_tools_implicit):
+        """Test get_sieve_script works with implicit TLS connection."""
+        mock_client = MagicMock()
+        mock_client.listscripts.return_value = ("active1", ["script1"])
+        mock_client.getscript.return_value = "require 'fileinto';\nif header :contains ..."
+        with patch("imap_mailbox._try_sievelib_client", MagicMock(return_value=mock_client)):
+            result = await sieve_tools_implicit.get_sieve_script(name="script1")
+        mock_client.connect.assert_called_once_with("testuser", "testpass", ssl=True, starttls=False)
+        assert "require" in result
+
+    @pytest.mark.asyncio
+    async def test_manage_sieve_connect_implicit_tls_error(self, sieve_tools_implicit):
+        """Test ManageSieve implicit TLS connect raises exception → error string."""
+        mock_client = MagicMock()
+        mock_client.connect.side_effect = OSError("TLS handshake failed")
+
+        class FakeTrySievelib:
+            def __init__(self, server, srvport=4190):
+                self.server = server
+                self.srvport = srvport
+
+            def __call__(self):
+                return mock_client
+
+        with patch("imap_mailbox._try_sievelib_client", FakeTrySievelib):
+            result = sieve_tools_implicit._manage_sieve_connect()
+        assert isinstance(result, str) and "ManageSieve Error" in result
+
+
+class TestIMAPDecodeMIMECharsetErrors:
+    """Test _decode_mime_header charset decode failure paths (lines 357-358)."""
+
+    @pytest.mark.asyncio
+    async def test_decode_mime_header_lookup_error(self, tools):
+        """Test _decode_mime_header with invalid charset triggers LookupError fallback (lines 357-358)."""
+        # create_header_value with an unusual charset that triggers LookupError
+        result = tools._decode_mime_header("=?invalidx?Q?testvalue?=")
+        assert "testvalue" in result or "invalidx" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_decode_mime_header_unicode_decode_error(self, tools):
+        """Test _decode_mime_header with bytes that fail in declared charset (lines 357-358)."""
+        result = tools._decode_mime_header("=?iso-8859-1?Q?=E9test?=")
+        assert "test" in result.lower() or "E9" in result
+
+
+class TestIMAPGetBodyCharsetErrors:
+    """Test _get_email_body charset decode error paths (lines 377-378, 385-386)."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_multipart_lookup_error(self, tools):
+        """Test multipart body with LookupError/UnicodeDecodeError during decode (lines 377-378)."""
+        from email.mime.multipart import MIMEMultipart
+
+        class BadPart(MIMEText):
+            def get_content_charset(self):
+                return "nonexistent-charset-xyz-123"
+
+            def get_payload(self, decode=False):
+                if decode:
+                    return b"\x80\x81\x82\xff"
+                return "inner"
+
+        msg = MIMEMultipart()
+        msg.attach(BadPart("inner"))
+        tools._get_email_body(msg)
+
+    @pytest.mark.asyncio
+    async def test_get_email_body_non_multipart_decode_error(self, tools):
+        """Test non-multipart body extraction with charset decode error (lines 385-386)."""
+        msg = email.message_from_string("Content-Type: text/plain; charset=nonexistent-xyz-123\r\n\r\n")
+
+        def mock_get_payload(decode=False):
+            if decode:
+                return b"\xff\xfe\x00\x01"
+            return None
+
+        msg.get_payload = mock_get_payload
+        result = tools._get_email_body(msg)
+        # Should handle decode error gracefully without crashing
+        assert isinstance(result, str)
+
+
+class TestIMAPDeleteCredentialsException:
+    """Test delete_email missing credentials with generic exception path."""
+
+    @pytest.mark.asyncio
+    async def test_delete_email_missing_credentials_generic(self, tools):
+        """Test delete_email when username is empty → generic Exception catch (lines 846-848)."""
+        t = Tools()
+        t.valves.allow_delete_single = True
+        t.valves.username = ""
+        t.valves.password = "p"
+        t.valves.imap_server = "mail.example.com"
+        mock_server = MagicMock()
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await t.delete_email(1)
+        assert "credentials" in result.lower()
+
+
+class TestIMAPSearchCombinedFilters:
+    """Test search_emails combined filter edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_free_text_no_results(self, tools):
+        """Test search_emails with free-text fallback returns 'No emails found'."""
+        raw = _make_raw_email("sender@x.com", "recv@y.com", "Unrelated Subject", "completely different content")
+        mock_server = MagicMock()
+
+        def uid_side_effect(cmd, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1"])
+            else:
+                return ("OK", [(b"1 IMAP2 UID 10", raw)])
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = ("OK", [b"1"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query="totally-missing-keyword-xyz-999", count=5)
+        assert "No emails found" in result

@@ -6,9 +6,9 @@ Each `.py` file in the root is a standalone Open WebUI Workspace Tool — not a 
 
 Tool spec: https://docs.openwebui.com/features/extensibility/plugin/tools/
 
-Existing tools:
-- `imap_mailbox.py` — IMAP mailbox manager (list, read, search, delete, archive, folder access control)
-- `pop3_mailbox.py` — POP3 mailbox manager (list, read, search, delete)
+Existing tools (both importable as separate tools):
+- `imap_mailbox.py` — IMAP mailbox + ManageSieve filter manager
+- `pop3_mailbox.py` — POP3 mailbox reader
 
 ## Tool format (non-negotiable)
 
@@ -29,19 +29,19 @@ Every tool must have:
    ```
 
 2. **`Tools` class** with async methods and type hints on all parameters:
-   ```python
-   class Tools:
-       def __init__(self):
-           self.valves = self.Valves()
-           self.citation = False  # disable auto-citations if using custom ones
+    ```python
+    class Tools:
+        def __init__(self):
+            self.valves = self.Valves()
+            self.citation = False
 
-       class Valves(BaseModel):
-           server: str = Field(default="", description="SMTP/IMAP/POP3 host")
-           port: int = Field(default=993, description="Server port")
+        class Valves(BaseModel):
+            server: str = Field(default="", description="Mail server host")
+            port: int = Field(default=993, description="Server port")
 
-       async def list_emails(self, count: int = Field(default=10)) -> str:
-           """Docstring describes the tool for the model."""
-   ```
+        async def list_emails(self, count: int = Field(default=10)) -> str:
+            """Docstring describes the tool for the model."""
+    ```
 
 3. **Type hints required** — no type hints = poor model tool selection. Use `int`, `str`, `str | None`, `list[str]`, etc.
 4. **Async methods** — use `async def`.
@@ -87,7 +87,7 @@ CI order: `ruff check -> ruff format -> pyright -> pytest -v --cov`.
 - Mock the correct connection class: `imaplib.IMAP4_SSL` / `imaplib.IMAP4` for IMAP, `poplib.POP3_SSL` / `poplib.POP3` for POP3
 - IMAP RFC822 fetch responses wrap payload as `[prefix_bytes, raw_bytes]`; POP3 `retr()` returns `[status, [line1, line2, ...], size]`
 - IMAP has per-folder access guards (`allow_list_archive`, `allow_list_trash`, etc.); POP3 does not (no folder concept)
-- IMAP supports optional `folder` param on list/read/search methods; POP3 does not
+- `list_emails` requires `folder`; `read_email` and `search_emails` accept optional `folder` param (use `list_inbox_emails`/`read_inbox_email` for no-folder variant)
 - `pyright` config uses `basic` type checking mode with missing types relaxed
 
 ## Commit convention

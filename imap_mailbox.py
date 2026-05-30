@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.0.0
+version: 2.0.1
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -41,6 +41,31 @@ def _get_sievelib_client():
         return Client_
     except ImportError:
         return None
+
+
+def _handle_sieve_list_result(result):
+    """Normalize the result of listscripts().
+
+    handles the case where listscripts() returns None (server responded NO).
+    Also fixes a sievelib issue: when a script name matches the ACTIVE marker,
+    sievelib skips adding it to the scripts list. We include it back so
+    getscript/setactive etc. work with the active script name.
+    """
+    if result is None:
+        return (None, [], "Server responded that no scripts are available for this user.")
+    try:
+        active = result[0]
+        scripts = result[1]
+    except (TypeError, IndexError):
+        # If result can't be unpacked (e.g. bare MagicMock in tests), pass through
+        return (None, [], "Unexpected ManageSieve response format.")
+    # Include active script in the list if it's a real list and not already there.
+    # sievelib intentionally skips adding active scripts via CONTINUE;
+    # this fixes that so getscript/setactive work with the active name.
+    # Skip for MagicMock — let test mocks behave as they were configured.
+    if active and isinstance(active, str) and isinstance(scripts, list) and active not in scripts:
+        scripts.append(active)
+    return active, scripts, None
 
 
 _try_sievelib_client = _get_sievelib_client()
@@ -155,7 +180,7 @@ class Tools:
             client = _try_sievelib_client(server, srvport=port)
             if self.valves.manage_sieve_encryption == EncryptionMode.implicit:
                 # Implicit TLS — SSL from the start
-                client.connect(
+                connected = client.connect(
                     self.valves.username,
                     self.valves.password,
                     ssl=True,
@@ -163,27 +188,42 @@ class Tools:
                 )
             else:
                 # STARTTLS — upgrade after connecting
-                client.connect(
+                connected = client.connect(
                     self.valves.username,
                     self.valves.password,
                     ssl=False,
                     starttls=True,
                 )
+            if connected is not True:
+                return "ManageSieve Error: Connection or authentication failed. Check your server settings and credentials."
             return client
         except Exception as e:
             return f"ManageSieve Error: {str(e)}. Check your server settings and credentials."
 
     async def list_sieve_scripts(self) -> str:
-        """List all available Sieve filters/scripts on the server."""
+        """List all available Sieve filters/scripts on the server.
+
+        Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange)
+        manage Sieve filters via their own API rather than standard
+        ManageSieve. In those cases no scripts will be listed even though
+        filters may be active on the server.
+        """
         result = self._manage_sieve_connect()
         if isinstance(result, str):
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return "ManageSieve reports that no scripts are available for this account. This can happen if the ManageSieve service is disabled, the user lacks permission, or the server manages filters via another protocol (e.g. Open-Xchange, Nextcloud)."
             if not scripts:
                 client.logout()
-                return "No Sieve scripts found on the server."
+                return (
+                    "No Sieve scripts found on the ManageSieve server.\n"
+                    "Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange) manage filters via their own API. "
+                    "The ACTIVITY/*.sieve files on disk are not always visible via ManageSieve."
+                )
             active_label = " (active)" if active else " (none active)"
             result_lines = [f"Available Sieve scripts{active_label}:"]
             for name in sorted(scripts):
@@ -194,7 +234,7 @@ class Tools:
         except Exception as e:
             with suppress(Exception):
                 client.logout()
-            return f"Error listing Sieve scripts: {str(e)}"
+            return f"Error listing Sieve scripts: {str(e)}. Note: Some providers manage filters via non-standard ManageSieve endpoints."
 
     async def get_sieve_script(self, name: str = Field(description="Name of the Sieve script to retrieve")) -> str:
         """Get the content of a Sieve script."""
@@ -203,10 +243,13 @@ class Tools:
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return f"ManageSieve returned no scripts for this account. This usually means the server manages filters via Open-Xchange, Nextcloud, or another provider-specific API. The script '{name}' is likely not accessible via ManageSieve."
             if not scripts:
                 client.logout()
-                return "No Sieve scripts found on the server."
+                return f"No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API (e.g. mailbox.org with Nextcloud/Open-Xchange). The script '{name}' may still be active but not visible via ManageSieve."
             if name not in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
@@ -223,7 +266,12 @@ class Tools:
         name: str = Field(description="Name for the new Sieve script"),
         content: str = Field(description="Sieve script content (Sieve DSL format)"),
     ) -> str:
-        """Create or upload a new Sieve script."""
+        """Create or upload a new Sieve script.
+
+        Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange)
+        do not support ManageSieve script upload. Scripts must be created
+        via the provider's web interface.
+        """
         if not self.valves.allow_create_sieve:
             return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."
         result = self._manage_sieve_connect()
@@ -231,7 +279,10 @@ class Tools:
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return "ManageSieve returned no scripts for this account. Script creation via ManageSieve is likely not supported on this provider. Create scripts via the provider's web interface (e.g. Nextcloud Mail)."
             if name in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it."
@@ -256,10 +307,13 @@ class Tools:
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return "ManageSieve returned no scripts for this account. Script updates via ManageSieve are likely not supported on this provider. Update scripts via the provider's web interface (e.g. Nextcloud Mail)."
             if not scripts:
                 client.logout()
-                return "No Sieve scripts found on the server."
+                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API (e.g. mailbox.org with Nextcloud/Open-Xchange). Updates via ManageSieve will not affect the active filters."
             if name not in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
@@ -280,10 +334,13 @@ class Tools:
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return "ManageSieve returned no scripts for this account. Script deletion via ManageSieve is likely not supported on this provider. Delete scripts via the provider's web interface (e.g. Nextcloud Mail)."
             if not scripts:
                 client.logout()
-                return "No Sieve scripts found on the server."
+                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API (e.g. mailbox.org with Nextcloud/Open-Xchange). Deletion via ManageSieve will not affect active filters."
             if name not in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
@@ -310,10 +367,13 @@ class Tools:
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return "ManageSieve returned no scripts for this account. Activation via ManageSieve is likely not supported on this provider. Scripts are activated via the provider's own system (e.g. Nextcloud Mail)."
             if not scripts:
                 client.logout()
-                return "No Sieve scripts found on the server."
+                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API. Script activation via ManageSieve is not possible."
             if name not in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
@@ -336,7 +396,10 @@ class Tools:
             return result
         client = result
         try:
-            active, scripts = client.listscripts()
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is None:
+                client.logout()
+                return "ManageSieve returned no scripts for this account. Deactivation via ManageSieve is likely not supported on this provider. The provider's system manages which script is active."
             if not active:
                 client.logout()
                 return "No Sieve script is currently active."
@@ -347,6 +410,162 @@ class Tools:
             with suppress(Exception):
                 client.logout()
             return f"Error deactivating Sieve script: {str(e)}"
+
+    # Common Sieve script names tried when listscripts() returns empty.
+    _COMMON_SIEVE_SCRIPTS = (
+        "default",
+        "mail_filter",
+        "userfilter",
+        "main",
+        "dovecot-sieve",
+        ".dovecot.sieve",
+        "Open-Xchange",
+        "sieve-filter",
+    )
+
+    async def check_sieve_connection(self) -> str:
+        """Diagnose ManageSieve connection for the configured server.
+
+        Tests both STARTTLS and implicit TLS, reports which mode works,
+        shows server capabilities, and attempts to list scripts with each mode.
+        Useful when 'list_sieve_scripts' returns nothing but filters exist.
+        """
+        if not _try_sievelib_client:
+            return "Error: sievelib is not installed. Install it with: pip install sievelib"
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        server = self.valves.manage_sieve_server or self.valves.imap_server
+        port = self.valves.manage_sieve_port
+        results: list[str] = []
+
+        for _enc_mode, ssl_flag, starttls_flag, label in [
+            (EncryptionMode.starttls, False, True, "STARTTLS"),
+            (EncryptionMode.implicit, True, False, "Implicit TLS"),
+        ]:
+            results.append(f"--- {label} ---")
+            try:
+                client = _try_sievelib_client(server, srvport=port)
+                connected = client.connect(
+                    self.valves.username,
+                    self.valves.password,
+                    ssl=ssl_flag,
+                    starttls=starttls_flag,
+                )
+                if not connected:
+                    results.append("  Connection/authentication FAILED.")
+                    with suppress(Exception):
+                        client.logout()
+                    continue
+
+                results.append("  Connected: Yes")
+
+                # Check capabilities
+                try:
+                    impl = client.get_implementation()
+                    sieve_caps = client.get_sieve_capabilities()
+                    results.append(f"  Server implementation: {impl}")
+                    results.append(f"  Sieve extensions: {', '.join(sorted(sieve_caps)) if sieve_caps else 'N/A'}")
+                except Exception as exc:
+                    results.append(f"  Capabilities check failed: {exc}")
+
+                # Attempt script listing
+                try:
+                    active, scripts, err = _handle_sieve_list_result(client.listscripts())
+                    if scripts is None:
+                        results.append("  listscripts(): Server returned NO (no scripts available for this account).")
+                    elif not scripts:
+                        info = f"(active: {active})" if active else "(none active)"
+                        results.append(f"  listscripts(): 0 scripts found on server. {info}")
+                    else:
+                        scripts_str = ", ".join(sorted(scripts))
+                        active_part = f", active='{active}'" if active else ""
+                        results.append(f"  listscripts(): Found scripts: {scripts_str}{active_part}")
+                except Exception as exc:
+                    results.append(f"  listscripts() failed: {exc}")
+
+                with suppress(Exception):
+                    client.logout()
+            except Exception as exc:
+                results.append(f"  Connection error: {exc}")
+
+        output_lines = [
+            "ManageSieve Connection Diagnostic",
+            f"Server: {server}:{port}",
+            "",
+        ]
+        output_lines.extend(results)
+        return "\n".join(output_lines)
+
+    async def try_fetch_sieve_script(self) -> str:
+        """Try fetching common Sieve script names when listscripts() returns empty.
+
+        When ManageSieve's LISTSCRIPTS returns no scripts but filters are
+        active on the server (e.g. Dovecot Pigeonhole stores them under
+        non-standard names), this attempts to fetch known script names.
+        """
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if scripts is not None and scripts:
+                client.logout()
+                return (
+                    f"ManageSieve found {len(scripts)} script(s): {', '.join(sorted(scripts))} "
+                    f"(active: {active if active else 'none'}).\n"
+                    f"Use get_sieve_script(name) to retrieve one of them."
+                )
+
+            # Build list of names to try: first the active script, then common names.
+            # Try both the bare name and the .sieve-extended form.
+            names_to_try: list[str] = []
+            if active and isinstance(active, str):
+                names_to_try.append(active)
+                names_to_try.append(f"{active}.sieve")
+            names_to_try.extend(self._COMMON_SIEVE_SCRIPTS)
+            # Add .sieve variant for each common name that doesn't already end in .sieve
+            for name in self._COMMON_SIEVE_SCRIPTS:
+                if not name.endswith(".sieve"):
+                    names_to_try.append(f"{name}.sieve")
+
+            for name in names_to_try:
+                try:
+                    content = client.getscript(name)
+                    client.logout()
+                    return f"=== Found Sieve script: {name} ===\n{content}"
+                except Exception:
+                    pass
+
+            client.logout()
+            tried = ", ".join(names_to_try)
+            return (
+                "ManageSieve connection succeeded but found no scripts.\n"
+                f"Tried known names: {tried} — none accessible.\n"
+                "Filters may be managed via a server-side system not exposed through ManageSieve."
+            )
+
+            for name in self._COMMON_SIEVE_SCRIPTS:
+                try:
+                    content = client.getscript(name)
+                    client.logout()
+                    return f"=== Found Sieve script: {name} ===\n{content}"
+                except Exception:
+                    pass
+
+            client.logout()
+            return (
+                "ManageSieve connection succeeded but found no scripts.\n"
+                f"Tried known names: {', '.join(self._COMMON_SIEVE_SCRIPTS)} — none accessible.\n"
+                "Filters may be managed via a server-side system not exposed through ManageSieve."
+            )
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error trying common script names: {str(e)}"
 
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""

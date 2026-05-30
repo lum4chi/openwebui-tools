@@ -1515,7 +1515,9 @@ class TestIsInDateRange:
 
     def test_is_in_date_range_invalid_date_parsing(self, tools):
         """Test _is_in_date_range returns False when date can't be parsed."""
-        result = tools._is_in_date_range("not-a-valid-date", datetime.datetime(2025, 1, 1), datetime.datetime(2026, 1, 1))
+        result = tools._is_in_date_range(
+            "not-a-valid-date", datetime.datetime(2025, 1, 1), datetime.datetime(2026, 1, 1)
+        )
         assert result is False
 
 

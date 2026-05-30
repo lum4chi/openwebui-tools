@@ -3,8 +3,11 @@ Tests for the POP3 Mailbox Reader tool.
 Uses mocked POP3 responses so no real server is required.
 """
 
+import datetime
 import os
 import sys
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from unittest.mock import MagicMock, patch
 
@@ -1470,3 +1473,79 @@ class TestPOP3DeleteEdgeCases:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.delete_email(email_index=0)
         assert "out of range" in result.lower()
+
+
+class TestIsInDateRange:
+    """Test _is_in_date_range helper method (lines 85, 87, 90)."""
+
+    @pytest.fixture
+    def tools(self):
+        t = Tools()
+        t.valves.pop3_server = "mail.example.com"
+        return t
+
+    def test_is_in_date_range_no_date(self, tools):
+        """Test _is_in_date_range returns True when parsed_date is falsy (line 85)."""
+        result = tools._is_in_date_range(None, datetime.datetime(2025, 1, 1), datetime.datetime(2025, 12, 31))
+        assert result is True
+
+    def test_is_in_date_range_no_filters(self, tools):
+        """Test _is_in_date_range returns True when no date filters are set (line 87)."""
+        result = tools._is_in_date_range("Sat, 15 Mar 2025 10:00:00 +0000", None, None)
+        assert result is True
+
+    def test_is_in_date_range_in_range(self, tools):
+        """Test _is_in_date_range returns True when date is in range (line 90)."""
+        after = datetime.datetime(2025, 1, 1)
+        before = datetime.datetime(2026, 1, 1)
+        result = tools._is_in_date_range("Sat, 15 Mar 2025 10:00:00 +0000", after, before)
+        assert result is True
+
+    def test_is_in_date_range_out_of_range_before(self, tools):
+        """Test _is_in_date_range returns False when date is before filter."""
+        after = datetime.datetime(2026, 1, 1)
+        result = tools._is_in_date_range("Sat, 15 Mar 2025 10:00:00 +0000", after, None)
+        assert result is False
+
+    def test_is_in_date_range_out_of_range_after(self, tools):
+        """Test _is_in_date_range returns False when date is after filter."""
+        before = datetime.datetime(2024, 1, 1)
+        result = tools._is_in_date_range("Sat, 15 Mar 2025 10:00:00 +0000", None, before)
+        assert result is False
+
+    def test_is_in_date_range_invalid_date_parsing(self, tools):
+        """Test _is_in_date_range returns False when date can't be parsed."""
+        result = tools._is_in_date_range("not-a-valid-date", datetime.datetime(2025, 1, 1), datetime.datetime(2026, 1, 1))
+        assert result is False
+
+
+class TestPOP3SearchWithAttachments:
+    """Test search_emails attachment display (line 371)."""
+
+    @pytest.mark.asyncio
+    async def test_search_emails_with_attachments_shows_count(self):
+        """Test that search_emails shows attachment count when emails have attachments (line 371)."""
+        t = Tools()
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        t.valves.pop3_server = "mail.example.com"
+
+        msg = MIMEMultipart()
+        msg["From"] = "sender@example.com"
+        msg["To"] = "user@example.com"
+        msg["Subject"] = "Document Attached"
+        msg["Date"] = "Mon, 21 Apr 2025 10:00:00 +0000"
+        msg.attach(MIMEText("body text", "plain"))
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(b"fake-attachment-content")
+        part.add_header("Content-Disposition", "attachment", filename="document.pdf")
+        msg.attach(part)
+        raw = msg.as_bytes()
+
+        mock_server = _make_mock_server(1, [raw])
+
+        with patch("poplib.POP3_SSL", return_value=mock_server):
+            result = await t.search_emails(query="Attached", count=5)
+
+        assert "Attachment" in result or "attachment" in result
+        assert "1" in result

@@ -31,14 +31,19 @@ class EncryptionMode(StrEnum):
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
 _IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
 
-# ManageSieve client — imported conditionally since it's an optional dependency
-_try_sievelib_client: type | None = None
-try:
-    from sievelib.managesieve import Client as _SievelibClient  # pyright: ignore[reportMissingImports]
 
-    _try_sievelib_client = _SievelibClient
-except ImportError:
-    _try_sievelib_client = None
+# ManageSieve client — imported conditionally since it's an optional dependency
+def _get_sievelib_client():
+    """Return the sievelib ManageSieve Client class if available, else None."""
+    try:
+        from sievelib.managesieve import Client as Client_  # pyright: ignore[reportMissingImports]
+
+        return Client_
+    except ImportError:
+        return None
+
+
+_try_sievelib_client = _get_sievelib_client()
 
 
 if TYPE_CHECKING:
@@ -500,6 +505,20 @@ class Tools:
 
         return None
 
+    def _fetch_email_by_uid(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, uid: str) -> dict | None:
+        """Fetch and parse a single email by UID. Returns None on failure."""
+        try:
+            _, raw_data = conn.uid("fetch", uid, "(RFC822)")
+        except Exception:
+            return None
+        if not raw_data or len(raw_data) == 0:
+            return None
+        raw_bytes = raw_data[0][1]
+        try:
+            return self._parse_email(raw_bytes)
+        except Exception:
+            return None
+
     async def list_inbox_emails(
         self, count: int = Field(default=10, description="Number of recent emails to list (default: 10)")
     ) -> str:
@@ -774,12 +793,10 @@ class Tools:
                 # Fetch all candidate emails (limited by count)
                 matches = []
                 for uid in candidate_uids[:count]:
-                    try:
-                        _, raw_data = conn.uid("fetch", uid, "(RFC822)")
-                        raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
-                        parsed = self._parse_email(raw_bytes)
+                    parsed = self._fetch_email_by_uid(conn, uid)
+                    if parsed is not None:
                         matches.append(parsed)
-                    except Exception:
+                    else:
                         continue
 
             conn.close()

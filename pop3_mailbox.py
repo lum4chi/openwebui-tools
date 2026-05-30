@@ -76,6 +76,24 @@ class Tools:
                 result.append(part)
         return " ".join(result)
 
+    def _is_in_date_range(
+        self, parsed_date: str | None, search_after: datetime | None, search_before: datetime | None
+    ) -> bool:
+        """Return True if parsed_date falls within the specified date range."""
+        if not parsed_date:
+            # Missing date passes through even when date filters are set
+            return True
+        if not search_after and not search_before:
+            return True
+        try:
+            dt = parsedate_to_datetime(parsed_date)
+            return not (
+                (search_after and dt.date() < search_after.date())
+                or (search_before and dt.date() >= search_before.date())
+            )
+        except (ValueError, TypeError):
+            return False
+
     def _get_email_body(self, msg: Union["Message", "EmailMessage"], max_chars: int = 10000) -> str:
         """Extract the plain text body from an email message."""
         body = ""
@@ -332,17 +350,10 @@ class Tools:
                         and search_subject not in parsed["body"].lower()
                     ):
                         continue
-                    if search_after or search_before:
-                        try:
-                            parsed_date = parsed["date"]
-                            if parsed_date:
-                                dt = parsedate_to_datetime(parsed_date)
-                                if search_after and dt.date() < search_after.date():
-                                    continue
-                                if search_before and dt.date() >= search_before.date():
-                                    continue
-                        except (ValueError, TypeError):
-                            continue
+                    if (search_after or search_before) and not self._is_in_date_range(
+                        parsed["date"], search_after, search_before
+                    ):
+                        continue
 
                     matches.append(parsed)
                 except Exception:

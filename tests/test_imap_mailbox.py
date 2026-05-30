@@ -161,7 +161,7 @@ class TestIMAPMailboxTool:
         t.valves.username = "testuser"
         t.valves.password = "testpass"
         with pytest.raises(TypeError):
-            await t.list_emails(count=5)
+            await t.list_emails(count=5)  # pyright: ignore
 
     @pytest.mark.asyncio
     async def test_list_emails_empty_mailbox(self, tools):
@@ -999,7 +999,7 @@ class TestListEmailsExplicitFolder:
         t.valves.username = "testuser"
         t.valves.password = "testpass"
         with pytest.raises(TypeError):
-            await t.list_emails(count=5)
+            await t.list_emails(count=5)  # pyright: ignore
 
     @pytest.mark.asyncio
     async def test_list_emails_with_custom_folder(self, tools):

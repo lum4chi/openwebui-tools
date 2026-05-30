@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from pop3_mailbox import Tools
+from pop3_mailbox import EncryptionMode, Tools
 
 
 def _make_raw_email(from_addr: str, to_addr: str, subject: str, body: str) -> bytes:
@@ -61,7 +61,7 @@ def tools():
     t.valves.pop3_port = 995
     t.valves.username = "testuser"
     t.valves.password = "testpass"
-    t.valves.use_ssl = True
+    t.valves.encryption_method = EncryptionMode.implicit
     t.valves.timeout = 5
     return t
 
@@ -342,13 +342,13 @@ class TestPOP3NonSSLConnection:
 
     @pytest.mark.asyncio
     async def test_list_emails_non_ssl(self):
-        """Test that use_ssl=False connects via POP3 instead of POP3_SSL."""
+        """Test that encryption_method='starttls' connects via POP3 with STARTTLS upgrade."""
         t = Tools()
         t.valves.pop3_server = "mail.test.com"
         t.valves.pop3_port = 110
         t.valves.username = "user"
         t.valves.password = "pass"
-        t.valves.use_ssl = False
+        t.valves.encryption_method = EncryptionMode.starttls
         raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
         mock_server = _make_mock_server(1, [raw])
         with patch("poplib.POP3", return_value=mock_server):
@@ -358,7 +358,7 @@ class TestPOP3NonSSLConnection:
 
     @pytest.mark.asyncio
     async def test_list_emails_ssl_default(self):
-        """Test that use_ssl=True (default) uses POP3_SSL."""
+        """Test that encryption_method='implicit' (default) uses POP3_SSL."""
         t = Tools()
         t.valves.pop3_server = "mail.test.com"
         t.valves.username = "user"
@@ -605,13 +605,13 @@ class TestPOP3ReadNonSSL:
 
     @pytest.mark.asyncio
     async def test_read_email_non_ssl(self):
-        """Test read_email uses poplib.POP3 when use_ssl=False."""
+        """Test read_email uses poplib.POP3 with STARTTLS when encryption_method='starttls'."""
         t = Tools()
         t.valves.pop3_server = "mail.test.com"
         t.valves.pop3_port = 110
         t.valves.username = "user"
         t.valves.password = "pass"
-        t.valves.use_ssl = False
+        t.valves.encryption_method = EncryptionMode.starttls
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
         ]
@@ -623,13 +623,13 @@ class TestPOP3ReadNonSSL:
 
     @pytest.mark.asyncio
     async def test_search_emails_non_ssl(self):
-        """Test search_emails uses poplib.POP3 when use_ssl=False."""
+        """Test search_emails uses poplib.POP3 with STARTTLS when encryption_method='starttls'."""
         t = Tools()
         t.valves.pop3_server = "mail.test.com"
         t.valves.pop3_port = 110
         t.valves.username = "user"
         t.valves.password = "pass"
-        t.valves.use_ssl = False
+        t.valves.encryption_method = EncryptionMode.starttls
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
         ]
@@ -641,13 +641,13 @@ class TestPOP3ReadNonSSL:
 
     @pytest.mark.asyncio
     async def test_delete_email_non_ssl(self):
-        """Test delete_email uses poplib.POP3 when use_ssl=False."""
+        """Test delete_email uses poplib.POP3 with STARTTLS when encryption_method='starttls'."""
         t = Tools()
         t.valves.pop3_server = "mail.test.com"
         t.valves.pop3_port = 110
         t.valves.username = "user"
         t.valves.password = "pass"
-        t.valves.use_ssl = False
+        t.valves.encryption_method = EncryptionMode.starttls
         t.valves.allow_delete_single = True
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
@@ -660,13 +660,13 @@ class TestPOP3ReadNonSSL:
 
     @pytest.mark.asyncio
     async def test_get_email_count_non_ssl(self):
-        """Test get_email_count uses poplib.POP3 when use_ssl=False."""
+        """Test get_email_count uses poplib.POP3 with STARTTLS when encryption_method='starttls'."""
         t = Tools()
         t.valves.pop3_server = "mail.test.com"
         t.valves.pop3_port = 110
         t.valves.username = "user"
         t.valves.password = "pass"
-        t.valves.use_ssl = False
+        t.valves.encryption_method = EncryptionMode.starttls
         mock_server = _make_mock_server(5, [])
         with patch("poplib.POP3", return_value=mock_server) as mock_pop3:
             result = await t.get_email_count()

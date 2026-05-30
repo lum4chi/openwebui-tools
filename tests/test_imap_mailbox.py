@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from imap_mailbox import Tools
+from imap_mailbox import EncryptionMode, Tools
 
 _IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
 
@@ -134,7 +134,7 @@ def tools():
     t.valves.imap_port = 993
     t.valves.username = "testuser"
     t.valves.password = "testpass"
-    t.valves.use_ssl = True
+    t.valves.encryption_method = EncryptionMode.implicit
     t.valves.timeout = 5
     t.valves.inbox_folder = "INBOX"
     return t
@@ -1173,8 +1173,8 @@ class TestNonSSLConnection:
 
     @pytest.mark.asyncio
     async def test_list_inbox_emails_non_ssl(self, tools):
-        """Test that use_ssl=False connects via imaplib.IMAP4."""
-        tools.valves.use_ssl = False
+        """Test that encryption_method='starttls' connects via imaplib.IMAP4 with STARTTLS."""
+        tools.valves.encryption_method = EncryptionMode.starttls
         tools.valves.imap_port = 143
         tools.valves.allow_list_inbox = True
         raw = _make_raw_email("sender@test.com", "recv@test.com", "Hello", "Body")
@@ -1190,8 +1190,8 @@ class TestNonSSLConnection:
 
     @pytest.mark.asyncio
     async def test_list_inbox_emails_ssl_true_uses_ssl(self, tools):
-        """Test that use_ssl=True (default) connects via imaplib.IMAP4_SSL."""
-        tools.valves.use_ssl = True
+        """Test that encryption_method='implicit' (default) connects via imaplib.IMAP4_SSL."""
+        tools.valves.encryption_method = EncryptionMode.implicit
         tools.valves.allow_list_inbox = True
         raw = _make_raw_email("sender@test.com", "recv@test.com", "Hello", "Body")
         emails = [(raw, "1")]
@@ -1727,7 +1727,7 @@ class TestSieveTools:
         t.valves.password = "testpass"
         t.valves.manage_sieve_server = ""
         t.valves.manage_sieve_port = 4190
-        t.valves.manage_sieve_use_ssl = True
+        t.valves.manage_sieve_encryption = EncryptionMode.starttls
         t.valves.manage_sieve_timeout = 30
         return t
 
@@ -1994,7 +1994,7 @@ class TestSieveTools:
         """Test that ManageSieve default port is 4190."""
         t = Tools()
         assert t.valves.manage_sieve_port == 4190
-        assert t.valves.manage_sieve_use_ssl is True
+        assert t.valves.manage_sieve_encryption == EncryptionMode.starttls
 
     @pytest.mark.asyncio
     async def test_sieve_fallback_uses_imap_server(self, sieve_tools):

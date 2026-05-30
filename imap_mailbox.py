@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 1.5.0
+version: 2.0.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -15,9 +15,18 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Union
 
 from pydantic import BaseModel, Field
+
+
+class EncryptionMode(StrEnum):
+    """Encryption method for mail connections. Always encrypted — plaintext never allowed."""
+
+    implicit = "implicit"  # TLS from the start (port 993/995)
+    starttls = "starttls"  # Upgrade to TLS after connect (port 143/110/20000/4190)
+
 
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
 _IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
@@ -47,10 +56,13 @@ class Tools:
     class Valves(BaseModel):
         # connection
         imap_server: str = Field(default="", description="IMAP server hostname (e.g., mail.example.com)")
-        imap_port: int = Field(default=993, description="IMAP server port (993 for SSL, 143 for non-SSL)")
+        imap_port: int = Field(default=993, description="IMAP server port (993 for implicit TLS, 143 for STARTTLS)")
         username: str = Field(default="", description="IMAP mailbox username")
         password: str = Field(default="", description="IMAP mailbox password or app-specific password")
-        use_ssl: bool = Field(default=True, description="Use SSL/TLS connection (set False for port 143)")
+        encryption_method: EncryptionMode = Field(
+            default=EncryptionMode.implicit,
+            description="Encryption method: 'implicit' for TLS from start (port 993), 'starttls' for upgrade (port 143)",
+        )
         timeout: int = Field(default=30, description="Connection timeout in seconds")
 
         # folders
@@ -96,10 +108,12 @@ class Tools:
             default="", description="ManageSieve server hostname (default: same as imap_server)"
         )
         manage_sieve_port: int = Field(
-            default=4190, description="ManageSieve server port (4190 for SSL, 20000 for non-SSL)"
+            default=4190,
+            description="ManageSieve server port. Always encrypted — use 'implicit' or 'starttls' for encryption mode.",
         )
-        manage_sieve_use_ssl: bool = Field(
-            default=True, description="Use SSL/TLS for ManageSieve connection (set False for port 20000)"
+        manage_sieve_encryption: EncryptionMode = Field(
+            default=EncryptionMode.starttls,
+            description="Encryption method for ManageSieve. 'starttls' for STARTTLS upgrade (mailbox.org), 'implicit' for TLS from start (e.g. some Dovecot setups)",
         )
         manage_sieve_timeout: int = Field(default=30, description="ManageSieve connection timeout in seconds")
 
@@ -131,15 +145,25 @@ class Tools:
 
         server = self.valves.manage_sieve_server or self.valves.imap_server
         port = self.valves.manage_sieve_port
-        use_ssl = self.valves.manage_sieve_use_ssl
 
         try:
             client = _try_sievelib_client(server, srvport=port)
-            client.connect(
-                self.valves.username,
-                self.valves.password,
-                starttls=use_ssl,
-            )
+            if self.valves.manage_sieve_encryption == EncryptionMode.implicit:
+                # Implicit TLS — SSL from the start
+                client.connect(
+                    self.valves.username,
+                    self.valves.password,
+                    ssl=True,
+                    starttls=False,
+                )
+            else:
+                # STARTTLS — upgrade after connecting
+                client.connect(
+                    self.valves.username,
+                    self.valves.password,
+                    ssl=False,
+                    starttls=True,
+                )
             return client
         except Exception as e:
             return f"ManageSieve Error: {str(e)}. Check your server settings and credentials."
@@ -408,12 +432,14 @@ class Tools:
         }
 
     def _connect(self) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
-        """Establish connection to IMAP server and select folder."""
+        """Establish connection to IMAP server."""
         v = self.valves
-        if v.use_ssl:
+        if v.encryption_method == EncryptionMode.implicit:
             conn = imaplib.IMAP4_SSL(v.imap_server, v.imap_port, timeout=v.timeout)
         else:
+            # starttls mode — always upgrade to TLS before login
             conn = imaplib.IMAP4(v.imap_server, v.imap_port, timeout=v.timeout)
+            conn.starttls()
         conn.login(v.username, v.password)
         return conn
 

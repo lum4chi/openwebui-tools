@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic POP3 mailbox. Supports listing, reading, searching, and deleting emails.
 requirements:
-version: 1.2.0
+version: 2.0.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -15,9 +15,18 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Union
 
 from pydantic import BaseModel, Field
+
+
+class EncryptionMode(StrEnum):
+    """Encryption method for mail connections. Always encrypted — plaintext never allowed."""
+
+    implicit = "implicit"  # TLS from the start (port 995)
+    starttls = "starttls"  # Upgrade to TLS after connect (port 110)
+
 
 if TYPE_CHECKING:
     from email.message import EmailMessage, Message
@@ -35,10 +44,13 @@ class Tools:
 
     class Valves(BaseModel):
         pop3_server: str = Field(default="localhost", description="POP3 server hostname (e.g., mail.example.com)")
-        pop3_port: int = Field(default=995, description="POP3 server port (995 for SSL, 110 for non-SSL)")
+        pop3_port: int = Field(default=995, description="POP3 server port (995 for implicit TLS, 110 for STARTTLS)")
         username: str = Field(default="", description="POP3 mailbox username")
         password: str = Field(default="", description="POP3 mailbox password or app-specific password")
-        use_ssl: bool = Field(default=True, description="Use SSL/TLS connection (set False for port 110)")
+        encryption_method: EncryptionMode = Field(
+            default=EncryptionMode.implicit,
+            description="Encryption method: 'implicit' for TLS from start (port 995), 'starttls' for upgrade (port 110)",
+        )
         timeout: int = Field(default=30, description="Connection timeout in seconds")
         allow_delete_single: bool = Field(
             default=False, description="Allow deleting individual emails (default: False for safety)"
@@ -138,10 +150,13 @@ class Tools:
     def _connect(self):
         """Establish connection to POP3 server."""
         v = self.valves
-        if v.use_ssl:
+        if v.encryption_method == EncryptionMode.implicit:
             server = poplib.POP3_SSL(v.pop3_server, v.pop3_port, timeout=v.timeout)
         else:
+            # starttls mode — always upgrade to TLS before authentication
             server = poplib.POP3(v.pop3_server, v.pop3_port, timeout=v.timeout)
+            server.discover()
+            server.starttls()
         server.user(v.username)
         server.pass_(v.password)
         return server

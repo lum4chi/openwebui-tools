@@ -30,7 +30,7 @@ IMAP_EXCEPTION_TESTS: list[ErrorSpec] = [
     ErrorSpec("search_emails", {"query": "test", "count": 10}),
     ErrorSpec("delete_email", {"email_index": 1}, valve_overrides={"allow_delete_single": True}),
     ErrorSpec("delete_all_emails", {}, valve_overrides={"allow_delete_all": True}),
-    ErrorSpec("archive_email", {"email_index": 1}, valve_overrides={"allow_archive": True}),
+    ErrorSpec("archive_email", {"email_index": 1}, valve_overrides={"allow_move": True}),
 ]
 
 
@@ -77,7 +77,7 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
         "archive_email",
         {"email_index": 1},
         expected_error="Error archiving email",
-        valve_overrides={"allow_archive": True},
+        valve_overrides={"allow_move": True},
         exception_class=NotImplementedError,
         mock_login_exception_msg="Generic error",
     ),
@@ -91,7 +91,7 @@ SERVER_NOT_CONFIGURED_TESTS: list[ErrorSpec] = [
     ErrorSpec("search_emails", {"query": "test", "count": 10}),
     ErrorSpec("delete_email", {"email_index": 1}, valve_overrides={"allow_delete_single": True}),
     ErrorSpec("delete_all_emails", {}, valve_overrides={"allow_delete_all": True}),
-    ErrorSpec("archive_email", {"email_index": 1}, valve_overrides={"allow_archive": True}),
+    ErrorSpec("archive_email", {"email_index": 1}, valve_overrides={"allow_move": True}),
 ]
 
 

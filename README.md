@@ -44,11 +44,8 @@ Manage a generic IMAP mailbox with folder access.
    | `sent_folder` | `Sent` | Sent folder path |
    | `drafts_folder` | `Drafts` | Drafts folder path |
 
-   Read-access toggles (default `False`):
-   - `allow_list_archive`, `allow_list_trash`, `allow_list_sent`, `allow_list_drafts`
-
-   Write-access toggles (default `False`):
-    - `allow_delete_single`, `allow_delete_all`, `allow_archive`, `allow_move`
+    Write-access toggles (default `False`):
+    - `allow_delete_single`, `allow_delete_all`, `allow_move`
 
 3. Enable the tool for your model:
    - Go to **Workspace** → **Models** → select your model → **Tools**
@@ -58,7 +55,7 @@ Manage a generic IMAP mailbox with folder access.
 
 ```
 # List the 5 most recent emails
-list_emails(count=5)
+list_emails(folder="INBOX", count=5)
 
 # Read email at index 1 (most recent by UID)
 read_email(email_index=1)
@@ -72,7 +69,7 @@ search_emails(query="after:2025-01-01 before:2025-04-01", count=10)
 # List emails from a custom folder
 list_emails(count=5, folder="Custom/Folder")
 
-# Archive an email (requires allow_archive valve)
+# Archive an email (requires allow_move valve)
 archive_email(email_index=1)
 
 # Delete an email (requires allow_delete_single valve)
@@ -80,10 +77,6 @@ delete_email(email_index=1)
 
 # Move an email to another folder (requires allow_move valve)
 move_email(email_index=1, target_folder="Projects", folder="INBOX")
-
-# Check total inbox count
-get_email_count()
-```
 
 ### POP3 Mailbox Reader
 
@@ -121,7 +114,7 @@ Read and search emails from any generic POP3 mailbox.
 
 ```
 # List the 5 most recent emails
-list_emails(count=5)
+list_emails(folder="INBOX", count=5)
 
 # Read email at index 1 (most recent)
 read_email(email_index=1)
@@ -134,10 +127,6 @@ search_emails(query="subject:invoice", count=10)
 
 # Search by date range
 search_emails(query="after:2025-01-01 before:2025-04-01", count=10)
-
-# Check mailbox size
-get_email_count()
-```
 
 ## Development
 

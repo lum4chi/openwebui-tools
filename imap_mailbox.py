@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.2.1
+version: 2.3.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -96,7 +96,6 @@ class Tools:
         allow_delete_all: bool = Field(
             default=False, description="Allow deleting all emails (default: False for safety)"
         )
-        allow_archive: bool = Field(default=False, description="Allow archiving emails (default: False for safety)")
         allow_move: bool = Field(
             default=False, description="Allow moving emails between folders (default: False for safety)"
         )
@@ -818,9 +817,7 @@ class Tools:
 
     async def delete_email(
         self,
-        email_index: int = Field(
-            description="Index of the email to delete (1-based, 1 = most recent by UID)"
-        ),
+        email_index: int = Field(description="Index of the email to delete (1-based, 1 = most recent by UID)"),
         folder: str | None = Field(
             default=None,
             description="Optional folder to delete from. Defaults to inbox_folder valve.",
@@ -898,9 +895,7 @@ class Tools:
 
             if not uid_map:
                 conn.close()
-                return (
-                    f"Mailbox '{target_folder}' is already empty. No emails to delete."
-                )
+                return f"Mailbox '{target_folder}' is already empty. No emails to delete."
 
             uid_list = list(uid_map.keys())
             for uid in uid_list:
@@ -917,9 +912,7 @@ class Tools:
 
     async def archive_email(
         self,
-        email_index: int = Field(
-            description="Index of the email to archive (1-based, 1 = most recent by UID)"
-        ),
+        email_index: int = Field(description="Index of the email to archive (1-based, 1 = most recent by UID)"),
         folder: str | None = Field(
             default=None,
             description="Optional source folder. Defaults to inbox_folder valve.",
@@ -932,8 +925,8 @@ class Tools:
         :param folder: Optional source folder override (defaults to inbox_folder valve).
         :param target_folder: Optional destination archive folder (defaults to archive_folder valve).
         """
-        if not self.valves.allow_archive:
-            return "Archive operations are disabled. Enable 'allow_archive' in Valves to use this feature."
+        if not self.valves.allow_move:
+            return "Archive operations are disabled. Enable 'allow_move' in Valves to use this feature."
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:

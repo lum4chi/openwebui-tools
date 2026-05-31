@@ -18,7 +18,7 @@ class TestIMAPMailboxTool:
         [
             ("delete_email", {"email_index": 1}, "allow_delete_single"),
             ("delete_all_emails", {}, "allow_delete_all"),
-            ("archive_email", {"email_index": 1}, "allow_archive"),
+            ("archive_email", {"email_index": 1}, "allow_move"),
         ],
     )
     async def test_folder_operations_require_credentials(self, method, args, valve):
@@ -237,7 +237,7 @@ class TestIMAPMailboxTool:
         [
             ("allow_delete_single", "delete_email", {"email_index": 1}),
             ("allow_delete_all", "delete_all_emails", {}),
-            ("allow_archive", "archive_email", {"email_index": 1}),
+            ("allow_move", "archive_email", {"email_index": 1}),
             ("allow_move", "move_email", {"email_index": 1, "target_folder": "Projects"}),
             ("allow_move", "move_emails_by_uid", {"email_uids": ["1"], "target_folder": "Projects"}),
         ],
@@ -281,13 +281,13 @@ class TestIMAPMailboxTool:
         t = Tools()
         assert t.valves.allow_delete_single is False
         assert t.valves.allow_delete_all is False
-        assert t.valves.allow_archive is False
+        assert t.valves.allow_move is False
         assert t.valves.allow_move is False
 
     @pytest.mark.asyncio
     async def test_archive_email_success(self, tools):
         """Test archiving a specific email."""
-        tools.valves.allow_archive = True
+        tools.valves.allow_move = True
         raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
         raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay.")
         emails = [(raw1, "1"), (raw2, "2")]
@@ -301,7 +301,7 @@ class TestIMAPMailboxTool:
     @pytest.mark.asyncio
     async def test_archive_email_out_of_range(self, tools):
         """Test archiving an email with an out-of-range index."""
-        tools.valves.allow_archive = True
+        tools.valves.allow_move = True
         raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
         mock_server = _make_mock_server([(raw, "1")])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
@@ -311,7 +311,7 @@ class TestIMAPMailboxTool:
     @pytest.mark.asyncio
     async def test_archive_email_empty_mailbox(self, tools):
         """Test archiving from an empty mailbox."""
-        tools.valves.allow_archive = True
+        tools.valves.allow_move = True
         mock_server = _make_mock_server([])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.archive_email(email_index=1)
@@ -325,7 +325,7 @@ class TestIMAPMailboxTool:
     @pytest.mark.asyncio
     async def test_archive_custom_folder(self, tools):
         """Test archiving to a custom folder."""
-        tools.valves.allow_archive = True
+        tools.valves.allow_move = True
         tools.valves.archive_folder = "Gmail/All Mail"
         raw = _make_raw_email("sender@test.com", "receiver@test.com", "Test", "Body")
         emails = [(raw, "1")]

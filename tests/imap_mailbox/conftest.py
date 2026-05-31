@@ -68,7 +68,7 @@ class SieveMockBuilder:
     def factory_mock(active: str | None = "filter1", scripts: list[str] | None = None):
         """Create a MagicMock return value that wraps a SieveMockBuilder-created client.
 
-        Used where imap_mailbox._try_sievelib_client needs to be patched with a callable
+        Used where imap_mailbox.Client needs to be patched with a callable
         that returns a configured client (as in test_sieve.py's try/finally tests).
         """
         from unittest.mock import MagicMock

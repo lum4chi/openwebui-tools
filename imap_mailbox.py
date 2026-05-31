@@ -31,16 +31,7 @@ class EncryptionMode(StrEnum):
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
 _IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
 
-
-# ManageSieve client — imported conditionally since it's an optional dependency
-def _get_sievelib_client():
-    """Return the sievelib ManageSieve Client class if available, else None."""
-    try:
-        from sievelib.managesieve import Client as Client_  # pyright: ignore[reportMissingImports]
-
-        return Client_
-    except ImportError:
-        return None
+from sievelib.managesieve import Client  # pyright: ignore[reportMissingImports]
 
 
 def _handle_sieve_list_result(result):
@@ -66,9 +57,6 @@ def _handle_sieve_list_result(result):
     if active and isinstance(active, str) and isinstance(scripts, list) and active not in scripts:
         scripts.append(active)
     return active, scripts, None
-
-
-_try_sievelib_client = _get_sievelib_client()
 
 
 if TYPE_CHECKING:
@@ -166,8 +154,6 @@ class Tools:
 
         Returns a sievelib Client object on success, or an error string on failure.
         """
-        if not _try_sievelib_client:
-            return "Error: sievelib is not installed. Install it with: pip install sievelib"
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves. ManageSieve reuses IMAP credentials."
         if not self.valves.imap_server:
@@ -177,7 +163,7 @@ class Tools:
         port = self.valves.manage_sieve_port
 
         try:
-            client = _try_sievelib_client(server, srvport=port)
+            client = Client(server, srvport=port)
             if self.valves.manage_sieve_encryption == EncryptionMode.implicit:
                 # Implicit TLS — SSL from the start
                 connected = client.connect(
@@ -430,8 +416,6 @@ class Tools:
         shows server capabilities, and attempts to list scripts with each mode.
         Useful when 'list_sieve_scripts' returns nothing but filters exist.
         """
-        if not _try_sievelib_client:
-            return "Error: sievelib is not installed. Install it with: pip install sievelib"
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
@@ -447,7 +431,7 @@ class Tools:
         ]:
             results.append(f"--- {label} ---")
             try:
-                client = _try_sievelib_client(server, srvport=port)
+                client = Client(server, srvport=port)
                 connected = client.connect(
                     self.valves.username,
                     self.valves.password,

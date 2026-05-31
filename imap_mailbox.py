@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.3.0
+version: 2.3.1
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -16,8 +16,10 @@ from datetime import datetime, timedelta
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
+from pydantic_core import PydanticUndefined
 from sievelib.managesieve import Client
 
 
@@ -511,6 +513,28 @@ class Tools:
         # Map: UID string -> 1-based index (1 = highest/newest UID)
         return {uid: idx + 1 for idx, uid in enumerate(uid_list)}
 
+    def _resolve_fieldinfo(self, value: Any, fallback: Any) -> Any:
+        """Resolve a value that may be a Pydantic FieldInfo (Open WebUI edge case).
+
+        Open WebUI sometimes passes raw FieldInfo objects to tool methods. If that
+        happens, extract the default value (or return fallback if the FieldInfo
+        has no default). Normal values pass through unchanged.
+        """
+        if isinstance(value, (str, int)):
+            return value
+        default = getattr(value, "default", None)
+        if default is not PydanticUndefined:
+            return default
+        return fallback
+
+    def _safe_close(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL) -> None:
+        """Close IMAP connection, trying logout as fallback for non-compliant servers."""
+        try:
+            conn.close()
+        except (Exception, _IMAP_EXCEPTION):
+            with suppress(Exception, _IMAP_EXCEPTION):
+                conn.logout()
+
     def _resolve_folder(self, folder: str | None = None, fallback: str | None = None) -> str:
         """Return the effective folder name; falls back to valve config."""
         if folder:
@@ -539,6 +563,8 @@ class Tools:
         """
         List emails in a specific IMAP folder. Requires explicit folder name — no fallback.
         """
+        count = self._resolve_fieldinfo(count, 10)
+        folder = self._resolve_fieldinfo(folder, None)
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
@@ -553,7 +579,7 @@ class Tools:
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
-                conn.close()
+                self._safe_close(conn)
                 return "Folder is empty. No emails found."
 
             reversed_map = {v: k for k, v in uid_map.items()}
@@ -585,7 +611,7 @@ class Tools:
                         }
                     )
 
-            conn.close()
+            self._safe_close(conn)
 
             total_count = len(uid_map)
 
@@ -637,7 +663,7 @@ class Tools:
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Mailbox '{target_folder}' is empty. No emails to read."
 
             # Get the UID for this index (uid_map = {uid: index} => build reversed)
@@ -647,7 +673,7 @@ class Tools:
                     uid_map_rev[pos] = uid_str
                 uid = uid_map_rev[email_index]  # type: ignore[typeddict-item]
             except (KeyError, TypeError):
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
 
             _, raw_data = conn.uid("fetch", uid, "(RFC822)")  # type: ignore[arg-type]
@@ -655,7 +681,7 @@ class Tools:
             parsed = self._parse_email(raw_bytes)
 
             total_count = len(uid_map)
-            conn.close()
+            self._safe_close(conn)
 
             attachment_info = ""
             if parsed["has_attachments"]:
@@ -696,6 +722,9 @@ class Tools:
         :param count: Maximum number of results
         :param folder: Optional folder override (e.g. 'Archive', 'Sent'). Defaults to valve setting.
         """
+        count = self._resolve_fieldinfo(count, 10)
+        folder = self._resolve_fieldinfo(folder, None)
+        query = self._resolve_fieldinfo(query, "")
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
@@ -748,12 +777,12 @@ class Tools:
                 _, uid_data = conn.uid("search", None, "ALL")  # pyright: ignore[reportArgumentType]
 
             if uid_data[0] is None:
-                conn.close()
+                self._safe_close(conn)
                 return f"No emails found matching criteria: {query}"
 
             uid_string = uid_data[0].decode("utf-8").strip()
             if not uid_string:
-                conn.close()
+                self._safe_close(conn)
                 return f"No emails found matching criteria: {query}"
 
             candidate_uids = uid_string.split()
@@ -788,7 +817,7 @@ class Tools:
                     else:
                         continue
 
-            conn.close()
+            self._safe_close(conn)
 
             if not matches:
                 return f"No emails found matching criteria: {query}"
@@ -844,7 +873,7 @@ class Tools:
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Mailbox '{target_folder}' is empty. Nothing to delete."
 
             try:
@@ -853,13 +882,13 @@ class Tools:
                     uid_map_rev[pos] = uid_str
                 uid = uid_map_rev[email_index]
             except (KeyError, TypeError):
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
 
             # Mark as deleted and expunge
             conn.uid("store", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
-            conn.close()
+            self._safe_close(conn)
             return f"Email [{uid}] in '{target_folder}' has been deleted successfully."
 
         except _IMAP_EXCEPTION as e:
@@ -894,7 +923,7 @@ class Tools:
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
-                conn.close()
+                self._safe_close(conn)
                 return f"Mailbox '{target_folder}' is already empty. No emails to delete."
 
             uid_list = list(uid_map.keys())
@@ -902,7 +931,7 @@ class Tools:
                 conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
 
             conn.expunge()
-            conn.close()
+            self._safe_close(conn)
             return f"All {len(uid_list)} email(s) in '{target_folder}' have been deleted successfully."
 
         except _IMAP_EXCEPTION as e:
@@ -942,20 +971,20 @@ class Tools:
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Mailbox '{source_folder}' is empty. Nothing to archive."
 
             try:
                 reversed_map: dict[int, str] = {v: k for k, v in uid_map.items()}
                 uid = reversed_map[email_index]
             except (KeyError, TypeError):
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
 
             conn.uid("COPY", uid, dst_folder)  # pyright: ignore[reportArgumentType]
             conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
-            conn.close()
+            self._safe_close(conn)
             return f"Email [{uid}] has been archived to '{dst_folder}' successfully."
 
         except _IMAP_EXCEPTION as e:
@@ -1001,14 +1030,14 @@ class Tools:
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Source folder '{source_folder}' is empty. Nothing to move."
 
             try:
                 uid_map_rev: dict[int, str] = {v: k for k, v in uid_map.items()}
                 uid = uid_map_rev[email_index]
             except (KeyError, TypeError):
-                conn.close()
+                self._safe_close(conn)
                 return f"Error: Email index {email_index} is out of range. Folder has {len(uid_map)} message(s)."
 
             # Ensure target folder exists
@@ -1019,7 +1048,7 @@ class Tools:
             conn.uid("COPY", uid, target_folder)  # pyright: ignore[reportArgumentType]
             conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
-            conn.close()
+            self._safe_close(conn)
 
             return f"Email [{uid}] moved from '{source_folder}' to '{target_folder}' successfully."
 
@@ -1081,7 +1110,7 @@ class Tools:
                 except Exception as e:
                     failed.append((uid, str(e)))
 
-            conn.close()
+            self._safe_close(conn)
 
             parts = []
             parts.append(f"Moved {len(moved)} email(s) from '{source_folder}' to '{target_folder}'.")
@@ -1113,7 +1142,7 @@ class Tools:
             conn = self._connect()
             conn.create(folder)
             conn.select(folder, readonly=True)
-            conn.close()
+            self._safe_close(conn)
             return f"Folder '{folder}' has been created successfully."
 
         except _IMAP_EXCEPTION as e:
@@ -1135,7 +1164,7 @@ class Tools:
         try:
             conn = self._connect()
             conn.delete(folder)
-            conn.close()
+            self._safe_close(conn)
             return f"Folder '{folder}' has been deleted successfully."
 
         except _IMAP_EXCEPTION as e:
@@ -1156,7 +1185,7 @@ class Tools:
         try:
             conn = self._connect()
             _, folders_data = conn.list()
-            conn.close()
+            self._safe_close(conn)
 
             if not folders_data:
                 return "No folders found on the IMAP server."

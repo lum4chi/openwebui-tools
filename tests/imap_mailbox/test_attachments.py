@@ -14,8 +14,8 @@ class TestAttachmentDisplay:
     """Test attachment info display in listing and reading."""
 
     @pytest.mark.asyncio
-    async def test_list_inbox_emails_with_attachments(self, tools):
-        """Test that list_inbox_emails shows attachment count."""
+    async def test_list_emails_with_attachments(self, tools):
+        """Test that list_emails shows attachment count."""
 
         msg = MIMEMultipart("mixed")
         msg["From"] = "sender@test.com"
@@ -31,10 +31,9 @@ class TestAttachmentDisplay:
             msg.attach(att)
 
         emails = [(msg.as_bytes(), "1")]
-        tools.valves.allow_list_inbox = True
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.list_inbox_emails(count=10)
+            result = await tools.list_emails(folder="INBOX", count=10)
 
         assert "AttachMsg" in result
         assert "3 attachment(s)" in result

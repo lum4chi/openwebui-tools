@@ -30,25 +30,22 @@ class TestIMAPListEmailsCredentialError:
 
 
 class TestIMAPReadInboxEmailNoCredentials:
-    """Test read_inbox_email returns error when credentials are missing."""
+    """Test read_email with inbox folder returns error when credentials are missing."""
 
     @pytest.mark.asyncio
     async def test_read_inbox_email_no_credentials(self):
-        """Test read_inbox_email returns error when credentials are missing (guard passes)."""
+        """Test read_email with inbox folder returns error when credentials are missing."""
         t = Tools()
-        t.valves.allow_list_inbox = True  # Pass the access guard
-        # No username/password set
-        result = await t.read_inbox_email(email_index=1)
+        result = await t.read_email(email_index=1, folder="INBOX")
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
     async def test_read_inbox_email_no_server(self):
-        """Test read_inbox_email returns error when imap_server is not set."""
+        """Test read_email with inbox folder returns error when imap_server is not set."""
         t = Tools()
         t.valves.username = "testuser"
         t.valves.password = "testpass"
-        t.valves.allow_list_inbox = True
-        result = await t.read_inbox_email(email_index=1)
+        result = await t.read_email(email_index=1, folder="INBOX")
         assert "Error" in result and "server" in result
 
 
@@ -108,26 +105,6 @@ class TestIMAPDeleteNoCredentials:
         result = await t.delete_email(email_index=1)
         assert "Error" in result and "server" in result
 
-
-class TestIMAPInternalHelpersNoCredentials:
-    """Test internal helper methods return error when credentials are missing."""
-
-    @pytest.mark.asyncio
-    async def test_list_folder_emails_no_credentials(self, tools):
-        """Test _list_folder_emails returns error when credentials are missing."""
-        t = Tools()
-        result = await t._list_folder_emails("INBOX", count=10)
-        assert "Error" in result and "credentials" in result
-
-    @pytest.mark.asyncio
-    async def test_read_folder_email_no_credentials(self, tools):
-        """Test _read_folder_email returns error when credentials are missing."""
-        t = Tools()
-        result = await t._read_folder_email(1, "INBOX")
-        assert "Error" in result and "credentials" in result
-
-
-class TestIMAPDeleteCredentialsException:
     """Test delete_email missing credentials with generic exception path."""
 
     @pytest.mark.asyncio

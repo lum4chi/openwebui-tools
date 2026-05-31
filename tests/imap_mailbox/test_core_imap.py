@@ -16,7 +16,6 @@ class TestIMAPMailboxTool:
     @pytest.mark.parametrize(
         "method,args,valve",
         [
-            ("list_inbox_emails", {"count": 5}, "allow_list_inbox"),
             ("delete_email", {"email_index": 1}, "allow_delete_single"),
             ("delete_all_emails", {}, "allow_delete_all"),
             ("archive_email", {"email_index": 1}, "allow_archive"),
@@ -112,35 +111,6 @@ class TestIMAPMailboxTool:
             assert item in result
         for item in expected_not:
             assert item not in result
-
-    @pytest.mark.asyncio
-    async def test_get_email_count(self, tools):
-        """Test getting the total email count."""
-
-        def override_uid(cmd, criteria=None, *args, **kwargs):
-            if cmd == "search":
-                return ("OK", [b"1 2 3"])
-            return ("OK", [b""])
-
-        mock_server = _make_mock_server([], override_uid=override_uid)
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.get_email_count()
-        assert "3" in result
-
-    @pytest.mark.asyncio
-    async def test_get_email_count_empty(self, tools):
-        """Test getting the email count for an empty mailbox."""
-        mock_server = _make_mock_server([])
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.get_email_count()
-        assert "0" in result
-
-    @pytest.mark.asyncio
-    async def test_get_email_count_no_credentials(self):
-        """Test that get_email_count returns error when credentials are missing."""
-        t = Tools()
-        result = await t.get_email_count()
-        assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
     async def test_delete_email_success(self, tools):
@@ -248,16 +218,15 @@ class TestIMAPMailboxTool:
         mock_server = MagicMock()
         mock_server.login.side_effect = _IMAP_EXCEPTION("535 Authentication failed")
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.get_email_count()
+            result = await tools.list_emails(folder="INBOX", count=10)
         assert "IMAP Error" in result
 
     @pytest.mark.asyncio
     async def test_select_inbox_folder(self, tools):
-        """Test that a custom inbox folder name is used in IMAP select."""
-        tools.valves.inbox_folder = "Sent"
+        """Test that a custom folder name is used in IMAP select."""
         mock_server = _make_mock_server([])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            await tools.get_email_count()
+            await tools.list_emails(folder="Sent", count=5)
         mock_server.select.assert_called()
         call_args = mock_server.select.call_args
         assert call_args[0][0] == "Sent"
@@ -421,20 +390,26 @@ class TestIMAPEmptyMailboxPaths:
         result = await t.delete_all_emails()
         assert "Error" in result and "credentials" in result
 
+
+class TestResolveFolder:
+    """Test the _resolve_folder helper."""
+
     @pytest.mark.asyncio
-    async def test_get_email_count_generic_exception(self):
-        """Test get_email_count handles non-IMAP error after login."""
-        tools = Tools()
-        tools.valves.username = "u"
-        tools.valves.password = "p"
-        tools.valves.imap_server = "mail.example.com"
+    async def test_resolve_folder_explicit(self, tools):
+        """Test _resolve_folder returns explicit folder."""
+        result = tools._resolve_folder(folder="Custom/Folder")
+        assert result == "Custom/Folder"
 
-        def mock_login_side_effect(username, password):
-            raise RuntimeError("select failed")
+    @pytest.mark.asyncio
+    async def test_resolve_folder_empty_fallsback_to_valve(self, tools):
+        """Test _resolve_folder falls back to inbox_folder valve when folder is empty."""
+        tools.valves.inbox_folder = "MyInbox"
+        result = tools._resolve_folder(folder="")
+        assert result == "MyInbox"
 
-        mock_server = MagicMock()
-        mock_server.login = mock_login_side_effect
-
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.get_email_count()
-        assert "Error" in result
+    @pytest.mark.asyncio
+    async def test_resolve_folder_none_fallsback_to_valve(self, tools):
+        """Test _resolve_folder falls back to inbox_folder when folder is None."""
+        tools.valves.inbox_folder = "CustomInbox"
+        result = tools._resolve_folder(folder=None)
+        assert result == "CustomInbox"

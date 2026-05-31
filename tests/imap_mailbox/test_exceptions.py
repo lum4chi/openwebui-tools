@@ -9,34 +9,6 @@ from imap_mailbox import Tools
 from .conftest import _IMAP_EXCEPTION, _make_mock_server
 
 
-class TestIMAPListFolderException:
-    """Test _list_folder_emails exception handling."""
-
-    @pytest.mark.asyncio
-    async def test_list_folder_email_inner_fetch_exception(self):
-        """Test _list_folder_emails where individual UID fetch fails (lines 1084-1098)."""
-        t = Tools()
-        t.valves.username = "u"
-        t.valves.password = "p"
-        t.valves.imap_server = "mail.example.com"
-
-        mock_server = MagicMock()
-
-        def uid_side_effect(cmd, *args, **kwargs):
-            if cmd == "search":
-                return ("OK", [b"1 2 3"])
-            else:
-                raise _IMAP_EXCEPTION("fetch error during list")
-
-        mock_server.uid.side_effect = uid_side_effect
-        mock_server.login.return_value = ("OK", None)
-        mock_server.select.return_value = ("OK", [b"3"])
-
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await t._list_folder_emails(folder="CustomFolder", count=5)
-        assert "Error reading message" in result
-
-
 class TestIMAPSearchCandidateException:
     """Test search_emails candidate email fetch exception path (lines 782-783)."""
 

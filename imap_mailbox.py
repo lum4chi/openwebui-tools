@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.2.0
+version: 2.2.1
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Union
 
 from pydantic import BaseModel, Field
 from sievelib.managesieve import Client
@@ -60,13 +59,6 @@ def _handle_sieve_list_result(
     return active, scripts, None
 
 
-if TYPE_CHECKING:
-    from email.message import EmailMessage, Message
-else:
-    EmailMessage = email.message.EmailMessage
-    Message = email.message.Message
-
-
 class Tools:
     def __init__(self):
         self.valves = self.Valves()
@@ -97,22 +89,6 @@ class Tools:
             default="Drafts", description="Drafts folder name (e.g., 'Drafts', '[Gmail]/Drafts')"
         )
 
-        allow_list_inbox: bool = Field(
-            default=False, description="Allow reading emails from the inbox folder (default: False for safety)"
-        )
-        allow_list_archive: bool = Field(
-            default=False, description="Allow reading emails from the archive folder (default: False for safety)"
-        )
-        allow_list_trash: bool = Field(
-            default=False, description="Allow reading emails from the trash folder (default: False for safety)"
-        )
-        allow_list_sent: bool = Field(
-            default=False, description="Allow reading emails from the sent folder (default: False for safety)"
-        )
-        allow_list_drafts: bool = Field(
-            default=False, description="Allow reading emails from the drafts folder (default: False for safety)"
-        )
-
         # write permissions
         allow_delete_single: bool = Field(
             default=False, description="Allow deleting individual emails (default: False for safety)"
@@ -125,10 +101,8 @@ class Tools:
             default=False, description="Allow moving emails between folders (default: False for safety)"
         )
         allow_create_folder: bool = Field(
-            default=False, description="Allow creating new IMAP folders (default: False for safety)"
-        )
-        allow_rename_folder: bool = Field(
-            default=False, description="Allow renaming IMAP folders (default: False for safety)"
+            default=False,
+            description="Allow creating new IMAP folders (default: False for safety)",
         )
         allow_delete_folder: bool = Field(
             default=False, description="Allow deleting IMAP folders (default: False for safety)"
@@ -410,145 +384,6 @@ class Tools:
                 client.logout()
             return f"Error deactivating Sieve script: {str(e)}"
 
-    # Common Sieve script names tried when listscripts() returns empty.
-    _COMMON_SIEVE_SCRIPTS = (
-        "default",
-        "mail_filter",
-        "userfilter",
-        "main",
-        "dovecot-sieve",
-        ".dovecot.sieve",
-        "Open-Xchange",
-        "sieve-filter",
-    )
-
-    async def check_sieve_connection(self) -> str:
-        """Diagnose ManageSieve connection for the configured server.
-
-        Tests both STARTTLS and implicit TLS, reports which mode works,
-        shows server capabilities, and attempts to list scripts with each mode.
-        Useful when 'list_sieve_scripts' returns nothing but filters exist.
-        """
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        server = self.valves.manage_sieve_server or self.valves.imap_server
-        port = self.valves.manage_sieve_port
-        results: list[str] = []
-
-        for _enc_mode, ssl_flag, starttls_flag, label in [
-            (EncryptionMode.starttls, False, True, "STARTTLS"),
-            (EncryptionMode.implicit, True, False, "Implicit TLS"),
-        ]:
-            results.append(f"--- {label} ---")
-            try:
-                client = Client(server, srvport=port)
-                connected = client.connect(
-                    self.valves.username,
-                    self.valves.password,
-                    ssl=ssl_flag,
-                    starttls=starttls_flag,
-                )
-                if not connected:
-                    results.append("  Connection/authentication FAILED.")
-                    with suppress(Exception):
-                        client.logout()
-                    continue
-
-                results.append("  Connected: Yes")
-
-                # Check capabilities
-                try:
-                    impl = client.get_implementation()
-                    sieve_caps = client.get_sieve_capabilities()
-                    results.append(f"  Server implementation: {impl}")
-                    results.append(f"  Sieve extensions: {', '.join(sorted(sieve_caps)) if sieve_caps else 'N/A'}")
-                except Exception as exc:
-                    results.append(f"  Capabilities check failed: {exc}")
-
-                # Attempt script listing
-                try:
-                    active, scripts, err = _handle_sieve_list_result(client.listscripts())
-                    if scripts is None:
-                        results.append("  listscripts(): Server returned NO (no scripts available for this account).")
-                    elif not scripts:
-                        info = f"(active: {active})" if active else "(none active)"
-                        results.append(f"  listscripts(): 0 scripts found on server. {info}")
-                    else:
-                        scripts_str = ", ".join(sorted(scripts))
-                        active_part = f", active='{active}'" if active else ""
-                        results.append(f"  listscripts(): Found scripts: {scripts_str}{active_part}")
-                except Exception as exc:
-                    results.append(f"  listscripts() failed: {exc}")
-
-                with suppress(Exception):
-                    client.logout()
-            except Exception as exc:
-                results.append(f"  Connection error: {exc}")
-
-        output_lines = [
-            "ManageSieve Connection Diagnostic",
-            f"Server: {server}:{port}",
-            "",
-        ]
-        output_lines.extend(results)
-        return "\n".join(output_lines)
-
-    async def try_fetch_sieve_script(self) -> str:
-        """Try fetching common Sieve script names when listscripts() returns empty.
-
-        When ManageSieve's LISTSCRIPTS returns no scripts but filters are
-        active on the server (e.g. Dovecot Pigeonhole stores them under
-        non-standard names), this attempts to fetch known script names.
-        """
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if scripts is not None and scripts:
-                client.logout()
-                return (
-                    f"ManageSieve found {len(scripts)} script(s): {', '.join(sorted(scripts))} "
-                    f"(active: {active if active else 'none'}).\n"
-                    f"Use get_sieve_script(name) to retrieve one of them."
-                )
-
-            # Build list of names to try: first the active script, then common names.
-            # Try both the bare name and the .sieve-extended form.
-            names_to_try: list[str] = []
-            if active and isinstance(active, str):
-                names_to_try.append(active)
-                names_to_try.append(f"{active}.sieve")
-            names_to_try.extend(self._COMMON_SIEVE_SCRIPTS)
-            # Add .sieve variant for each common name that doesn't already end in .sieve
-            for name in self._COMMON_SIEVE_SCRIPTS:
-                if not name.endswith(".sieve"):
-                    names_to_try.append(f"{name}.sieve")
-
-            for name in names_to_try:
-                try:
-                    content = client.getscript(name)
-                    client.logout()
-                    return f"=== Found Sieve script: {name} ===\n{content}"
-                except Exception:
-                    pass
-
-            client.logout()
-            tried = ", ".join(names_to_try)
-            return (
-                "ManageSieve connection succeeded but found no scripts.\n"
-                f"Tried known names: {tried} — none accessible.\n"
-                "Filters may be managed via a server-side system not exposed through ManageSieve."
-            )
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error trying common script names: {str(e)}"
-
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""
         if not header_value:
@@ -566,7 +401,7 @@ class Tools:
                 result.append(part)
         return " ".join(result)
 
-    def _get_email_body(self, msg: Union["Message", "EmailMessage"], max_chars: int = 10000) -> str:
+    def _get_email_body(self, msg: object, max_chars: int = 10000) -> str:
         """Extract the plain text body from an email message."""
         body = ""
         if msg.is_multipart():
@@ -683,29 +518,6 @@ class Tools:
             return folder
         return fallback or (getattr(self.valves, "inbox_folder", None) or "INBOX")
 
-    def _access_guard(self, folder_type: str, effective_folder: str) -> str | None:
-        """Check whether LLM is allowed to access the given folder type.
-
-        Returns ``None`` when access is allowed, otherwise an error message.
-        """
-        valve_name = f"allow_list_{folder_type}"
-        folder_valve_name = f"{folder_type}_folder"
-        valve = getattr(self.valves, valve_name, None)
-        default_folder = getattr(self.valves, folder_valve_name, None)
-
-        if not valve:
-            return (
-                f"{folder_type.capitalize()} access is disabled. Enable '{valve_name}' in Valves to use this feature."
-            )
-
-        # If the user customised the folder path but didn't enable access
-        if default_folder and effective_folder != default_folder:
-            return (
-                f"{folder_type.capitalize()} access is disabled. Enable '{valve_name}' in Valves to use this feature."
-            )
-
-        return None
-
     def _fetch_email_by_uid(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, uid: str) -> dict | None:
         """Fetch and parse a single email by UID. Returns None on failure."""
         try:
@@ -719,18 +531,6 @@ class Tools:
             return self._parse_email(raw_bytes)
         except Exception:
             return None
-
-    async def list_inbox_emails(
-        self, count: int = Field(default=10, description="Number of recent emails to list (default: 10)")
-    ) -> str:
-        """
-        List emails in the inbox folder.
-        :param count: Number of recent emails to retrieve and display
-        """
-        error = self._access_guard("inbox", self.valves.inbox_folder)
-        if error:
-            return error
-        return await self._list_folder_emails(self.valves.inbox_folder, count)
 
     async def list_emails(
         self,
@@ -811,19 +611,6 @@ class Tools:
             return f"IMAP Error: {str(e)}. Check your credentials and server settings."
         except Exception as e:
             return f"Error connecting to IMAP server '{self.valves.imap_server}': {str(e)}"
-
-    async def read_inbox_email(
-        self,
-        email_index: int = Field(description="Index of the email to read (1-based, 1 = most recent by UID)"),
-    ) -> str:
-        """
-        Read a specific inbox email by index.
-        :param email_index: 1-based index (1 = most recent inbox email by UID)
-        """
-        error = self._access_guard("inbox", self.valves.inbox_folder)
-        if error:
-            return error
-        return await self._read_folder_email(email_index, self.valves.inbox_folder)
 
     async def read_email(
         self,
@@ -986,6 +773,7 @@ class Tools:
                             search_text.lower() in parsed["subject"].lower()
                             or search_text.lower() in parsed["body"].lower()
                         ):
+                            parsed["uid"] = uid
                             filtered.append(parsed)
                     except Exception:
                         continue
@@ -996,6 +784,7 @@ class Tools:
                 for uid in candidate_uids[:count]:
                     parsed = self._fetch_email_by_uid(conn, uid)
                     if parsed is not None:
+                        parsed["uid"] = uid
                         matches.append(parsed)
                     else:
                         continue
@@ -1016,6 +805,7 @@ class Tools:
                     f"  From:    {email_data['from']}\n"
                     f"  Subject: {email_data['subject']}{attachment_info}\n"
                     f"  Date:    {email_data['date']}\n"
+                    f"  UID:     {email_data.get('uid', '')}\n"
                     f"  Body:    {body_preview}"
                 )
 
@@ -1026,39 +816,20 @@ class Tools:
         except Exception as e:
             return f"Error searching emails: {str(e)}"
 
-    async def get_email_count(self) -> str:
-        """
-        Get the total number of emails in the mailbox folder.
-        """
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        try:
-            conn = self._connect()
-            conn.select(self.valves.inbox_folder, readonly=True)
-
-            uid_count = 0
-            _, uid_data = conn.uid("search", None, "ALL")  # pyright: ignore[reportArgumentType]
-            if uid_data[0]:
-                uid_string = uid_data[0].decode("utf-8").strip()
-                if uid_string:
-                    uid_count = len(uid_string.split())
-
-            conn.close()
-            return f"Mailbox '{self.valves.inbox_folder}' contains {uid_count} message(s)."
-        except _IMAP_EXCEPTION as e:
-            return f"IMAP Error: {str(e)}"
-        except Exception as e:
-            return f"Error checking mailbox: {str(e)}"
-
     async def delete_email(
-        self, email_index: int = Field(description="Index of the email to delete (1-based, 1 = most recent by UID)")
+        self,
+        email_index: int = Field(
+            description="Index of the email to delete (1-based, 1 = most recent by UID)"
+        ),
+        folder: str | None = Field(
+            default=None,
+            description="Optional folder to delete from. Defaults to inbox_folder valve.",
+        ),
     ) -> str:
         """
         Delete a specific email from the mailbox.
         :param email_index: 1-based index (1 = most recent email by UID)
+        :param folder: Optional folder override (defaults to inbox_folder valve).
         """
         if not self.valves.allow_delete_single:
             return "Delete operations are disabled. Enable 'allow_delete_single' in Valves to use this feature."
@@ -1067,15 +838,17 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
+        target_folder = self._resolve_folder(folder)
+
         try:
             conn = self._connect()
-            conn.select(self.valves.inbox_folder)
+            conn.select(target_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
                 conn.close()
-                return f"Error: Mailbox '{self.valves.inbox_folder}' is empty. Nothing to delete."
+                return f"Error: Mailbox '{target_folder}' is empty. Nothing to delete."
 
             try:
                 uid_map_rev: dict[int, str] = {}
@@ -1090,7 +863,7 @@ class Tools:
             conn.uid("store", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
             conn.close()
-            return f"Email [{uid}] in '{self.valves.inbox_folder}' has been deleted successfully."
+            return f"Email [{uid}] in '{target_folder}' has been deleted successfully."
 
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}"
@@ -1099,9 +872,14 @@ class Tools:
 
     async def delete_all_emails(
         self,
+        folder: str | None = Field(
+            default=None,
+            description="Optional folder to delete all emails from. Defaults to inbox_folder valve.",
+        ),
     ) -> str:
         """
         Delete all emails from the mailbox folder.
+        :param folder: Optional folder override (defaults to inbox_folder valve).
         """
         if not self.valves.allow_delete_all:
             return "Delete operations are disabled. Enable 'allow_delete_all' in Valves to use this feature."
@@ -1110,15 +888,19 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
+        target_folder = self._resolve_folder(folder)
+
         try:
             conn = self._connect()
-            conn.select(self.valves.inbox_folder)
+            conn.select(target_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
                 conn.close()
-                return "Mailbox is already empty. No emails to delete."
+                return (
+                    f"Mailbox '{target_folder}' is already empty. No emails to delete."
+                )
 
             uid_list = list(uid_map.keys())
             for uid in uid_list:
@@ -1126,7 +908,7 @@ class Tools:
 
             conn.expunge()
             conn.close()
-            return f"All {len(uid_list)} email(s) in '{self.valves.inbox_folder}' have been deleted successfully."
+            return f"All {len(uid_list)} email(s) in '{target_folder}' have been deleted successfully."
 
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}"
@@ -1134,11 +916,21 @@ class Tools:
             return f"Error deleting emails: {str(e)}"
 
     async def archive_email(
-        self, email_index: int = Field(description="Index of the email to archive (1-based, 1 = most recent by UID)")
+        self,
+        email_index: int = Field(
+            description="Index of the email to archive (1-based, 1 = most recent by UID)"
+        ),
+        folder: str | None = Field(
+            default=None,
+            description="Optional source folder. Defaults to inbox_folder valve.",
+        ),
+        target_folder: str | None = None,
     ) -> str:
         """
         Archive a specific email by moving it to the configured archive folder.
         :param email_index: 1-based index (1 = most recent email by UID)
+        :param folder: Optional source folder override (defaults to inbox_folder valve).
+        :param target_folder: Optional destination archive folder (defaults to archive_folder valve).
         """
         if not self.valves.allow_archive:
             return "Archive operations are disabled. Enable 'allow_archive' in Valves to use this feature."
@@ -1147,15 +939,18 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
+        source_folder = self._resolve_folder(folder)
+        dst_folder = target_folder or self.valves.archive_folder
+
         try:
             conn = self._connect()
-            conn.select(self.valves.inbox_folder)
+            conn.select(source_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
             if not uid_map:
                 conn.close()
-                return f"Error: Mailbox '{self.valves.inbox_folder}' is empty. Nothing to archive."
+                return f"Error: Mailbox '{source_folder}' is empty. Nothing to archive."
 
             try:
                 reversed_map: dict[int, str] = {v: k for k, v in uid_map.items()}
@@ -1164,11 +959,11 @@ class Tools:
                 conn.close()
                 return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
 
-            conn.uid("COPY", uid, self.valves.archive_folder)  # pyright: ignore[reportArgumentType]
+            conn.uid("COPY", uid, dst_folder)  # pyright: ignore[reportArgumentType]
             conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
             conn.close()
-            return f"Email [{uid}] has been archived to '{self.valves.archive_folder}' successfully."
+            return f"Email [{uid}] has been archived to '{dst_folder}' successfully."
 
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}"
@@ -1333,30 +1128,6 @@ class Tools:
         except Exception as e:
             return f"Error creating folder '{folder}': {str(e)}"
 
-    async def rename_folder(
-        self,
-        old_name: str = Field(description="Current name of the folder to rename"),
-        new_name: str = Field(description="New name for the folder"),
-    ) -> str:
-        """Rename an existing IMAP folder (MOVE command, RFC 6851)."""
-        if not self.valves.allow_rename_folder:
-            return "Rename folder operations are disabled. Enable 'allow_rename_folder' in Valves to use this feature."
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        try:
-            conn = self._connect()
-            conn.rename_thumbnail(old_name, new_name)
-            conn.close()
-            return f"Folder '{old_name}' has been renamed to '{new_name}' successfully."
-
-        except _IMAP_EXCEPTION as e:
-            return f"IMAP Error: {str(e)}. Check if the source folder exists."
-        except Exception as e:
-            return f"Error renaming folder '{old_name}': {str(e)}"
-
     async def delete_folder(
         self, folder: str = Field(description="Name of the folder to delete (must be empty)")
     ) -> str:
@@ -1413,224 +1184,3 @@ class Tools:
             return f"IMAP Error: {str(e)}. Check your credentials and server settings."
         except Exception as e:
             return f"Error listing folders: {str(e)}"
-
-    # -------------------------------------------------------------------------
-    # Convenience methods for reading emails from special folders
-    # -------------------------------------------------------------------------
-
-    async def list_archive_emails(
-        self, count: int = Field(default=10, description="Number of archived emails to list (default: 10)")
-    ) -> str:
-        """
-        List emails in the configured archive folder.
-        :param count: Number of archived emails to retrieve and display
-        """
-        error = self._access_guard("archive", self.valves.archive_folder)
-        if error:
-            return error
-        return await self._list_folder_emails(self.valves.archive_folder, count)
-
-    async def read_archive_email(
-        self,
-        email_index: int = Field(description="Index of the archived email to read (1-based, 1 = most recent by UID)"),
-    ) -> str:
-        """
-        Read a specific archived email by its index.
-        :param email_index: 1-based index (1 = most recent archived email by UID)
-        """
-        error = self._access_guard("archive", self.valves.archive_folder)
-        if error:
-            return error
-        return await self._read_folder_email(email_index, self.valves.archive_folder)
-
-    async def list_trash_emails(
-        self, count: int = Field(default=10, description="Number of trashed emails to list (default: 10)")
-    ) -> str:
-        """
-        List emails in the configured trash folder.
-        :param count: Number of trashed emails to retrieve and display
-        """
-        error = self._access_guard("trash", self.valves.trash_folder)
-        if error:
-            return error
-        return await self._list_folder_emails(self.valves.trash_folder, count)
-
-    async def read_trash_email(
-        self,
-        email_index: int = Field(description="Index of the trashed email to read (1-based, 1 = most recent by UID)"),
-    ) -> str:
-        """
-        Read a specific trashed email by its index.
-        :param email_index: 1-based index (1 = most recent trashed email by UID)
-        """
-        error = self._access_guard("trash", self.valves.trash_folder)
-        if error:
-            return error
-        return await self._read_folder_email(email_index, self.valves.trash_folder)
-
-    async def list_sent_emails(
-        self, count: int = Field(default=10, description="Number of sent emails to list (default: 10)")
-    ) -> str:
-        """
-        List emails in the configured sent folder.
-        :param count: Number of sent emails to retrieve and display
-        """
-        error = self._access_guard("sent", self.valves.sent_folder)
-        if error:
-            return error
-        return await self._list_folder_emails(self.valves.sent_folder, count)
-
-    async def read_sent_email(
-        self, email_index: int = Field(description="Index of the sent email to read (1-based, 1 = most recent by UID)")
-    ) -> str:
-        """
-        Read a specific sent email by its index.
-        :param email_index: 1-based index (1 = most recent sent email by UID)
-        """
-        error = self._access_guard("sent", self.valves.sent_folder)
-        if error:
-            return error
-        return await self._read_folder_email(email_index, self.valves.sent_folder)
-
-    async def list_draft_emails(
-        self, count: int = Field(default=10, description="Number of draft emails to list (default: 10)")
-    ) -> str:
-        """
-        List emails in the configured drafts folder.
-        :param count: Number of draft emails to retrieve and display
-        """
-        error = self._access_guard("drafts", self.valves.drafts_folder)
-        if error:
-            return error
-        return await self._list_folder_emails(self.valves.drafts_folder, count)
-
-    # -------------------------------------------------------------------------
-    # Internal helpers used by convenience methods
-    # -------------------------------------------------------------------------
-
-    async def _list_folder_emails(self, folder: str, count: int) -> str:
-        """List all email messages in the given *folder*."""
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        try:
-            conn = self._connect()
-            conn.select(folder, readonly=True)
-
-            uid_map = self._refresh_uid_index(conn)
-
-            if not uid_map:
-                conn.close()
-                return f"Folder '{folder}' is empty. No emails found."
-
-            reversed_map = {v: k for k, v in uid_map.items()}
-            target_uids = []
-            for idx in range(1, min(count + 1, len(reversed_map) + 1)):
-                target_uids.append(reversed_map[idx])
-
-            emails = []
-            for uid in target_uids:
-                try:
-                    _, raw_data = conn.uid("fetch", uid, "(RFC822)")
-                    raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
-                    parsed = self._parse_email(raw_bytes)
-                    parsed["uid"] = uid
-                    emails.append(parsed)
-                except Exception as e:
-                    emails.append(
-                        {
-                            "date": "",
-                            "from": "",
-                            "to": "",
-                            "subject": f"Error reading message {uid}: {str(e)}",
-                            "body": "",
-                            "has_attachments": False,
-                            "attachment_count": 0,
-                            "message_id": "",
-                            "uid": uid,
-                            "headers": {},
-                        }
-                    )
-
-            conn.close()
-
-            total_count = len(uid_map)
-
-            result_lines = [f"Folder '{folder}': {total_count} total message(s)\n"]
-            for _idx, email_data in enumerate(emails):
-                attachment_info = ""
-                if email_data["has_attachments"]:
-                    attachment_info = f" [{email_data['attachment_count']} attachment(s)]"
-                body_preview = email_data["body"][:200] + "..." if len(email_data["body"]) > 200 else email_data["body"]
-                result_lines.append(
-                    f"---\n"
-                    f"  From:    {email_data['from']}\n"
-                    f"  Subject: {email_data['subject']}{attachment_info}\n"
-                    f"  Date:    {email_data['date']}\n"
-                    f"  UID:     {email_data.get('uid', '')}\n"
-                    f"  Body:    {body_preview}"
-                )
-
-            return "\n".join(result_lines)
-
-        except _IMAP_EXCEPTION as e:
-            return f"IMAP Error: {str(e)}. Check your credentials and server settings."
-        except Exception as e:
-            return f"Error connecting to IMAP server '{self.valves.imap_server}': {str(e)}"
-
-    async def _read_folder_email(self, email_index: int, folder: str) -> str:
-        """Read a single email by index from the given *folder*."""
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        try:
-            conn = self._connect()
-            conn.select(folder, readonly=True)
-
-            uid_map = self._refresh_uid_index(conn)
-
-            if not uid_map:
-                conn.close()
-                return f"Error: Folder '{folder}' is empty. No emails to read."
-
-            # uid_map = {uid: position} -> build reverse
-            try:
-                uid_map_rev: dict[int, str] = {pos: uid for uid, pos in uid_map.items()}
-                uid = uid_map_rev[email_index]  # type: ignore[typeddict-item]
-            except (KeyError, TypeError):
-                conn.close()
-                return f"Error: Email index {email_index} is out of range. Folder has {len(uid_map)} message(s)."
-
-            _, raw_data = conn.uid("fetch", uid, "(RFC822)")  # type: ignore[arg-type]
-            raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
-            parsed = self._parse_email(raw_bytes)
-
-            total_count = len(uid_map)
-            conn.close()
-
-            attachment_info = ""
-            if parsed["has_attachments"]:
-                attachment_info = f"\n  Attachments: {parsed['attachment_count']} file(s) attached"
-
-            result = (
-                f"=== Email [{uid}]/{total_count} in '{folder}' ===\n"
-                f"  From:      {parsed['from']}\n"
-                f"  To:        {parsed['to']}\n"
-                f"  Subject:   {parsed['subject']}\n"
-                f"  Date:      {parsed['date']}\n"
-                f"  UID:       {uid}\n"
-                f"  Message-ID:{parsed['message_id']}\n"
-                f"{attachment_info}\n"
-                f"  --- Body ---\n"
-                f"  {parsed['body']}"
-            )
-            return result
-
-        except _IMAP_EXCEPTION as e:
-            return f"IMAP Error: {str(e)}"
-        except Exception as e:
-            return f"Error reading email: {str(e)}"

@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import MagicMock, patch
 
 from .conftest import _IMAP_EXCEPTION, _make_mock_server
 
@@ -40,8 +37,6 @@ class TestIMAPListFolderException:
         assert "Error reading message" in result
 
 
-
-
 class TestIMAPSearchCandidateException:
     """Test search_emails candidate email fetch exception path (lines 782-783)."""
 
@@ -69,8 +64,6 @@ class TestIMAPSearchCandidateException:
         assert "email" in result.lower()
 
 
-
-
 class TestIMAPListEmailsFetchError:
     """Test list/read error handling for individual fetch failures."""
 
@@ -90,4 +83,3 @@ class TestIMAPListEmailsFetchError:
             result = await tools.list_emails(folder="INBOX", count=10)
         # Should contain error messages for the failed UIDs
         assert "Error" in result
-

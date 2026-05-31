@@ -1,15 +1,11 @@
 """Auto-generated test module."""
-import os
-import sys
-
-import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from unittest.mock import patch
+
+import pytest
 
 from pop3_mailbox import Tools
 
@@ -30,8 +26,6 @@ class TestPOP3SearchWithFrom:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.search_emails(query="from:nobody@example.com", count=5)
         assert "No emails found" in result
-
-
 
 
 class TestPOP3SearchWithBeforeAfter:
@@ -55,8 +49,6 @@ class TestPOP3SearchWithBeforeAfter:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.search_emails(query="after:2030-01-01", count=5)
         assert "No emails found" in result
-
-
 
 
 class TestPOP3SearchWithAttachments:

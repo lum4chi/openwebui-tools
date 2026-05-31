@@ -1,14 +1,11 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from unittest.mock import patch
 
 import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import patch
 
 from .conftest import _make_mock_server, _make_raw_email_with_attachment
 
@@ -68,8 +65,6 @@ class TestAttachmentDisplay:
         assert "1 file(s) attached" in result
 
 
-
-
 class TestIMAPListEmailsAttachmentDisplay:
     """Test attachment info display in list_emails output."""
 
@@ -87,8 +82,6 @@ class TestIMAPListEmailsAttachmentDisplay:
         assert "attachment" in result and "1" in result
 
 
-
-
 class TestIMAPSearchWithAttachments:
     """Test attachment info display in search_emails output."""
 
@@ -103,4 +96,3 @@ class TestIMAPSearchWithAttachments:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="Invoice", count=5, folder="INBOX")
         assert "attachment" in result.lower() and "1" in result
-

@@ -1,8 +1,10 @@
 """Auto-generated test module."""
+
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from imap_mailbox import Tools
-from unittest.mock import MagicMock, patch
 
 """ imaplib not directly used but the exception import comes from conftest. """
 

@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import patch
 
 from .conftest import _make_mock_server, _make_raw_email
 
@@ -50,8 +47,6 @@ class TestFolderParamOverride:
         assert "Custom/Folder" in result
 
 
-
-
 class TestListEmailsExplicitFolder:
     """Test the list_emails method with required folder parameter."""
 
@@ -84,4 +79,3 @@ class TestListEmailsExplicitFolder:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.list_emails(folder="Empty/Folder", count=10)
         assert "empty" in result.lower() or "No emails" in result
-

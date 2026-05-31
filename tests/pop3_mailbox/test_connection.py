@@ -1,13 +1,8 @@
 """Auto-generated test module."""
-import os
-import sys
-
-import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
 
 from unittest.mock import patch
+
+import pytest
 
 from pop3_mailbox import EncryptionMode, Tools
 
@@ -45,4 +40,3 @@ class TestPOP3NonSSLConnection:
             result = await t.list_emails(count=5)
         assert "empty" in result.lower() or "No emails" in result
         assert "poplib.POP3" not in result
-

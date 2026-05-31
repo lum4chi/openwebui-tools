@@ -1,15 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-
-
 
 
 class TestMimeHeaderDecodingEncoded:
@@ -42,8 +37,6 @@ class TestMimeHeaderDecodingEncoded:
         encoded = rb"=\?unknown-charset?b?dGVzdA=="
         result = tools._decode_mime_header(encoded.decode())
         assert result != ""
-
-
 
 
 class TestGetEmailBody:
@@ -130,4 +123,3 @@ class TestGetEmailBody:
         msg["Subject"] = "Accents"
         body = tools._get_email_body(msg)
         assert "caf\u00e9" in body
-

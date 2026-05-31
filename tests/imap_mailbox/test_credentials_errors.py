@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import MagicMock, patch
 
 
 class TestIMAPListEmailsCredentialError:
@@ -30,8 +27,6 @@ class TestIMAPListEmailsCredentialError:
         t.valves.username = "testuser"
         result = await t.list_emails(folder="INBOX", count=5)
         assert "Error" in result and "credentials" in result
-
-
 
 
 class TestIMAPReadInboxEmailNoCredentials:
@@ -57,8 +52,6 @@ class TestIMAPReadInboxEmailNoCredentials:
         assert "Error" in result and "server" in result
 
 
-
-
 class TestIMAPReadEmailCredentials:
     """Test read_email missing credentials guard paths."""
 
@@ -82,8 +75,6 @@ class TestIMAPReadEmailCredentials:
         assert "server is not configured" in result
 
 
-
-
 class TestIMAPSearchNoCredentials:
     """Test search_emails without credentials."""
 
@@ -104,8 +95,6 @@ class TestIMAPSearchNoCredentials:
         assert "Error" in result and "server" in result
 
 
-
-
 class TestIMAPDeleteNoCredentials:
     """Test delete_email credentials edge case."""
 
@@ -118,8 +107,6 @@ class TestIMAPDeleteNoCredentials:
         t.valves.password = "testpass"
         result = await t.delete_email(email_index=1)
         assert "Error" in result and "server" in result
-
-
 
 
 class TestIMAPInternalHelpersNoCredentials:
@@ -140,8 +127,6 @@ class TestIMAPInternalHelpersNoCredentials:
         assert "Error" in result and "credentials" in result
 
 
-
-
 class TestIMAPDeleteCredentialsException:
     """Test delete_email missing credentials with generic exception path."""
 
@@ -156,4 +141,3 @@ class TestIMAPDeleteCredentialsException:
         mock_server = MagicMock()
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             await t.delete_email(1)
-

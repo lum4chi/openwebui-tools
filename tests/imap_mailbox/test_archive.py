@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import patch
 
 from .conftest import _make_mock_email_data, _make_mock_server, _make_raw_email
 
@@ -119,8 +116,6 @@ class TestArchiveMethods:
         assert tools.valves.archive_folder == "Archive"
 
 
-
-
 class TestArchiveEmailFunctional:
     """Test the archive_email method (the action, not read/list)."""
 
@@ -183,4 +178,3 @@ class TestArchiveEmailFunctional:
         t.valves.allow_archive = True
         result = await t.archive_email(email_index=1)
         assert "Error" in result and "credentials" in result
-

@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
-
-import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
 
 from unittest.mock import MagicMock, patch
 
-from .conftest import _make_mock_server, _make_raw_email
+import pytest
+
+from .conftest import _IMAP_EXCEPTION, _make_mock_server, _make_raw_email
 
 
 class TestSearchEmailsAdditional:
@@ -113,4 +110,3 @@ class TestIMAPSearchExceptionPaths:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="body", count=5, folder="INBOX")
         assert "email" in result.lower()
-

@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import MagicMock, patch
 
 from .conftest import _IMAP_EXCEPTION, _make_mock_server, _make_raw_email
 
@@ -461,4 +458,3 @@ class TestIMAPEmptyMailboxPaths:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.get_email_count()
         assert "Error" in result
-

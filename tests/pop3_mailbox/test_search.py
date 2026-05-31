@@ -1,14 +1,8 @@
 """Auto-generated test module."""
-import os
-import sys
-
-import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-
 
 from unittest.mock import patch
+
+import pytest
 
 from .conftest import _make_mock_server, _make_raw_email
 
@@ -71,4 +65,3 @@ class TestPOP3SearchAdditional:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.search_emails(query='from:"alice@example.com" subject:"Hello"', count=10)
         assert "Hello" in result
-

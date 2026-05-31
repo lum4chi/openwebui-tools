@@ -1,14 +1,10 @@
 """Auto-generated test module."""
-import os
+
 import poplib
-import sys
-
-import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
 from email.mime.text import MIMEText
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from pop3_mailbox import Tools
 
@@ -70,8 +66,6 @@ class TestPOP3GenericErrorPaths:
         assert "Error reading" in result
 
 
-
-
 class TestPOP3GenericErrorProto:
     """Test error_proto handling in read_email and search_emails."""
 
@@ -107,8 +101,6 @@ class TestPOP3GenericErrorProto:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="test", count=10)
         assert "POP3 Error" in result
-
-
 
 
 class TestPOP3InnerFetchException:
@@ -178,8 +170,6 @@ class TestPOP3InnerFetchException:
         assert "OK2" in result or "Subject:" in result
 
 
-
-
 class TestPOP3MIMECharsetFallback:
     """Test MIME decoding charset fallback paths."""
 
@@ -201,8 +191,6 @@ test body"""
             result = await tools.list_emails(count=5)
         # Should not crash with charset error
         assert "Subject:" in result
-
-
 
 
 class TestPOP3GetBodyMultipartException:
@@ -233,8 +221,6 @@ class TestPOP3GetBodyMultipartException:
         assert isinstance(result, str)
 
 
-
-
 class TestPOP3SearchGenericException:
     """Test search_emails generic exception (line 374, not 408 which is DELETE)."""
 
@@ -254,4 +240,3 @@ class TestPOP3SearchGenericException:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="test")
         assert "Error" in result or "No emails found" in result
-

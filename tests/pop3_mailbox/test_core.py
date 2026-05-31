@@ -1,14 +1,9 @@
 """Auto-generated test module."""
-import os
+
 import poplib
-import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-
-from unittest.mock import MagicMock, patch
 
 from pop3_mailbox import Tools
 
@@ -283,4 +278,3 @@ class TestPOP3MailboxTool:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.delete_all_emails()
         assert "already empty" in result.lower() or "No emails" in result
-

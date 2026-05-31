@@ -1,15 +1,10 @@
 """Auto-generated test module."""
+
 import datetime
-import os
 import poplib
-import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-
-from unittest.mock import MagicMock, patch
 
 from pop3_mailbox import Tools
 
@@ -52,8 +47,6 @@ class TestPOP3ListEmailsExceptions:
         assert "Error" in result or "connection reset" in result
 
 
-
-
 class TestPOP3ReadGenericException:
     """Test read_email generic exception handler (line 271)."""
 
@@ -73,8 +66,6 @@ class TestPOP3ReadGenericException:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.read_email(email_index=1)
         assert "error" in result.lower() and "broken connection" in result
-
-
 
 
 class TestIsInDateRange:
@@ -121,4 +112,3 @@ class TestIsInDateRange:
             "not-a-valid-date", datetime.datetime(2025, 1, 1), datetime.datetime(2026, 1, 1)
         )
         assert result is False
-

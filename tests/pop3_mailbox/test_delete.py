@@ -1,14 +1,9 @@
 """Auto-generated test module."""
-import os
+
 import poplib
-import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-
-from unittest.mock import MagicMock, patch
 
 from pop3_mailbox import Tools
 
@@ -36,8 +31,6 @@ class TestPOP3DeleteErrorProto:
         assert "POP3 Error" in result
 
 
-
-
 class TestPOP3DeleteSpecialCases:
     """Test delete_email and delete_all_emails special cases."""
 
@@ -59,8 +52,6 @@ class TestPOP3DeleteSpecialCases:
         assert "empty" in result.lower()
 
 
-
-
 class TestPOP3DeleteEdgeCases:
     """Additional edge cases for delete operations."""
 
@@ -80,8 +71,6 @@ class TestPOP3DeleteEdgeCases:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.delete_email(email_index=0)
         assert "out of range" in result.lower()
-
-
 
 
 class TestPOP3DeleteAllInnerException:
@@ -141,4 +130,3 @@ class TestPOP3DeleteAllInnerException:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.delete_all_emails()
         assert "Error deleting" in result or "disk full" in result
-

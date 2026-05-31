@@ -1,17 +1,21 @@
-"""Shared fixtures and helpers for POP3 mailbox tests."""
+"""Shared fixtures and POP3-specific helpers for POP3 mailbox tests."""
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from .. import test_helpers
+
+# Re-export shared helpers
+_make_raw_email_with_attachment = test_helpers._make_raw_email_with_attachment
+_make_tools_pop3 = test_helpers._make_tools_pop3
 
 
-from email.mime.base import MIMEBase
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+# POP3-specific: _make_raw_email without Message-ID header
+def _make_raw_email(from_addr: str, to_addr: str, subject: str, body: str) -> bytes:  # type: ignore[no-untyped-def]
+    """Create a raw email bytes object for mocking (no Message-ID, matching original POP3 behavior)."""
+    return test_helpers._make_raw_email(from_addr, to_addr, subject, body, include_message_id=False)
+
 
 from pop3_mailbox import EncryptionMode, Tools
 
@@ -27,31 +31,6 @@ def tools():
     t.valves.encryption_method = EncryptionMode.implicit
     t.valves.timeout = 5
     return t
-
-
-def _make_raw_email(from_addr: str, to_addr: str, subject: str, body: str) -> bytes:
-    """Create a raw email bytes object for mocking."""
-    msg = MIMEText(body, "plain")
-    msg["From"] = from_addr
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    msg["Date"] = "Mon, 21 Apr 2025 10:00:00 +0000"
-    return msg.as_bytes()
-
-
-def _make_raw_email_with_attachment(from_addr: str, to_addr: str, subject: str, body: str) -> bytes:
-    """Create a multipart email with one attachment for mocking."""
-    msg = MIMEMultipart()
-    msg["From"] = from_addr
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    msg["Date"] = "Mon, 21 Apr 2025 10:00:00 +0000"
-    msg.attach(MIMEText(body, "plain"))
-    part = MIMEBase("application", "octet-stream")
-    part.set_payload(b"fake-attachment-content")
-    part.add_header("Content-Disposition", "attachment", filename="document.pdf")
-    msg.attach(part)
-    return msg.as_bytes()
 
 
 def _make_mock_server(msg_count: int, emails: list) -> MagicMock:
@@ -84,18 +63,3 @@ def _make_mock_server(msg_count: int, emails: list) -> MagicMock:
 _make_mock_pop3_server = _make_mock_server
 _mock_pop3_server = _make_mock_server
 _mock_pop3_ssl_server = _make_mock_server
-
-
-def _make_tools_pop3(override: dict | None = None) -> Tools:
-    """Create a configured Tools instance for POP3 tests."""
-    t = Tools()
-    t.valves.pop3_server = "mail.example.com"
-    t.valves.pop3_port = 995
-    t.valves.username = "testuser"
-    t.valves.password = "testpass"
-    t.valves.encryption_method = EncryptionMode.implicit
-    t.valves.timeout = 5
-    if override:
-        for k, v in override.items():
-            setattr(t.valves, k, v)
-    return t

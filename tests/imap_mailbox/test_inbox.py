@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import patch
 
 from .conftest import _make_mock_server, _make_raw_email
 
@@ -55,8 +52,6 @@ class TestListInboxEmails:
         t.valves.allow_list_inbox = True
         result = await t.list_inbox_emails(count=5)
         assert "Error" in result and "credentials" in result
-
-
 
 
 class TestReadInboxEmail:
@@ -108,4 +103,3 @@ class TestReadInboxEmail:
         t.valves.allow_list_inbox = True
         result = await t.read_inbox_email(email_index=1)
         assert "Error" in result and "credentials" in result
-

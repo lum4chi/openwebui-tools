@@ -1,13 +1,8 @@
 """Auto-generated test module."""
-import os
-import sys
-
-import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
 
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from pop3_mailbox import EncryptionMode, Tools
 
@@ -50,4 +45,3 @@ class TestPOP3NonSSLExceptionPaths:
         with patch("poplib.POP3", return_value=mock_server):
             result = await t.get_email_count()
         assert "Error" in result
-

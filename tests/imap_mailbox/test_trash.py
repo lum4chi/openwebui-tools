@@ -1,11 +1,8 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
-
-import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
 
 from unittest.mock import patch
+
+import pytest
 
 from .conftest import _make_mock_email_data, _make_mock_server, _make_raw_email
 
@@ -64,4 +61,3 @@ class TestTrashMethods:
             result = await tools.read_trash_email(email_index=1)
         assert "Trash Msg" in result
         assert "Trash" in result
-

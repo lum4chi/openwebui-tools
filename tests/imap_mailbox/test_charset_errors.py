@@ -1,15 +1,10 @@
 """Auto-generated test module."""
+
 import email as _email_module
-import imaplib as _imaplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-
-
 
 
 class TestIMAPDecodeMIMECharsetErrors:
@@ -27,8 +22,6 @@ class TestIMAPDecodeMIMECharsetErrors:
         """Test _decode_mime_header with bytes that fail in declared charset (lines 357-358)."""
         result = tools._decode_mime_header("=?iso-8859-1?Q?=E9test?=")
         assert "test" in result.lower() or "E9" in result
-
-
 
 
 class TestIMAPGetBodyCharsetErrors:
@@ -65,4 +58,3 @@ class TestIMAPGetBodyCharsetErrors:
         result = tools._get_email_body(msg)
         # Should handle decode error gracefully without crashing
         assert isinstance(result, str)
-

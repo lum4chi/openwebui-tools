@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import patch
 
 import pytest
 
 from imap_mailbox import EncryptionMode
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import patch
 
 from .conftest import _make_mock_server, _make_raw_email
 
@@ -47,4 +44,3 @@ class TestNonSSLConnection:
             result = await tools.list_inbox_emails(count=10)
         mock_imap4_ssl.assert_called_once()
         assert "Hello" in result
-

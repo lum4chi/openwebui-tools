@@ -1,13 +1,11 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
-
-import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
 
 from unittest.mock import patch
 
+import pytest
+
 from imap_mailbox import Tools
+
 from .conftest import _make_mock_server, _make_raw_email
 
 

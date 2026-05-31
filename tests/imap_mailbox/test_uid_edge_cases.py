@@ -1,11 +1,8 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
-
-import pytest
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
 
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from .conftest import _make_mock_server, _make_raw_email
 
@@ -67,8 +64,6 @@ class TestIMAPUidDataNonePath:
         assert "2 email" in result or "2 email" in result or "Found 2" in result
 
 
-
-
 class TestIMAPSearchUidDataNone:
     """Test search_emails when uid_data[0] is None (server returned None instead of empty)."""
 
@@ -87,8 +82,6 @@ class TestIMAPSearchUidDataNone:
         assert "No emails found" in result
 
 
-
-
 class TestIMAPSearchFreeTextEmpty:
     """Test search_emails free-text search where no emails match client-side filter."""
 
@@ -103,8 +96,6 @@ class TestIMAPSearchFreeTextEmpty:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="xyznotfoundxyz", count=10)
         assert "No emails found" in result
-
-
 
 
 class TestIMAPSearchCombinedFilters:

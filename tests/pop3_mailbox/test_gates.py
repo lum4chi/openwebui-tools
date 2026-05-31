@@ -1,4 +1,5 @@
 """Auto-generated test module."""
+
 import pytest
 
 from pop3_mailbox import Tools

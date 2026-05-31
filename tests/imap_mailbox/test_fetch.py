@@ -1,13 +1,10 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-from unittest.mock import MagicMock, patch
 
 from .conftest import _make_raw_email
 
@@ -63,8 +60,6 @@ class TestFetchEmailByUid:
         assert result is None
 
 
-
-
 class TestSearchEmailsFetchNone:
     """Test search_emails when _fetch_email_by_uid returns None (line 792)."""
 
@@ -109,4 +104,3 @@ class TestSearchEmailsFetchNone:
             result = await t.search_emails(query="from:sender@test.com", count=5)
         assert "Found Email" in result
         assert len(call_order) == 3
-

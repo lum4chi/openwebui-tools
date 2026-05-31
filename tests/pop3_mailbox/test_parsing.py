@@ -1,14 +1,10 @@
 """Auto-generated test module."""
-import os
-import sys
-
-import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from unittest.mock import patch
+
+import pytest
 
 from pop3_mailbox import EncryptionMode, Tools
 
@@ -41,8 +37,6 @@ class TestPOP3DecodeMime:
         encoded = "=?utf-8?b?VGVzdA==?= =?utf-8?b?IFN1YmplY3Q?="
         result = tools._decode_mime_header(encoded)
         assert "Test" in result
-
-
 
 
 class TestPOP3GetEmailBody:
@@ -134,8 +128,6 @@ class TestPOP3GetEmailBody:
         assert "caf\u00e9" in body
 
 
-
-
 class TestPOP3ReadNonSSL:
     """Test non-SSL path for methods other than list_emails."""
 
@@ -210,8 +202,6 @@ class TestPOP3ReadNonSSL:
         assert "5" in result
 
 
-
-
 class TestPOP3ListEmailsAttachment:
     """Test list_emails with attachments."""
 
@@ -238,8 +228,6 @@ class TestPOP3ListEmailsAttachment:
         assert "attachment" in result.lower() and "1" in result
 
 
-
-
 class TestPOP3ReadEmailAttachment:
     """Test read_email with attachments."""
 
@@ -264,4 +252,3 @@ class TestPOP3ReadEmailAttachment:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.read_email(email_index=1)
         assert "Attachment" in result and "1" in result
-

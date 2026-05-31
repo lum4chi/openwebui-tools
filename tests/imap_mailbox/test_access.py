@@ -1,14 +1,8 @@
 """Auto-generated test module."""
-import imaplib as _imaplib
 
 import pytest
 
 from imap_mailbox import Tools
-
-_IMAP_EXCEPTION = getattr(_imaplib, "IMAP4Exception", Exception)
-
-
-
 
 
 class TestAccessGuard:
@@ -89,8 +83,6 @@ class TestAccessGuard:
         assert "disabled" in result.lower()
 
 
-
-
 class TestResolveFolder:
     """Test the _resolve_folder helper."""
 
@@ -109,8 +101,6 @@ class TestResolveFolder:
     async def test_resolve_folder_none_fallback(self, tools):
         """Test _resolve_folder returns default when nothing is set."""
         assert tools._resolve_folder(folder=None, fallback=None) == "INBOX"
-
-
 
 
 class TestDefaultValueToggles:
@@ -135,4 +125,3 @@ class TestDefaultValueToggles:
         assert t.valves.trash_folder == "Trash"
         assert t.valves.sent_folder == "Sent"
         assert t.valves.drafts_folder == "Drafts"
-

@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.1.1
+version: 2.2.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -121,6 +121,9 @@ class Tools:
             default=False, description="Allow deleting all emails (default: False for safety)"
         )
         allow_archive: bool = Field(default=False, description="Allow archiving emails (default: False for safety)")
+        allow_move: bool = Field(
+            default=False, description="Allow moving emails between folders (default: False for safety)"
+        )
         allow_create_folder: bool = Field(
             default=False, description="Allow creating new IMAP folders (default: False for safety)"
         )
@@ -1171,6 +1174,71 @@ class Tools:
             return f"IMAP Error: {str(e)}"
         except Exception as e:
             return f"Error archiving email: {str(e)}"
+
+    async def move_email(
+        self,
+        email_index: int = Field(description="Index of the email to move (1-based, 1 = most recent in source folder)"),
+        target_folder: str = Field(
+            description="Target IMAP folder to move the email to (e.g. 'Projects', 'Spam', 'Archive')"
+        ),
+        folder: str | None = Field(
+            default=None,
+            description="Optional source folder (defaults to valve inbox_folder)",
+        ),
+    ) -> str:
+        """
+        Move an email from one IMAP folder to another.
+
+        Uses COPY + STORE \\Deleted + expunge pattern since UID MOVE
+        (RFC 6851) is not universally supported. This is the same approach
+        used by archive_email.
+
+        :param email_index: 1-based index in source folder (1 = most recent)
+        :param target_folder: Destination IMAP folder name
+        :param folder: Optional source folder override (defaults to inbox_folder valve)
+        """
+        if not self.valves.allow_move:
+            return "Move operations are disabled. Enable 'allow_move' in Valves to use this feature."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        source_folder = self._resolve_folder(folder, fallback=self.valves.inbox_folder)
+
+        try:
+            conn = self._connect()
+            conn.select(source_folder)
+
+            uid_map = self._refresh_uid_index(conn)
+
+            if not uid_map:
+                conn.close()
+                return f"Error: Source folder '{source_folder}' is empty. Nothing to move."
+
+            try:
+                uid_map_rev: dict[int, str] = {v: k for k, v in uid_map.items()}
+                uid = uid_map_rev[email_index]
+            except (KeyError, TypeError):
+                conn.close()
+                return f"Error: Email index {email_index} is out of range. Folder has {len(uid_map)} message(s)."
+
+            # Ensure target folder exists
+            with suppress(_IMAP_EXCEPTION):
+                conn.create(target_folder)
+
+            # IMAP move = COPY to target + mark as deleted in source
+            conn.uid("COPY", uid, target_folder)  # pyright: ignore[reportArgumentType]
+            conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
+            conn.expunge()
+            conn.close()
+
+            return f"Email [{uid}] moved from '{source_folder}' to '{target_folder}' successfully."
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            return f"Error moving email: {str(e)}"
 
     async def create_folder(
         self, folder: str = Field(description="Name of the new IMAP folder to create (e.g., 'Projects/Invoices')")

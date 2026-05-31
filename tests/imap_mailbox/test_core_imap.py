@@ -269,6 +269,7 @@ class TestIMAPMailboxTool:
             ("allow_delete_single", "delete_email", {"email_index": 1}),
             ("allow_delete_all", "delete_all_emails", {}),
             ("allow_archive", "archive_email", {"email_index": 1}),
+            ("allow_move", "move_email", {"email_index": 1, "target_folder": "Projects"}),
         ],
     )
     async def test_write_ops_disabled_by_default(self, valve_name, method, args):
@@ -306,10 +307,12 @@ class TestIMAPMailboxTool:
 
     @pytest.mark.asyncio
     async def test_default_toggles_are_off(self):
-        """Test that delete toggles default to False."""
+        """Test that write operation toggles default to False."""
         t = Tools()
         assert t.valves.allow_delete_single is False
         assert t.valves.allow_delete_all is False
+        assert t.valves.allow_archive is False
+        assert t.valves.allow_move is False
 
     @pytest.mark.asyncio
     async def test_archive_email_success(self, tools):

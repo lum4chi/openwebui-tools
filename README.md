@@ -18,6 +18,7 @@ Manage a generic IMAP mailbox with folder access.
 - **Get count** - Check total mailbox size
 - **Delete email** - Remove individual messages or all messages (gated by valves)
 - **Archive email** - Move messages to archive folder (gated by valves)
+- **Move email** - Move messages between any folders (gated by valves)
 - **Folder access** - Separate toggles for archive, trash, sent, drafts folders
 - **Folder param override** - All list/read/search methods accept optional `folder` parameter
 
@@ -47,7 +48,7 @@ Manage a generic IMAP mailbox with folder access.
    - `allow_list_archive`, `allow_list_trash`, `allow_list_sent`, `allow_list_drafts`
 
    Write-access toggles (default `False`):
-   - `allow_delete_single`, `allow_delete_all`, `allow_archive`
+    - `allow_delete_single`, `allow_delete_all`, `allow_archive`, `allow_move`
 
 3. Enable the tool for your model:
    - Go to **Workspace** → **Models** → select your model → **Tools**
@@ -76,6 +77,9 @@ archive_email(email_index=1)
 
 # Delete an email (requires allow_delete_single valve)
 delete_email(email_index=1)
+
+# Move an email to another folder (requires allow_move valve)
+move_email(email_index=1, target_folder="Projects", folder="INBOX")
 
 # Check total inbox count
 get_email_count()

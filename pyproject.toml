@@ -36,6 +36,7 @@ select = [
 ignore = [
     "E501",   # line too long (ruff handles formatting)
     "B008",   # do not perform function calls in argument defaults
+    "E402",   # module level import not at top of file (needed for test subdirectories)
 ]
 
 [tool.pytest.ini_options]

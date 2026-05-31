@@ -10,6 +10,31 @@ Existing tools (both importable as separate tools):
 - `imap_mailbox.py` — IMAP mailbox + ManageSieve filter manager
 - `pop3_mailbox.py` — POP3 mailbox reader
 
+## Engineering Principles
+
+These principles govern how code is written in this project. They are as important as the lint rules.
+
+### Write minimal code
+
+- **DRY — but not dogmatically**: extract shared logic only when reuse is obvious, not forced. A little duplication is cheaper than an abstraction that doesn't fit.
+- **Prefer composition over inheritance**: each tool's `Tools` class is a flat module — no base classes, no mixins.
+- **No premature optimization**: write the simple solution first. Optimize only when a concrete bottleneck is measured.
+
+### Keep files and classes small
+
+Every tool file should stay **as short as possible** but it must be just one file, because way openwebui import tools just as single `*.py`.
+Test file need instead to be organized and manageable: move related methods to a new helper class, pull a repeated logic block into a private function, or split into a new file. If a method exceeds is too long, refactor before finishing.
+
+### Meaningful tests at high coverage
+
+The project enforces **99.9%** test coverage (`fail_under = 99.9` in `pyproject.toml`). Coverage alone is not enough — tests must be **meaningful**:
+
+- **Test behaviour, not implementation**: assert on observable outcomes (return values, raised exceptions, state changes), not on how many times a mock was called.
+- **Test edge cases**: empty inputs, single-item inputs, boundary values, error paths — not just the happy path.
+- **Each test does one thing**: one `assert_perfect` or one clear assertion group per test function.
+- **Use parametrized tests** (`@pytest.mark.parametrize`) for repeated scenarios instead of copy-pasting test functions.
+- **Never assert on mock call counts** unless the call pattern itself is the behaviour under test.
+
 ## Tool format (non-negotiable)
 
 Every tool must have:
@@ -73,6 +98,8 @@ CI order: `ruff check -> ruff format -> pyright -> pytest -v --cov`.
 
 ## Testing
 
+See **Engineering Principles > Meaningful tests** for test quality guidelines.
+
 - Tests go in `tests/test_<tool_name>.py`
 - Mock with `unittest.mock.MagicMock` + `patch` — no real mail server needed
 - Tests use `@pytest.mark.asyncio`
@@ -115,7 +142,7 @@ Update `version:` in the tool's top-level docstring when bumping.
 
 ## Adding a new tool
 
-1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above
-2. Create `tests/test_<tool_name>.py` with mocked tests
-3. Run `uv run ruff check . && uv run pyright && uv run pytest -v --cov` — all must pass
-4. Update README.md and AGENTS.md accordingly
+1. Create `<tool_name>.py` in the root with the docstring + `Tools` class format above. Keep it as short as possible but it must be just one `*.py` file.
+2. Create `tests/test_<tool_name>.py` with mocked tests — use `@pytest.mark.parametrize` for repeated scenarios. Split cases in multiple files in order to keep them manageable.
+3. Run `uv run ruff check . && uv run pyright && uv run pytest -v --cov` — coverage must be **≥ 99.9%** and all checks pass.
+4. Update README.md and AGENTS.md accordingly.

@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.0.1
+version: 2.1.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -121,6 +121,15 @@ class Tools:
             default=False, description="Allow deleting all emails (default: False for safety)"
         )
         allow_archive: bool = Field(default=False, description="Allow archiving emails (default: False for safety)")
+        allow_create_folder: bool = Field(
+            default=False, description="Allow creating new IMAP folders (default: False for safety)"
+        )
+        allow_rename_folder: bool = Field(
+            default=False, description="Allow renaming IMAP folders (default: False for safety)"
+        )
+        allow_delete_folder: bool = Field(
+            default=False, description="Allow deleting IMAP folders (default: False for safety)"
+        )
 
         # manage sieve
         manage_sieve_server: str = Field(
@@ -1162,6 +1171,109 @@ class Tools:
             return f"IMAP Error: {str(e)}"
         except Exception as e:
             return f"Error archiving email: {str(e)}"
+
+    async def create_folder(
+        self, folder: str = Field(description="Name of the new IMAP folder to create (e.g., 'Projects/Invoices')")
+    ) -> str:
+        """Create a new IMAP folder/mailbox."""
+        if not self.valves.allow_create_folder:
+            return "Create folder operations are disabled. Enable 'allow_create_folder' in Valves to use this feature."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        try:
+            conn = self._connect()
+            conn.create(folder)
+            conn.close()
+            return f"Folder '{folder}' has been created successfully."
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}. Check if the folder name is valid."
+        except Exception as e:
+            return f"Error creating folder '{folder}': {str(e)}"
+
+    async def rename_folder(
+        self,
+        old_name: str = Field(description="Current name of the folder to rename"),
+        new_name: str = Field(description="New name for the folder"),
+    ) -> str:
+        """Rename an existing IMAP folder (MOVE command, RFC 6851)."""
+        if not self.valves.allow_rename_folder:
+            return "Rename folder operations are disabled. Enable 'allow_rename_folder' in Valves to use this feature."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        try:
+            conn = self._connect()
+            conn.rename_thumbnail(old_name, new_name)
+            conn.close()
+            return f"Folder '{old_name}' has been renamed to '{new_name}' successfully."
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}. Check if the source folder exists."
+        except Exception as e:
+            return f"Error renaming folder '{old_name}': {str(e)}"
+
+    async def delete_folder(
+        self, folder: str = Field(description="Name of the folder to delete (must be empty)")
+    ) -> str:
+        """Delete an existing IMAP folder (must be empty)."""
+        if not self.valves.allow_delete_folder:
+            return "Delete folder operations are disabled. Enable 'allow_delete_folder' in Valves to use this feature."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        try:
+            conn = self._connect()
+            conn.delete(folder)
+            conn.close()
+            return f"Folder '{folder}' has been deleted successfully."
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}. Check if the folder exists and is empty."
+        except Exception as e:
+            return f"Error deleting folder '{folder}': {str(e)}"
+
+    async def list_folders(self) -> str:
+        """List all available IMAP folders/mailboxes on the server.
+
+        This is a read-only operation — no valve toggle required.
+        """
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        try:
+            conn = self._connect()
+            _, folders_data = conn.list()
+            conn.close()
+
+            if not folders_data:
+                return "No folders found on the IMAP server."
+
+            lines = ["Available IMAP folders:"]
+            for entry in folders_data:
+                if entry is None:
+                    continue
+                try:
+                    decoded = entry.decode("utf-8")
+                    lines.append(f"  {decoded}")
+                except (UnicodeDecodeError, AttributeError):
+                    lines.append(f"  {entry}")
+
+            return "\n".join(lines)
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}. Check your credentials and server settings."
+        except Exception as e:
+            return f"Error listing folders: {str(e)}"
 
     # -------------------------------------------------------------------------
     # Convenience methods for reading emails from special folders

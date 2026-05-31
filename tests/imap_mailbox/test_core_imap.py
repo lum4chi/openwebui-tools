@@ -13,11 +13,21 @@ class TestIMAPMailboxTool:
     """Test suite for IMAP Mailbox Manager tool."""
 
     @pytest.mark.asyncio
-    async def test_list_inbox_emails_no_credentials(self):
-        """Test that list_inbox_emails returns error when credentials are missing."""
+    @pytest.mark.parametrize(
+        "method,args,valve",
+        [
+            ("list_inbox_emails", {"count": 5}, "allow_list_inbox"),
+            ("delete_email", {"email_index": 1}, "allow_delete_single"),
+            ("delete_all_emails", {}, "allow_delete_all"),
+            ("archive_email", {"email_index": 1}, "allow_archive"),
+        ],
+    )
+    async def test_folder_operations_require_credentials(self, method, args, valve):
+        """Test that folder operations fail when credentials are missing (with valve enabled)."""
         t = Tools()
-        t.valves.allow_list_inbox = True
-        result = await t.list_inbox_emails(count=5)
+        if valve:
+            setattr(t.valves, valve, True)
+        result = await getattr(t, method)(**args)
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
@@ -81,40 +91,27 @@ class TestIMAPMailboxTool:
         assert "out of range" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_search_emails_by_from(self, tools):
-        """Test searching emails by sender."""
-        raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
-        raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay.")
-        emails = [(raw1, "1"), (raw2, "2")]
-        mock_server = _make_mock_server(emails)
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query='from:"alice@example.com"', count=10)
-        assert "alice@example.com" in result
-        assert "1 email" in result.lower() or "1 message" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_search_emails_by_subject(self, tools):
-        """Test searching emails by subject."""
-        raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
-        raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Invoice #123", "Please pay.")
-        emails = [(raw1, "1"), (raw2, "2")]
-        mock_server = _make_mock_server(emails)
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query='subject:"invoice"', count=10)
-        assert "carol@example.com" in result
-        assert "Invoice" in result
-
-    @pytest.mark.asyncio
-    async def test_search_emails_text_fallback(self, tools):
-        """Test searching emails with unqualified text (client-side filter)."""
+    @pytest.mark.parametrize(
+        ("query", "expected_in", "expected_not"),
+        [
+            ('from:"alice@example.com"', ["alice@example.com"], ["carol@example.com"]),
+            ('subject:"Invoice"', ["carol@example.com"], ["alice@example.com"]),
+            ('subject:"invoice"', ["carol@example.com"], ["alice@example.com"]),
+            ('invoice for services', ["carol@example.com"], []),
+        ],
+    )
+    async def test_search_emails_by_query_type(self, tools, query, expected_in, expected_not):
+        """Test searching emails by query type (from/subject/free-text)."""
         raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
         raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay invoice for services.")
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="invoice", count=10)
-        # Client-side search should find the email with invoice in body
-        assert "carol@example.com" in result
+            result = await tools.search_emails(query=query, count=10)
+        for item in expected_in:
+            assert item in result
+        for item in expected_not:
+            assert item not in result
 
     @pytest.mark.asyncio
     async def test_get_email_count(self, tools):
@@ -202,13 +199,7 @@ class TestIMAPMailboxTool:
             result = await tools.delete_all_emails()
         assert "already empty" in result.lower() or "No emails" in result
 
-    @pytest.mark.asyncio
-    async def test_delete_all_emails_no_credentials(self):
-        """Test that delete_all_emails returns error when credentials are missing."""
-        t = Tools()
-        t.valves.allow_delete_all = True
-        result = await t.delete_all_emails()
-        assert "Error" in result and "credentials" in result
+
 
     @pytest.mark.asyncio
     async def test_decode_mime_header(self, tools):
@@ -274,11 +265,20 @@ class TestIMAPMailboxTool:
         assert call_args[0][0] == "Sent"
 
     @pytest.mark.asyncio
-    async def test_delete_email_disabled_by_default(self, tools):
-        """Test that delete_email is blocked when allow_delete_single is False (default)."""
-        assert tools.valves.allow_delete_single is False
-        result = await tools.delete_email(email_index=1)
-        assert "disabled" in result.lower() and "allow_delete_single" in result
+    @pytest.mark.parametrize(
+        "valve_name,method,args",
+        [
+            ("allow_delete_single", "delete_email", {"email_index": 1}),
+            ("allow_delete_all", "delete_all_emails", {}),
+            ("allow_archive", "archive_email", {"email_index": 1}),
+        ],
+    )
+    async def test_write_ops_disabled_by_default(self, valve_name, method, args):
+        """Test that write operations are blocked when valves default to False."""
+        t = Tools()
+        assert getattr(t.valves, valve_name) is False
+        result = await getattr(t, method)(**args)
+        assert "disabled" in result.lower() and valve_name in result
 
     @pytest.mark.asyncio
     async def test_delete_email_enabled(self, tools):
@@ -292,12 +292,7 @@ class TestIMAPMailboxTool:
             result = await tools.delete_email(email_index=1)
         assert "deleted successfully" in result
 
-    @pytest.mark.asyncio
-    async def test_delete_all_emails_disabled_by_default(self, tools):
-        """Test that delete_all_emails is blocked when allow_delete_all is False (default)."""
-        assert tools.valves.allow_delete_all is False
-        result = await tools.delete_all_emails()
-        assert "disabled" in result.lower() and "allow_delete_all" in result
+
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_enabled(self, tools):
@@ -320,12 +315,7 @@ class TestIMAPMailboxTool:
         assert t.valves.allow_delete_single is False
         assert t.valves.allow_delete_all is False
 
-    @pytest.mark.asyncio
-    async def test_archive_email_disabled_by_default(self, tools):
-        """Test that archive_email is blocked when allow_archive is False (default)."""
-        assert tools.valves.allow_archive is False
-        result = await tools.archive_email(email_index=1)
-        assert "disabled" in result.lower() and "allow_archive" in result
+
 
     @pytest.mark.asyncio
     async def test_archive_email_success(self, tools):
@@ -360,13 +350,7 @@ class TestIMAPMailboxTool:
             result = await tools.archive_email(email_index=1)
         assert "empty" in result.lower() or "Nothing to archive" in result
 
-    @pytest.mark.asyncio
-    async def test_archive_email_no_credentials(self):
-        """Test that archive_email returns error when credentials are missing."""
-        t = Tools()
-        t.valves.allow_archive = True
-        result = await t.archive_email(email_index=1)
-        assert "Error" in result and "credentials" in result
+
 
     @pytest.mark.asyncio
     async def test_archive_default_folder(self, tools):

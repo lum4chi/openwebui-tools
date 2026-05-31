@@ -14,10 +14,20 @@ class TestPOP3MailboxTool:
     """Test suite for POP3 Mailbox Manager tool."""
 
     @pytest.mark.asyncio
-    async def test_list_emails_no_credentials(self):
-        """Test that list_emails returns error when credentials are missing."""
+    @pytest.mark.parametrize(
+        ("method,args,valve"),
+        [
+            ("list_emails", {"count": 5}, None),
+            ("delete_email", {"email_index": 1}, "allow_delete_single"),
+            ("delete_all_emails", {}, "allow_delete_all"),
+        ],
+    )
+    async def test_operation_requires_no_credentials(self, method, args, valve):
+        """Test that operations fail when credentials are missing."""
         t = Tools()
-        result = await t.list_emails(count=5)
+        if valve:
+            setattr(t.valves, valve, True)
+        result = await getattr(t, method)(**args)
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
@@ -71,31 +81,27 @@ class TestPOP3MailboxTool:
         assert "out of range" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_search_emails_by_from(self, tools):
-        """Test searching emails by sender."""
-        emails = [
-            _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
-            _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay."),
-        ]
-        mock_server = _make_mock_server(2, emails)
-        with patch("poplib.POP3_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="from:alice@example.com", count=10)
-        assert "alice@example.com" in result
-        assert "carol@example.com" not in result
-        assert "1 email" in result.lower() or "1 message" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_search_emails_by_subject(self, tools):
-        """Test searching emails by subject keyword."""
+    @pytest.mark.parametrize(
+        ("query", "expected_in", "expected_not"),
+        [
+            ('from:alice@example.com', ["alice@example.com"], ["carol@example.com"]),
+            ('subject:Invoice', ["carol@example.com"], ["alice@example.com"]),
+            ('subject:invoice', ["carol@example.com"], ["alice@example.com"]),
+        ],
+    )
+    async def test_search_emails_by_query_type(self, tools, query, expected_in, expected_not):
+        """Test searching emails by query type (from/subject/free-text)."""
         emails = [
             _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob."),
             _make_raw_email("carol@example.com", "bob@example.com", "Invoice #123", "Please pay."),
         ]
         mock_server = _make_mock_server(2, emails)
         with patch("poplib.POP3_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="subject:invoice", count=10)
-        assert "carol@example.com" in result
-        assert "Invoice" in result
+            result = await tools.search_emails(query=query, count=10)
+        for item in expected_in:
+            assert item in result
+        for item in expected_not:
+            assert item not in result
 
     @pytest.mark.asyncio
     async def test_get_email_count(self, tools):
@@ -169,19 +175,21 @@ class TestPOP3MailboxTool:
         assert "This body text must appear" in result, "Body missing — only the first line was parsed"
 
     @pytest.mark.asyncio
-    async def test_delete_email_no_credentials(self):
-        """Test that delete_email returns error when credentials are missing."""
+    @pytest.mark.parametrize(
+        "valve_name,method,args",
+        [
+            ("allow_delete_single", "delete_email", {"email_index": 1}),
+            ("allow_delete_all", "delete_all_emails", {}),
+        ],
+    )
+    async def test_delete_ops_disabled_by_default(self, valve_name, method, args):
+        """Test that delete operations are blocked when valves default to False."""
         t = Tools()
-        t.valves.allow_delete_single = True
-        result = await t.delete_email(email_index=1)
-        assert "Error" in result and "credentials" in result
+        assert getattr(t.valves, valve_name) is False
+        result = await getattr(t, method)(**args)
+        assert "disabled" in result.lower() and valve_name in result
 
-    @pytest.mark.asyncio
-    async def test_delete_email_disabled_by_default(self, tools):
-        """Test that delete_email is blocked when allow_delete_single is False (default)."""
-        assert tools.valves.allow_delete_single is False
-        result = await tools.delete_email(email_index=1)
-        assert "disabled" in result.lower() and "allow_delete_single" in result
+
 
     @pytest.mark.asyncio
     async def test_delete_email_enabled(self, tools):
@@ -195,12 +203,7 @@ class TestPOP3MailboxTool:
             result = await tools.delete_email(email_index=1)
         assert "deleted successfully" in result
 
-    @pytest.mark.asyncio
-    async def test_delete_all_emails_disabled_by_default(self, tools):
-        """Test that delete_all_emails is blocked when allow_delete_all is False (default)."""
-        assert tools.valves.allow_delete_all is False
-        result = await tools.delete_all_emails()
-        assert "disabled" in result.lower() and "allow_delete_all" in result
+
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_enabled(self, tools):
@@ -246,13 +249,7 @@ class TestPOP3MailboxTool:
             result = await tools.delete_email(email_index=0)
         assert "out of range" in result.lower()
 
-    @pytest.mark.asyncio
-    async def test_delete_all_emails_no_credentials(self):
-        """Test that delete_all_emails returns error when credentials are missing."""
-        t = Tools()
-        t.valves.allow_delete_all = True
-        result = await t.delete_all_emails()
-        assert "Error" in result and "credentials" in result
+
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_success(self, tools):

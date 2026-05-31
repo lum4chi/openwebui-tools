@@ -19,6 +19,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Union
 
 from pydantic import BaseModel, Field
+from sievelib.managesieve import Client
 
 
 class EncryptionMode(StrEnum):
@@ -31,10 +32,10 @@ class EncryptionMode(StrEnum):
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
 _IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
 
-from sievelib.managesieve import Client  # pyright: ignore[reportMissingImports]
 
-
-def _handle_sieve_list_result(result):
+def _handle_sieve_list_result(
+    result: tuple[str | None, list[str]] | None,
+) -> tuple[str | None, list[str], str | None]:
     """Normalize the result of listscripts().
 
     handles the case where listscripts() returns None (server responded NO).
@@ -529,21 +530,6 @@ class Tools:
             return (
                 "ManageSieve connection succeeded but found no scripts.\n"
                 f"Tried known names: {tried} — none accessible.\n"
-                "Filters may be managed via a server-side system not exposed through ManageSieve."
-            )
-
-            for name in self._COMMON_SIEVE_SCRIPTS:
-                try:
-                    content = client.getscript(name)
-                    client.logout()
-                    return f"=== Found Sieve script: {name} ===\n{content}"
-                except Exception:
-                    pass
-
-            client.logout()
-            return (
-                "ManageSieve connection succeeded but found no scripts.\n"
-                f"Tried known names: {', '.join(self._COMMON_SIEVE_SCRIPTS)} — none accessible.\n"
                 "Filters may be managed via a server-side system not exposed through ManageSieve."
             )
         except Exception as e:

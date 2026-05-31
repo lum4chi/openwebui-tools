@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.1.0
+version: 2.1.1
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -1186,6 +1186,7 @@ class Tools:
         try:
             conn = self._connect()
             conn.create(folder)
+            conn.select(folder, readonly=True)
             conn.close()
             return f"Folder '{folder}' has been created successfully."
 

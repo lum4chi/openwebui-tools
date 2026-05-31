@@ -84,9 +84,9 @@ class TestPOP3MailboxTool:
     @pytest.mark.parametrize(
         ("query", "expected_in", "expected_not"),
         [
-            ('from:alice@example.com', ["alice@example.com"], ["carol@example.com"]),
-            ('subject:Invoice', ["carol@example.com"], ["alice@example.com"]),
-            ('subject:invoice', ["carol@example.com"], ["alice@example.com"]),
+            ("from:alice@example.com", ["alice@example.com"], ["carol@example.com"]),
+            ("subject:Invoice", ["carol@example.com"], ["alice@example.com"]),
+            ("subject:invoice", ["carol@example.com"], ["alice@example.com"]),
         ],
     )
     async def test_search_emails_by_query_type(self, tools, query, expected_in, expected_not):
@@ -189,8 +189,6 @@ class TestPOP3MailboxTool:
         result = await getattr(t, method)(**args)
         assert "disabled" in result.lower() and valve_name in result
 
-
-
     @pytest.mark.asyncio
     async def test_delete_email_enabled(self, tools):
         """Test deleting a specific email when allow_delete_single is True."""
@@ -202,8 +200,6 @@ class TestPOP3MailboxTool:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.delete_email(email_index=1)
         assert "deleted successfully" in result
-
-
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_enabled(self, tools):
@@ -248,8 +244,6 @@ class TestPOP3MailboxTool:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.delete_email(email_index=0)
         assert "out of range" in result.lower()
-
-
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_success(self, tools):

@@ -97,7 +97,7 @@ class TestIMAPMailboxTool:
             ('from:"alice@example.com"', ["alice@example.com"], ["carol@example.com"]),
             ('subject:"Invoice"', ["carol@example.com"], ["alice@example.com"]),
             ('subject:"invoice"', ["carol@example.com"], ["alice@example.com"]),
-            ('invoice for services', ["carol@example.com"], []),
+            ("invoice for services", ["carol@example.com"], []),
         ],
     )
     async def test_search_emails_by_query_type(self, tools, query, expected_in, expected_not):
@@ -199,8 +199,6 @@ class TestIMAPMailboxTool:
             result = await tools.delete_all_emails()
         assert "already empty" in result.lower() or "No emails" in result
 
-
-
     @pytest.mark.asyncio
     async def test_decode_mime_header(self, tools):
         """Test MIME header decoding utility."""
@@ -292,8 +290,6 @@ class TestIMAPMailboxTool:
             result = await tools.delete_email(email_index=1)
         assert "deleted successfully" in result
 
-
-
     @pytest.mark.asyncio
     async def test_delete_all_emails_enabled(self, tools):
         """Test deleting all emails when allow_delete_all is True."""
@@ -314,8 +310,6 @@ class TestIMAPMailboxTool:
         t = Tools()
         assert t.valves.allow_delete_single is False
         assert t.valves.allow_delete_all is False
-
-
 
     @pytest.mark.asyncio
     async def test_archive_email_success(self, tools):
@@ -349,8 +343,6 @@ class TestIMAPMailboxTool:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.archive_email(email_index=1)
         assert "empty" in result.lower() or "Nothing to archive" in result
-
-
 
     @pytest.mark.asyncio
     async def test_archive_default_folder(self, tools):

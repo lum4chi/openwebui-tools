@@ -1240,6 +1240,76 @@ class Tools:
         except Exception as e:
             return f"Error moving email: {str(e)}"
 
+    async def move_emails_by_uid(
+        self,
+        email_uids: list[str] = Field(description="List of IMAP UIDs to move (stable identifiers, never change)"),
+        target_folder: str = Field(
+            description="Target IMAP folder to move the emails to (e.g. 'Projects', 'Spam', 'Archive')"
+        ),
+        folder: str | None = Field(
+            default=None,
+            description="Optional source folder (defaults to valve inbox_folder)",
+        ),
+    ) -> str:
+        """
+        Move multiple emails by their IMAP UID in a single connection.
+
+        UIDs are stable identifiers — they never change for a given message.
+        This is the recommended approach when moving multiple emails, as it
+        avoids issues with index-based methods where indices shift after each move.
+
+        :param email_uids: List of IMAP UIDs to move
+        :param target_folder: Destination IMAP folder name
+        :param folder: Optional source folder override (defaults to inbox_folder valve)
+        """
+        if not self.valves.allow_move:
+            return "Move operations are disabled. Enable 'allow_move' in Valves to use this feature."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        if not email_uids:
+            return "Error: No UIDs provided. Please specify at least one email UID."
+
+        source_folder = self._resolve_folder(folder, fallback=self.valves.inbox_folder)
+
+        try:
+            conn = self._connect()
+            conn.select(source_folder)
+
+            # Ensure target folder exists
+            with suppress(_IMAP_EXCEPTION):
+                conn.create(target_folder)
+
+            moved: list[str] = []
+            failed: list[tuple[str, str]] = []
+            for uid in email_uids:
+                try:
+                    conn.uid("COPY", uid, target_folder)
+                    conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+                    conn.expunge()
+                    moved.append(uid)
+                except Exception as e:
+                    failed.append((uid, str(e)))
+
+            conn.close()
+
+            parts = []
+            parts.append(f"Moved {len(moved)} email(s) from '{source_folder}' to '{target_folder}'.")
+            if moved:
+                parts.append(f"UIDs moved: {', '.join(moved)}")
+            if failed:
+                parts.append(f"Failed to move {len(failed)} email(s):")
+                for uid, err in failed:
+                    parts.append(f"  UID {uid}: {err}")
+            return " ".join(parts)
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            return f"Error moving emails: {str(e)}"
+
     async def create_folder(
         self, folder: str = Field(description="Name of the new IMAP folder to create (e.g., 'Projects/Invoices')")
     ) -> str:

@@ -270,6 +270,7 @@ class TestIMAPMailboxTool:
             ("allow_delete_all", "delete_all_emails", {}),
             ("allow_archive", "archive_email", {"email_index": 1}),
             ("allow_move", "move_email", {"email_index": 1, "target_folder": "Projects"}),
+            ("allow_move", "move_emails_by_uid", {"email_uids": ["1"], "target_folder": "Projects"}),
         ],
     )
     async def test_write_ops_disabled_by_default(self, valve_name, method, args):

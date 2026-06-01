@@ -43,8 +43,8 @@ class TestFolderNotFound:
         assert "NonExistent" in result
 
     @pytest.mark.asyncio
-    async def test_read_email_nonexistent_folder(self, tools):
-        """Test read_email when folder doesn't exist."""
+    async def test_read_emails_nonexistent_folder(self, tools):
+        """Test read_emails when folder doesn't exist."""
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
         mock_server.select.return_value = ("NO", [b"Mailbox doesn't exist"])
@@ -52,7 +52,7 @@ class TestFolderNotFound:
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=1, folder="Fake/Folder")
+            result = await tools.read_emails(uids="1", folder="Fake/Folder")
 
         assert "IMAP Error" in result
         assert "Fake/Folder" in result
@@ -73,8 +73,8 @@ class TestFolderNotFound:
         assert "NonExistent" in result
 
     @pytest.mark.asyncio
-    async def test_delete_email_nonexistent_folder(self, tools):
-        """Test delete_email when folder doesn't exist."""
+    async def test_delete_emails_nonexistent_folder(self, tools):
+        """Test delete_emails when folder doesn't exist."""
         tools.valves.allow_delete_single = True
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
@@ -83,7 +83,7 @@ class TestFolderNotFound:
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_email(email_index=1, folder="NonExistent")
+            result = await tools.delete_emails(uids="1", folder="NonExistent")
 
         assert "IMAP Error" in result
         assert "NonExistent" in result
@@ -105,8 +105,8 @@ class TestFolderNotFound:
         assert "NonExistent" in result
 
     @pytest.mark.asyncio
-    async def test_archive_email_nonexistent_folder(self, tools):
-        """Test archive_email when source folder doesn't exist."""
+    async def test_move_emails_nonexistent_folder(self, tools):
+        """Test move_emails when source folder doesn't exist."""
         tools.valves.allow_move = True
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
@@ -115,27 +115,14 @@ class TestFolderNotFound:
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.archive_email(email_index=1, folder="NonExistent")
+            result = await tools.move_emails(uids="1", target_folder="Archive", folder="NonExistent")
 
         assert "IMAP Error" in result
         assert "NonExistent" in result
 
     @pytest.mark.asyncio
-    async def test_archive_email_passes_quoted_target(self, tools):
-        """archive_email must quote destination folder in conn.uid("COPY")."""
-        from unittest.mock import ANY
-
-        tools.valves.allow_move = True
-        raw = _make_raw_email("test@test.com", "u@test.com", "Test", "Body")
-        emails = [(raw, "1")]
-        mock_server = _make_mock_server(emails)
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            await tools.archive_email(email_index=1, folder="INBOX", target_folder="Archivio Old")
-        mock_server.uid.assert_any_call("COPY", ANY, '"Archivio Old"')
-
-    @pytest.mark.asyncio
-    async def test_move_email_nonexistent_folder(self, tools):
-        """Test move_email when source folder doesn't exist."""
+    async def test_move_emails_nonexistent_folder_uid(self, tools):
+        """Test move_emails when source folder doesn't exist."""
         tools.valves.allow_move = True
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
@@ -144,23 +131,7 @@ class TestFolderNotFound:
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.move_email(email_index=1, target_folder="Archive", folder="NonExistent")
-
-        assert "IMAP Error" in result
-        assert "NonExistent" in result
-
-    @pytest.mark.asyncio
-    async def test_move_emails_by_uid_nonexistent_folder(self, tools):
-        """Test move_emails_by_uid when source folder doesn't exist."""
-        tools.valves.allow_move = True
-        mock_server = MagicMock()
-        mock_server.login.return_value = ("OK", [b"Login successful"])
-        mock_server.select.return_value = ("NO", [b"Mailbox doesn't exist"])
-        mock_server.logout.return_value = ("OK", [b"Logout successful"])
-        mock_server.close.return_value = None
-
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.move_emails_by_uid(email_uids=["1"], target_folder="Archive", folder="NonExistent")
+            result = await tools.move_emails(uids=["1"], target_folder="Archive", folder="NonExistent")
 
         assert "IMAP Error" in result
         assert "NonExistent" in result
@@ -227,19 +198,19 @@ class TestFolderNotFound:
         mock_server.delete.assert_called_once_with('"Servizi Pubblici"')
 
     @pytest.mark.asyncio
-    async def test_move_email_passes_quoted_target_folder(self, tools):
-        """move_email must quote target folder in create() and uid("COPY")."""
+    async def test_move_emails_passes_quoted_target_folder(self, tools):
+        """move_emails must quote target folder in create() and uid("COPY")."""
         tools.valves.allow_move = True
         raw = _make_raw_email("test@test.com", "u@test.com", "Test", "Body")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            await tools.move_email(email_index=1, target_folder="Nuova Cartella", folder="INBOX")
+            await tools.move_emails(uids="1", target_folder="Nuova Cartella", folder="INBOX")
         mock_server.uid.assert_any_call("COPY", ANY, '"Nuova Cartella"')
 
     @pytest.mark.asyncio
-    async def test_move_emails_by_uid_with_space_folder(self, tools):
-        """move_emails_by_uid must quote target folder in create() and uid("COPY")."""
+    async def test_move_emails_with_space_folder(self, tools):
+        """move_emails must quote target folder in create() and uid("COPY")."""
         tools.valves.allow_move = True
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
@@ -251,6 +222,6 @@ class TestFolderNotFound:
         mock_server.logout.return_value = ("OK", [b"Logout successful"])
         mock_server.close.return_value = None
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            await tools.move_emails_by_uid(email_uids=["1", "2"], target_folder="Mia Cartella", folder="INBOX")
+            await tools.move_emails(uids=["1", "2"], target_folder="Mia Cartella", folder="INBOX")
         mock_server.create.assert_called_once_with('"Mia Cartella"')
         mock_server.uid.assert_any_call("COPY", ANY, '"Mia Cartella"')

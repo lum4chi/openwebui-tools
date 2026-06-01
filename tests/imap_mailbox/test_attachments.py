@@ -39,8 +39,8 @@ class TestAttachmentDisplay:
         assert "3 attachment(s)" in result
 
     @pytest.mark.asyncio
-    async def test_read_email_with_attachments(self, tools):
-        """Test that read_email shows attachment info."""
+    async def test_read_emails_with_attachments(self, tools):
+        """Test that read_emails shows attachment info."""
 
         msg = MIMEMultipart("mixed")
         msg["From"] = "sender@test.com"
@@ -57,7 +57,7 @@ class TestAttachmentDisplay:
         emails = [(msg.as_bytes(), "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=1)
+            result = await tools.read_emails(uids="1")
 
         assert "ReadAttach" in result
         assert "Attachments:" in result

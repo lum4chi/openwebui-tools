@@ -26,11 +26,11 @@ class ErrorSpec:
 # Group 1 (6): IMAP exceptions via _IMAP_EXCEPTION() on login
 IMAP_EXCEPTION_TESTS: list[ErrorSpec] = [
     ErrorSpec("list_emails", {"folder": "INBOX", "count": 5}),
-    ErrorSpec("read_email", {"email_index": 1}),
+    ErrorSpec("read_emails", {"uids": "1"}),
     ErrorSpec("search_emails", {"query": "test", "count": 10}),
-    ErrorSpec("delete_email", {"email_index": 1}, valve_overrides={"allow_delete_single": True}),
+    ErrorSpec("delete_emails", {"uids": "1"}, valve_overrides={"allow_delete_single": True}),
     ErrorSpec("delete_all_emails", {}, valve_overrides={"allow_delete_all": True}),
-    ErrorSpec("archive_email", {"email_index": 1}, valve_overrides={"allow_move": True}),
+    ErrorSpec("move_emails", {"uids": "1", "target_folder": "Archive"}, valve_overrides={"allow_move": True}),
 ]
 
 
@@ -44,9 +44,9 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
         mock_login_exception_msg="Generic error",
     ),
     ErrorSpec(
-        "read_email",
-        {"email_index": 1},
-        expected_error="Error reading email",
+        "read_emails",
+        {"uids": "1"},
+        expected_error="Error reading emails",
         exception_class=NotImplementedError,
         mock_login_exception_msg="Generic error",
     ),
@@ -58,9 +58,9 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
         mock_login_exception_msg="Generic error",
     ),
     ErrorSpec(
-        "delete_email",
-        {"email_index": 1},
-        expected_error="Error deleting email",
+        "delete_emails",
+        {"uids": "1"},
+        expected_error="Error deleting emails",
         valve_overrides={"allow_delete_single": True},
         exception_class=NotImplementedError,
         mock_login_exception_msg="Generic error",
@@ -74,9 +74,9 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
         mock_login_exception_msg="Generic error",
     ),
     ErrorSpec(
-        "archive_email",
-        {"email_index": 1},
-        expected_error="Error archiving email",
+        "move_emails",
+        {"uids": "1", "target_folder": "Archive"},
+        expected_error="Error moving emails",
         valve_overrides={"allow_move": True},
         exception_class=NotImplementedError,
         mock_login_exception_msg="Generic error",
@@ -87,11 +87,11 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
 # Group 3 (6): Missing server
 SERVER_NOT_CONFIGURED_TESTS: list[ErrorSpec] = [
     ErrorSpec("list_emails", {"folder": "INBOX", "count": 5}),
-    ErrorSpec("read_email", {"email_index": 1}),
+    ErrorSpec("read_emails", {"uids": "1"}),
     ErrorSpec("search_emails", {"query": "test", "count": 10}),
-    ErrorSpec("delete_email", {"email_index": 1}, valve_overrides={"allow_delete_single": True}),
+    ErrorSpec("delete_emails", {"uids": "1"}, valve_overrides={"allow_delete_single": True}),
     ErrorSpec("delete_all_emails", {}, valve_overrides={"allow_delete_all": True}),
-    ErrorSpec("archive_email", {"email_index": 1}, valve_overrides={"allow_move": True}),
+    ErrorSpec("move_emails", {"uids": "1", "target_folder": "Archive"}, valve_overrides={"allow_move": True}),
 ]
 
 

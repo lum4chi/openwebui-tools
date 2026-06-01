@@ -10,11 +10,11 @@ from imap_mailbox import Tools
 
 
 class TestDeleteEmailEmptyMailbox:
-    """Test delete_email when mailbox is empty (lines 859-860)."""
+    """Test delete_emails when mailbox is empty."""
 
     @pytest.mark.asyncio
-    async def test_delete_email_empty_mailbox(self):
-        """Test delete_email when mailbox is empty (lines 859-860)."""
+    async def test_delete_emails_empty_mailbox(self):
+        """Test delete_emails when mailbox is empty."""
         t = Tools()
         t.valves.imap_server = "mail.example.com"
         t.valves.username = "testuser"
@@ -35,5 +35,5 @@ class TestDeleteEmailEmptyMailbox:
         mock_server.uid.side_effect = uid_side_effect
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await t.delete_email(email_index=1)
-        assert "empty" in result.lower() or "Nothing to delete" in result
+            result = await t.delete_emails(uids="1")
+        assert "permanently deleted" in result.lower()

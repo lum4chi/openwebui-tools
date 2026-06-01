@@ -110,3 +110,24 @@ class TestIMAPSearchExceptionPaths:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="body", count=5, folder="INBOX")
         assert "email" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_search_emails_fetch_parse_failure_in_uid_path(self, tools):
+        """Test search_emails where UID-based fetch (non-free-text) raises exception during index access."""
+        mock_server = MagicMock()
+
+        def uid_side_effect(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1"])
+            elif cmd == "fetch":
+                # Return a single bytes object instead of the expected [prefix, raw_bytes] list
+                return ("OK", [b"single-bytes-object"])
+            return ("OK", [b""])
+
+        mock_server.uid.side_effect = uid_side_effect
+        mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = ("OK", [b"1"])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.search_emails(query='from:"anyone@example.com"', count=5, folder="INBOX")
+        assert "No emails found matching criteria" in result

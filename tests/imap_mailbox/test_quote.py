@@ -1,5 +1,7 @@
 """Tests for the _quote() helper that handles IMAP string literal escaping."""
 
+from pydantic import Field
+
 from imap_mailbox import _quote
 
 
@@ -39,3 +41,21 @@ class TestQuote:
 
     def test_numeric_folder(self):
         assert _quote("123") == '"123"'
+
+    def test_quote_fieldinfo_with_string_default(self):
+        from pydantic.fields import FieldInfo
+
+        field = Field(default="TestFolder")
+        assert isinstance(field, FieldInfo)
+        assert _quote(field) == '"TestFolder"'
+
+    def test_quote_fieldinfo_none_default(self):
+        from pydantic.fields import FieldInfo
+
+        field = Field(default=None)
+        assert isinstance(field, FieldInfo)
+        result = _quote(field)
+        assert result is None
+
+    def test_quote_none_input(self):
+        assert _quote(None) is None

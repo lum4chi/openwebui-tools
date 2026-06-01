@@ -25,13 +25,13 @@ class TestFolderParamOverride:
         assert "Hello" in result
 
     @pytest.mark.asyncio
-    async def test_read_email_folder_param(self, tools):
-        """Test read_email respects explicit folder param."""
+    async def test_read_emails_folder_param(self, tools):
+        """Test read_emails respects explicit folder param."""
         raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=1, folder="Custom/Folder")
+            result = await tools.read_emails(uids="1", folder="Custom/Folder")
         assert "Custom/Folder" in result
         assert "Test" in result
 

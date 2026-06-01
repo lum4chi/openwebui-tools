@@ -30,45 +30,45 @@ class TestIMAPListEmailsCredentialError:
 
 
 class TestIMAPReadInboxEmailNoCredentials:
-    """Test read_email with inbox folder returns error when credentials are missing."""
+    """Test read_emails with inbox folder returns error when credentials are missing."""
 
     @pytest.mark.asyncio
     async def test_read_inbox_email_no_credentials(self):
-        """Test read_email with inbox folder returns error when credentials are missing."""
+        """Test read_emails with inbox folder returns error when credentials are missing."""
         t = Tools()
-        result = await t.read_email(email_index=1, folder="INBOX")
+        result = await t.read_emails(uids="1", folder="INBOX")
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
     async def test_read_inbox_email_no_server(self):
-        """Test read_email with inbox folder returns error when imap_server is not set."""
+        """Test read_emails with inbox folder returns error when imap_server is not set."""
         t = Tools()
         t.valves.username = "testuser"
         t.valves.password = "testpass"
-        result = await t.read_email(email_index=1, folder="INBOX")
+        result = await t.read_emails(uids="1", folder="INBOX")
         assert "Error" in result and "server" in result
 
 
-class TestIMAPReadEmailCredentials:
-    """Test read_email missing credentials guard paths."""
+class TestIMAPReadEmailsCredentials:
+    """Test read_emails missing credentials guard paths."""
 
     @pytest.mark.asyncio
-    async def test_read_email_no_username(self):
-        """Test read_email returns error when username not configured (line 621)."""
+    async def test_read_emails_no_username(self):
+        """Test read_emails returns error when username not configured."""
         t = Tools()
         t.valves.username = ""
         t.valves.password = "p"
         t.valves.imap_server = "mail.example.com"
-        result = await t.read_email(email_index=1)
+        result = await t.read_emails(uids="1")
         assert "credentials" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_read_email_no_server(self):
-        """Test read_email returns error when server not configured (line 623)."""
+    async def test_read_emails_no_server(self):
+        """Test read_emails returns error when server not configured."""
         t = Tools()
         t.valves.username = "u"
         t.valves.password = "p"
-        result = await t.read_email(email_index=1)
+        result = await t.read_emails(uids="1")
         assert "server is not configured" in result
 
 
@@ -93,23 +93,23 @@ class TestIMAPSearchNoCredentials:
 
 
 class TestIMAPDeleteNoCredentials:
-    """Test delete_email credentials edge case."""
+    """Test delete_emails credentials edge case."""
 
     @pytest.mark.asyncio
-    async def test_delete_email_no_server(self):
-        """Test delete_email returns server error when imap_server not set."""
+    async def test_delete_emails_no_server(self):
+        """Test delete_emails returns server error when imap_server not set."""
         t = Tools()
         t.valves.allow_delete_single = True
         t.valves.username = "testuser"
         t.valves.password = "testpass"
-        result = await t.delete_email(email_index=1)
+        result = await t.delete_emails(uids="1")
         assert "Error" in result and "server" in result
 
-    """Test delete_email missing credentials with generic exception path."""
+    """Test delete_emails missing credentials with generic exception path."""
 
     @pytest.mark.asyncio
-    async def test_delete_email_missing_credentials_generic(self, tools):
-        """Test delete_email when username is empty → generic Exception catch (lines 846-848)."""
+    async def test_delete_emails_missing_credentials_generic(self, tools):
+        """Test delete_emails when username is empty → generic Exception catch."""
         t = Tools()
         t.valves.allow_delete_single = True
         t.valves.username = ""
@@ -117,4 +117,4 @@ class TestIMAPDeleteNoCredentials:
         t.valves.imap_server = "mail.example.com"
         mock_server = MagicMock()
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            await t.delete_email(1)
+            await t.delete_emails(uids="1")

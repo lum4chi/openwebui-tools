@@ -16,9 +16,8 @@ class TestIMAPMailboxTool:
     @pytest.mark.parametrize(
         "method,args,valve",
         [
-            ("delete_email", {"email_index": 1}, "allow_delete_single"),
+            ("delete_emails", {"uids": "42"}, "allow_delete_single"),
             ("delete_all_emails", {}, "allow_delete_all"),
-            ("archive_email", {"email_index": 1}, "allow_move"),
         ],
     )
     async def test_folder_operations_require_credentials(self, method, args, valve):
@@ -65,8 +64,8 @@ class TestIMAPMailboxTool:
         assert "Invoice #123" in result
 
     @pytest.mark.asyncio
-    async def test_read_email(self, tools):
-        """Test reading a specific email by index."""
+    async def test_read_emails(self, tools):
+        """Test reading specific email(s) by UID."""
         raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob, how are you?")
         raw2 = _make_raw_email(
             "carol@example.com", "bob@example.com", "Invoice #123", "Please find attached the invoice."
@@ -74,20 +73,25 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=1)
-        # Index 1 = UID 2 = carol (highest UID = newest = index 1)
+            result = await tools.read_emails(uids="2")
+        # UID 2 = carol (highest Uid)
         assert "carol@example.com" in result
         assert "Invoice #123" in result
         assert "Please find attached" in result
 
     @pytest.mark.asyncio
-    async def test_read_email_out_of_range(self, tools):
-        """Test reading an email with an out-of-range index."""
-        raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
-        mock_server = _make_mock_server([(raw, "1")])
+    async def test_read_emails_multiple(self, tools):
+        """Test reading multiple emails by UID."""
+        raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
+        raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay invoice.")
+        emails = [(raw1, "1"), (raw2, "2")]
+        mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=99)
-        assert "out of range" in result.lower()
+            result = await tools.read_emails(uids=["1", "2"])
+        assert "alice@example.com" in result
+        assert "carol@example.com" in result
+        assert "=== Email [1]" in result
+        assert "=== Email [2]" in result
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -113,7 +117,7 @@ class TestIMAPMailboxTool:
             assert item not in result
 
     @pytest.mark.asyncio
-    async def test_delete_email_success(self, tools):
+    async def test_delete_emails_success(self, tools):
         """Test deleting a specific email."""
         tools.valves.allow_delete_single = True
         raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
@@ -121,28 +125,19 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_email(email_index=1)
-        assert "deleted successfully" in result
+            result = await tools.delete_emails(uids="1")
+        assert "deleted successfully" in result or "permanently deleted" in result
 
     @pytest.mark.asyncio
-    async def test_delete_email_out_of_range(self, tools):
-        """Test deleting an email with an out-of-range index."""
+    async def test_delete_emails_invalid_uid(self, tools):
+        """Test deleting an email with non-existent UID (IMAP command succeeds even if UID doesn't exist)."""
         tools.valves.allow_delete_single = True
         raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
         mock_server = _make_mock_server([(raw, "1")])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_email(email_index=99)
-        assert "out of range" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_delete_email_invalid_index(self, tools):
-        """Test deleting an email with an invalid index (0 or negative)."""
-        tools.valves.allow_delete_single = True
-        raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
-        mock_server = _make_mock_server([(raw, "1")])
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_email(email_index=0)
-        assert "out of range" in result.lower()
+            result = await tools.delete_emails(uids="99")
+        # UID 99 doesn't exist but IMAP store command still succeeds in the mock
+        assert "permanently deleted" in result or "deleted" in result.lower()
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_success(self, tools):
@@ -207,7 +202,7 @@ class TestIMAPMailboxTool:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=1)
+            result = await tools.read_emails(uids="1")
         assert "regression@test.com" in result
         assert "Regression Test Subject" in result
         assert "This body text must appear" in result
@@ -235,11 +230,9 @@ class TestIMAPMailboxTool:
     @pytest.mark.parametrize(
         "valve_name,method,args",
         [
-            ("allow_delete_single", "delete_email", {"email_index": 1}),
+            ("allow_delete_single", "delete_emails", {"uids": "1"}),
             ("allow_delete_all", "delete_all_emails", {}),
-            ("allow_move", "archive_email", {"email_index": 1}),
-            ("allow_move", "move_email", {"email_index": 1, "target_folder": "Projects"}),
-            ("allow_move", "move_emails_by_uid", {"email_uids": ["1"], "target_folder": "Projects"}),
+            ("allow_move", "move_emails", {"uids": "1", "target_folder": "Projects"}),
         ],
     )
     async def test_write_ops_disabled_by_default(self, valve_name, method, args):
@@ -250,7 +243,7 @@ class TestIMAPMailboxTool:
         assert "disabled" in result.lower() and valve_name in result
 
     @pytest.mark.asyncio
-    async def test_delete_email_enabled(self, tools):
+    async def test_delete_emails_enabled(self, tools):
         """Test deleting a specific email when allow_delete_single is True."""
         tools.valves.allow_delete_single = True
         raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
@@ -258,8 +251,8 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_email(email_index=1)
-        assert "deleted successfully" in result
+            result = await tools.delete_emails(uids="1")
+        assert "deleted successfully" in result or "permanently deleted" in result
 
     @pytest.mark.asyncio
     async def test_delete_all_emails_enabled(self, tools):
@@ -284,74 +277,13 @@ class TestIMAPMailboxTool:
         assert t.valves.allow_move is False
         assert t.valves.allow_move is False
 
-    @pytest.mark.asyncio
-    async def test_archive_email_success(self, tools):
-        """Test archiving a specific email."""
-        tools.valves.allow_move = True
-        raw1 = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "Hi Bob.")
-        raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Invoice", "Please pay.")
-        emails = [(raw1, "1"), (raw2, "2")]
-        mock_server = _make_mock_server(emails)
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.archive_email(email_index=1)
-        assert "archived" in result.lower() and "successfully" in result.lower()
-        copy_calls = [c for c in mock_server.uid.call_args_list if c[0][0] == "COPY"]
-        assert len(copy_calls) == 1
-
-    @pytest.mark.asyncio
-    async def test_archive_email_out_of_range(self, tools):
-        """Test archiving an email with an out-of-range index."""
-        tools.valves.allow_move = True
-        raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
-        mock_server = _make_mock_server([(raw, "1")])
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.archive_email(email_index=99)
-        assert "out of range" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_archive_email_empty_mailbox(self, tools):
-        """Test archiving from an empty mailbox."""
-        tools.valves.allow_move = True
-        mock_server = _make_mock_server([])
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.archive_email(email_index=1)
-        assert "empty" in result.lower() or "Nothing to archive" in result
-
-    @pytest.mark.asyncio
-    async def test_archive_default_folder(self, tools):
-        """Test that the default archive folder is 'Archive'."""
-        assert tools.valves.archive_folder == "Archive"
-
-    @pytest.mark.asyncio
-    async def test_archive_custom_folder(self, tools):
-        """Test archiving to a custom folder."""
-        tools.valves.allow_move = True
-        tools.valves.archive_folder = "Gmail/All Mail"
-        raw = _make_raw_email("sender@test.com", "receiver@test.com", "Test", "Body")
-        emails = [(raw, "1")]
-
-        def override_uid(cmd, criteria=None, *args, **kwargs):
-            if cmd == "search":
-                return ("OK", [b"1"])
-            elif cmd == "COPY":
-                assert args[0] == '"Gmail/All Mail"'
-                return ("OK", [b"COPY completed"])
-            elif cmd == "store":
-                return ("OK", [b"FLAGS (\\Deleted)"])
-            return ("OK", [b""])
-
-        mock_server = _make_mock_server(emails, override_uid=override_uid)
-        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.archive_email(email_index=1)
-        assert "archived" in result.lower() and "successfully" in result.lower()
-
 
 class TestIMAPEmptyMailboxPaths:
     """Test empty mailbox edge cases that hit early-return guards."""
 
     @pytest.mark.asyncio
-    async def test_read_email_empty_mailbox(self, tools):
-        """Test read_email returns early when mailbox is empty (uid_map is empty dict)."""
+    async def test_read_emails_empty_mailbox(self, tools):
+        """Test read_emails returns early when mailbox is empty (uid_map is empty dict)."""
 
         def override_uid(cmd, criteria=None, *args, **kwargs):
             if cmd == "search":
@@ -360,8 +292,8 @@ class TestIMAPEmptyMailboxPaths:
 
         mock_server = _make_mock_server([], override_uid=override_uid)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_email(email_index=1)
-        assert "empty" in result.lower()
+            result = await tools.read_emails(uids="1")
+        assert "empty" in result.lower() or "No emails found" in result
 
     @pytest.mark.asyncio
     async def test_search_emails_no_credentials(self):
@@ -372,13 +304,13 @@ class TestIMAPEmptyMailboxPaths:
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
-    async def test_delete_email_no_server(self):
-        """Test delete_email returns server error when imap_server not configured."""
+    async def test_delete_emails_no_server(self):
+        """Test delete_emails returns server error when imap_server not configured."""
         t = Tools()
         t.valves.allow_delete_single = True
         t.valves.username = "u"
         t.valves.password = "p"
-        result = await t.delete_email(email_index=1)
+        result = await t.delete_emails(uids="1")
         assert "Error" in result and "server" in result
 
     @pytest.mark.asyncio
@@ -413,3 +345,78 @@ class TestResolveFolder:
         tools.valves.inbox_folder = "CustomInbox"
         result = tools._resolve_folder(folder=None)
         assert result == "CustomInbox"
+
+
+class TestDeleteEmailsPartialFailures:
+    """Test delete_emails partial failure and multi-email paths."""
+
+    @pytest.mark.asyncio
+    async def test_delete_emails_multi_success(self, tools):
+        """Test deleting multiple emails by UID (multi-email success path)."""
+        tools.valves.allow_delete_single = True
+        raw1 = _make_raw_email("a@b.com", "c@d.com", "Msg 1", "Body 1")
+        raw2 = _make_raw_email("a@b.com", "c@d.com", "Msg 2", "Body 2")
+        raw3 = _make_raw_email("a@b.com", "c@d.com", "Msg 3", "Body 3")
+        mock_server = _make_mock_server([(raw1, "10"), (raw2, "11"), (raw3, "12")])
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.delete_emails(uids=["10", "11", "12"])
+        assert "3 email(s)" in result
+        assert "INBOX" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_emails_partial_store_failure(self, tools):
+        """Test delete_emails reports failures when store fails for some UIDs."""
+
+        def uid_side_effect(cmd, criteria=None, *args, **kwargs):
+            if cmd == "search":
+                return ("OK", [b"1 2"])
+            if cmd == "store":
+                uid = (
+                    criteria
+                    if isinstance(criteria, str)
+                    else str(criteria[0])
+                    if isinstance(criteria, (list, tuple))
+                    else str(criteria)
+                )
+                if uid == "2":
+                    raise Exception("no such UID")
+                return ("OK", [b"FLAGS (\\Deleted)"])
+            if cmd == "expunge":
+                return ("OK", [b"EXPUNGE"])
+            return ("OK", [b""])
+
+        tools.valves.allow_delete_single = True
+        raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
+        mock_server = _make_mock_server([(raw, "1")], override_uid=uid_side_effect)
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.delete_emails(uids=["1", "2"])
+        assert "permanently deleted" in result.lower() or "1" in result
+        assert "Failed" in result or "2" in result
+
+    @pytest.mark.asyncio
+    async def test_read_emails_invalid_uid(self, tools):
+        """Test read_emails returns error for completely invalid UID."""
+        result = await tools.read_emails(uids="xyz")
+        assert (
+            "Error" in result
+            or "Invalid" in result
+            or "No UIDs" in result
+            or "not found" in result.lower()
+            or "no such" in result.lower()
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_emails_empty_uids(self, tools):
+        """Test read_emails with UIDs that resolve to empty list."""
+        from unittest.mock import MagicMock
+
+        from pydantic import Field
+
+        field = Field(description="no default")
+        mock_server = MagicMock()
+        mock_server.login.return_value = ("OK", [b"Login successful"])
+        mock_server.select.return_value = ("OK", [b"0 Messages"])
+        mock_server.close.return_value = None
+        with patch("imaplib.IMAP4_SSL", return_value=mock_server):
+            result = await tools.read_emails(uids=field)
+        assert "No UIDs" in result

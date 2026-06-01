@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.4.1
+version: 3.0.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -539,7 +539,7 @@ class Tools:
         happens, extract the default value (or return fallback if the FieldInfo
         has no default). Normal values pass through unchanged.
         """
-        if isinstance(value, (str, int)):
+        if isinstance(value, (str, int, list)):
             return value
         default = getattr(value, "default", None)
         if default is not PydanticUndefined:
@@ -568,23 +568,41 @@ class Tools:
 
     def _resolve_folder(self, folder: str | None = None, fallback: str | None = None) -> str:
         """Return the effective folder name; falls back to valve config."""
-        if folder:
+        if isinstance(folder, str) and folder:
             return folder
         return fallback or (getattr(self.valves, "inbox_folder", None) or "INBOX")
 
-    def _fetch_email_by_uid(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, uid: str) -> dict | None:
-        """Fetch and parse a single email by UID. Returns None on failure."""
-        try:
-            _, raw_data = conn.uid("fetch", uid, "(RFC822)")
-        except Exception:
-            return None
-        if not raw_data or len(raw_data) == 0:
-            return None
-        raw_bytes = raw_data[0][1]
-        try:
-            return self._parse_email(raw_bytes)
-        except Exception:
-            return None
+    def _normalize_uids(self, param: Any) -> list[str]:
+        """Accept str | list[str] | FieldInfo, always return a list of UID strings.
+
+        Handles Pydantic FieldInfo wrapping from Open WebUI and comma-separated UID strings.
+        """
+        resolved = self._resolve_fieldinfo(param, None)
+        if resolved is None:
+            return []
+        if isinstance(resolved, str):
+            # Handle comma-separated UIDs (e.g., "1,2,3")
+            return [u.strip() for u in resolved.split(",") if u.strip()]
+        return [str(u) for u in resolved]
+
+    def _fetch_emails_by_uid(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, uids: list[str]) -> list[dict]:
+        """Fetch and parse multiple emails by UID. Returns list of parsed dicts."""
+        results = []
+        for uid in uids:
+            try:
+                _, raw_data = conn.uid("fetch", uid, "(RFC822)")
+            except Exception:
+                continue
+            if not raw_data or len(raw_data) == 0:
+                continue
+            try:
+                raw_bytes = raw_data[0][1]
+                parsed = self._parse_email(raw_bytes)
+                parsed["uid"] = uid
+                results.append(parsed)
+            except Exception:
+                continue
+        return results
 
     async def list_emails(
         self,
@@ -668,17 +686,16 @@ class Tools:
         except Exception as e:
             return f"Error connecting to IMAP server '{self.valves.imap_server}': {str(e)}"
 
-    async def read_email(
+    async def read_emails(
         self,
-        email_index: int = Field(description="Index of the email to read (1-based, 1 = most recent by UID)"),
-        folder: str | None = Field(
-            default=None, description="Optional IMAP folder to read from (uses valve 'folder' by default)"
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to read. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs (e.g. '42,100,205')."
         ),
+        folder: str | None = Field(default=None, description="Optional IMAP folder to read from"),
     ) -> str:
         """
-        Read a specific email by its index in the mailbox.
-        :param email_index: 1-based index (1 = most recent email by UID)
-        :param folder: Optional folder override (e.g. 'Archive', 'Sent'). Defaults to valve setting.
+        Read specific email(s) by their IMAP UID(s).
         """
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
@@ -691,51 +708,44 @@ class Tools:
             conn = self._connect()
             self._select_folder(conn, target_folder, readonly=True)
 
-            uid_map = self._refresh_uid_index(conn)
+            uids_list = self._normalize_uids(uids)
 
-            if not uid_map:
+            if not uids_list:
                 self._safe_close(conn)
-                return f"Error: Mailbox '{target_folder}' is empty. No emails to read."
+                return "Error: No UIDs provided. Specify at least one email UID."
 
-            # Get the UID for this index (uid_map = {uid: index} => build reversed)
-            try:
-                uid_map_rev: dict[int, str] = {}
-                for uid_str, pos in uid_map.items():
-                    uid_map_rev[pos] = uid_str
-                uid = uid_map_rev[email_index]  # type: ignore[typeddict-item]
-            except (KeyError, TypeError):
-                self._safe_close(conn)
-                return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
-
-            _, raw_data = conn.uid("fetch", uid, "(RFC822)")  # type: ignore[arg-type]
-            raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
-            parsed = self._parse_email(raw_bytes)
-
-            total_count = len(uid_map)
+            emails = self._fetch_emails_by_uid(conn, uids_list)
             self._safe_close(conn)
 
-            attachment_info = ""
-            if parsed["has_attachments"]:
-                attachment_info = f"\n  Attachments: {parsed['attachment_count']} file(s) attached"
+            if not emails:
+                return f"No emails found for the specified UID(s) in '{target_folder}'."
 
-            result = (
-                f"=== Email [{uid}]/{total_count} in '{target_folder}' ===\n"
-                f"  From:      {parsed['from']}\n"
-                f"  To:        {parsed['to']}\n"
-                f"  Subject:   {parsed['subject']}\n"
-                f"  Date:      {parsed['date']}\n"
-                f"  UID:       {uid}\n"
-                f"  Message-ID:{parsed['message_id']}\n"
-                f"{attachment_info}\n"
-                f"  --- Body ---\n"
-                f"  {parsed['body']}"
-            )
-            return result
+            results = []
+            for parsed in emails:
+                attachment_info = ""
+                if parsed["has_attachments"]:
+                    attachment_info = f"\n  Attachments: {parsed['attachment_count']} file(s) attached"
+
+                section = (
+                    f"=== Email [{parsed['uid']}] in '{target_folder}' ===\n"
+                    f"  From:      {parsed['from']}\n"
+                    f"  To:        {parsed['to']}\n"
+                    f"  Subject:   {parsed['subject']}\n"
+                    f"  Date:      {parsed['date']}\n"
+                    f"  UID:       {parsed['uid']}\n"
+                    f"  Message-ID:{parsed['message_id']}\n"
+                    f"{attachment_info}\n"
+                    f"  --- Body ---\n"
+                    f"  {parsed['body']}"
+                )
+                results.append(section)
+
+            return "\n---\n".join(results)
 
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}"
         except Exception as e:
-            return f"Error reading email: {str(e)}"
+            return f"Error reading emails: {str(e)}"
 
     async def search_emails(
         self,
@@ -841,10 +851,15 @@ class Tools:
                 # Fetch all candidate emails (limited by count)
                 matches = []
                 for uid in candidate_uids[:count]:
-                    parsed = self._fetch_email_by_uid(conn, uid)
-                    if parsed is not None:
-                        parsed["uid"] = uid
-                        matches.append(parsed)
+                    try:
+                        _, raw_data = conn.uid("fetch", uid, "(RFC822)")
+                        raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                        parsed = self._parse_email(raw_bytes)
+                        if parsed is not None:
+                            parsed["uid"] = uid
+                            matches.append(parsed)
+                    except Exception:
+                        continue
                     else:
                         continue
 
@@ -875,30 +890,21 @@ class Tools:
         except Exception as e:
             return f"Error searching emails: {str(e)}"
 
-    async def delete_email(
+    async def delete_emails(
         self,
-        email_index: int = Field(description="Index of the email to delete (1-based, 1 = most recent by UID)"),
-        folder: str | None = Field(
-            default=None,
-            description="Optional folder to delete from. Defaults to inbox_folder valve.",
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to permanently delete. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs. WARNING: This is irreversible — emails cannot be recovered."
         ),
+        folder: str | None = Field(default=None, description="Optional folder to delete from"),
     ) -> str:
         """
-        Permanently delete a specific email from the mailbox.
-
-        This permanently removes the email — it is not moved to trash or archive,
-        and cannot be recovered after this operation.
-
-        If you want a reversible action, use ``move_email`` to move the message
-        to Trash or another folder first instead of deleting it.
-
-        :param email_index: 1-based index (1 = most recent email by UID)
-        :param folder: Optional folder override (defaults to inbox_folder valve).
+        Permanently delete email(s) by their IMAP UID(s).
         """
         if not self.valves.allow_delete_single:
             return (
                 "Delete operations are disabled. Enable 'allow_delete_single' in Valves. "
-                "Permanent deletion is blocked for safety—to move this email to Trash instead, use ``move_email`` with ``target_folder`` "
+                "Permanent deletion is blocked for safety—to move email(s) to Trash instead, use ``move_emails`` with ``target_folder`` "
                 "set to your trash folder (e.g. 'Trash' or 'Deleted Items')."
             )
         if not self.valves.username or not self.valves.password:
@@ -907,36 +913,41 @@ class Tools:
             return "Error: IMAP server is not configured in Valves."
 
         target_folder = self._resolve_folder(folder)
+        uids_list = self._normalize_uids(uids)
 
         try:
             conn = self._connect()
             self._select_folder(conn, target_folder)
 
-            uid_map = self._refresh_uid_index(conn)
+            deleted: list[str] = []
+            failed: list[tuple[str, str]] = []
+            for uid in uids_list:
+                try:
+                    conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
+                    conn.expunge()
+                    deleted.append(uid)
+                except Exception as e:
+                    failed.append((uid, str(e)))
 
-            if not uid_map:
-                self._safe_close(conn)
-                return f"Error: Mailbox '{target_folder}' is empty. Nothing to delete."
-
-            try:
-                uid_map_rev: dict[int, str] = {}
-                for uid_str, pos in uid_map.items():
-                    uid_map_rev[pos] = uid_str
-                uid = uid_map_rev[email_index]
-            except (KeyError, TypeError):
-                self._safe_close(conn)
-                return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
-
-            # Mark as deleted and expunge
-            conn.uid("store", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
-            conn.expunge()
             self._safe_close(conn)
-            return f"Email [{uid}] in '{target_folder}' has been deleted successfully."
+
+            parts = []
+            if len(deleted) == 1:
+                parts.append(f"Email [{deleted[0]}] permanently deleted from '{target_folder}'.")
+            elif deleted:
+                parts.append(f"{len(deleted)} email(s) permanently deleted from '{target_folder}'.")
+                parts.append(f"UIDs deleted: {', '.join(deleted)}")
+
+            if failed:
+                parts.append(f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}")
+
+            result = "\n".join(parts) if len(parts) > 1 else parts[0]
+            return result
 
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}"
         except Exception as e:
-            return f"Error deleting email: {str(e)}"
+            return f"Error deleting emails: {str(e)}"
 
     async def delete_all_emails(
         self,
@@ -949,15 +960,14 @@ class Tools:
         Permanently delete **all** emails from a mailbox folder.
 
         This permanently removes every message — they are not moved to trash,
-        and cannot be recovered. Use ``move_email`` or ``move_emails_by_uid``
-        for reversible batch moves instead.
+        and cannot be recovered. Use ``move_emails`` for reversible batch moves instead.
 
         :param folder: Optional folder override (defaults to inbox_folder valve).
         """
         if not self.valves.allow_delete_all:
             return (
                 "Delete-all operations are disabled. Enable 'allow_delete_all' in Valves. "
-                "Permanent deletion of all emails is blocked for safety—to move emails in bulk, use ``move_emails_by_uid`` to move them to "
+                "Permanent deletion of all emails is blocked for safety—to move emails in bulk, use ``move_emails`` to move them to "
                 "Trash or another folder."
             )
         if not self.valves.username or not self.valves.password:
@@ -975,7 +985,7 @@ class Tools:
 
             if not uid_map:
                 self._safe_close(conn)
-                return f"Mailbox '{target_folder}' is already empty. No emails to delete. To move emails to trash instead, use ``move_emails_by_uid`` with ``target_folder`` set to your trash folder."
+                return f"Mailbox '{target_folder}' is already empty. No emails to delete. To move emails to trash instead, use ``move_emails`` with ``target_folder`` set to your trash folder."
 
             uid_list = list(uid_map.keys())
             for uid in uid_list:
@@ -990,80 +1000,17 @@ class Tools:
         except Exception as e:
             return f"Error deleting emails: {str(e)}"
 
-    async def archive_email(
+    async def move_emails(
         self,
-        email_index: int = Field(description="Index of the email to archive (1-based, 1 = most recent by UID)"),
-        folder: str | None = Field(
-            default=None,
-            description="Optional source folder. Defaults to inbox_folder valve.",
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to move. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs (e.g. '42,100')."
         ),
-        target_folder: str | None = None,
+        target_folder: str = Field(description="Target IMAP folder for the moved emails"),
+        folder: str | None = Field(default=None, description="Optional source folder (defaults to inbox_folder valve)"),
     ) -> str:
         """
-        Archive a specific email by moving it to the configured archive folder.
-        :param email_index: 1-based index (1 = most recent email by UID)
-        :param folder: Optional source folder override (defaults to inbox_folder valve).
-        :param target_folder: Optional destination archive folder (defaults to archive_folder valve).
-        """
-        if not self.valves.allow_move:
-            return "Archive operations are disabled. Enable 'allow_move' in Valves to use this feature."
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        source_folder = self._resolve_folder(folder)
-        dst_folder = target_folder or self.valves.archive_folder
-
-        try:
-            conn = self._connect()
-            self._select_folder(conn, source_folder)
-
-            uid_map = self._refresh_uid_index(conn)
-
-            if not uid_map:
-                self._safe_close(conn)
-                return f"Error: Mailbox '{source_folder}' is empty. Nothing to archive."
-
-            try:
-                reversed_map: dict[int, str] = {v: k for k, v in uid_map.items()}
-                uid = reversed_map[email_index]
-            except (KeyError, TypeError):
-                self._safe_close(conn)
-                return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
-
-            conn.uid("COPY", uid, _quote(dst_folder))  # pyright: ignore[reportArgumentType]
-            conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
-            conn.expunge()
-            self._safe_close(conn)
-            return f"Email [{uid}] has been archived to '{dst_folder}' successfully."
-
-        except _IMAP_EXCEPTION as e:
-            return f"IMAP Error: {str(e)}"
-        except Exception as e:
-            return f"Error archiving email: {str(e)}"
-
-    async def move_email(
-        self,
-        email_index: int = Field(description="Index of the email to move (1-based, 1 = most recent in source folder)"),
-        target_folder: str = Field(
-            description="Target IMAP folder to move the email to (e.g. 'Projects', 'Spam', 'Archive')"
-        ),
-        folder: str | None = Field(
-            default=None,
-            description="Optional source folder (defaults to valve inbox_folder)",
-        ),
-    ) -> str:
-        """
-        Move an email from one IMAP folder to another.
-
-        Uses COPY + STORE \\Deleted + expunge pattern since UID MOVE
-        (RFC 6851) is not universally supported. This is the same approach
-        used by archive_email.
-
-        :param email_index: 1-based index in source folder (1 = most recent)
-        :param target_folder: Destination IMAP folder name
-        :param folder: Optional source folder override (defaults to inbox_folder valve)
+        Move email(s) from one IMAP folder to another by UID.
         """
         if not self.valves.allow_move:
             return "Move operations are disabled. Enable 'allow_move' in Valves to use this feature."
@@ -1073,74 +1020,7 @@ class Tools:
             return "Error: IMAP server is not configured in Valves."
 
         source_folder = self._resolve_folder(folder, fallback=self.valves.inbox_folder)
-
-        try:
-            conn = self._connect()
-            self._select_folder(conn, source_folder)
-
-            uid_map = self._refresh_uid_index(conn)
-
-            if not uid_map:
-                self._safe_close(conn)
-                return f"Error: Source folder '{source_folder}' is empty. Nothing to move."
-
-            try:
-                uid_map_rev: dict[int, str] = {v: k for k, v in uid_map.items()}
-                uid = uid_map_rev[email_index]
-            except (KeyError, TypeError):
-                self._safe_close(conn)
-                return f"Error: Email index {email_index} is out of range. Folder has {len(uid_map)} message(s)."
-
-            # Ensure target folder exists
-            with suppress(_IMAP_EXCEPTION):
-                conn.create(_quote(target_folder))
-
-            # IMAP move = COPY to target + mark as deleted in source
-            conn.uid("COPY", uid, _quote(target_folder))  # pyright: ignore[reportArgumentType]
-            conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
-            conn.expunge()
-            self._safe_close(conn)
-
-            return f"Email [{uid}] moved from '{source_folder}' to '{target_folder}' successfully."
-
-        except _IMAP_EXCEPTION as e:
-            return f"IMAP Error: {str(e)}"
-        except Exception as e:
-            return f"Error moving email: {str(e)}"
-
-    async def move_emails_by_uid(
-        self,
-        email_uids: list[str] = Field(description="List of IMAP UIDs to move (stable identifiers, never change)"),
-        target_folder: str = Field(
-            description="Target IMAP folder to move the emails to (e.g. 'Projects', 'Spam', 'Archive')"
-        ),
-        folder: str | None = Field(
-            default=None,
-            description="Optional source folder (defaults to valve inbox_folder)",
-        ),
-    ) -> str:
-        """
-        Move multiple emails by their IMAP UID in a single connection.
-
-        UIDs are stable identifiers — they never change for a given message.
-        This is the recommended approach when moving multiple emails, as it
-        avoids issues with index-based methods where indices shift after each move.
-
-        :param email_uids: List of IMAP UIDs to move
-        :param target_folder: Destination IMAP folder name
-        :param folder: Optional source folder override (defaults to inbox_folder valve)
-        """
-        if not self.valves.allow_move:
-            return "Move operations are disabled. Enable 'allow_move' in Valves to use this feature."
-        if not self.valves.username or not self.valves.password:
-            return "Error: IMAP credentials (username and password) are not configured in Valves."
-        if not self.valves.imap_server:
-            return "Error: IMAP server is not configured in Valves."
-
-        if not email_uids:
-            return "Error: No UIDs provided. Please specify at least one email UID."
-
-        source_folder = self._resolve_folder(folder, fallback=self.valves.inbox_folder)
+        uids_list = self._normalize_uids(uids)
 
         try:
             conn = self._connect()
@@ -1152,7 +1032,7 @@ class Tools:
 
             moved: list[str] = []
             failed: list[tuple[str, str]] = []
-            for uid in email_uids:
+            for uid in uids_list:
                 try:
                     conn.uid("COPY", uid, _quote(target_folder))
                     conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
@@ -1164,14 +1044,17 @@ class Tools:
             self._safe_close(conn)
 
             parts = []
-            parts.append(f"Moved {len(moved)} email(s) from '{source_folder}' to '{target_folder}'.")
-            if moved:
+            if len(moved) == 1:
+                parts.append(f"Email [{moved[0]}] moved from '{source_folder}' to '{target_folder}' successfully.")
+            elif moved:
+                parts.append(f"{len(moved)} email(s) moved from '{source_folder}' to '{target_folder}'.")
                 parts.append(f"UIDs moved: {', '.join(moved)}")
+
             if failed:
-                parts.append(f"Failed to move {len(failed)} email(s):")
-                for uid, err in failed:
-                    parts.append(f"  UID {uid}: {err}")
-            return " ".join(parts)
+                parts.append(f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}")
+
+            result = "\n".join(parts) if len(parts) > 1 else parts[0]
+            return result
 
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}"

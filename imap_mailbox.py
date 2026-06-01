@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.3.2
+version: 2.4.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -884,12 +884,23 @@ class Tools:
         ),
     ) -> str:
         """
-        Delete a specific email from the mailbox.
+        Permanently delete a specific email from the mailbox.
+
+        This permanently removes the email — it is not moved to trash or archive,
+        and cannot be recovered after this operation.
+
+        If you want a reversible action, use ``move_email`` to move the message
+        to Trash or another folder first instead of deleting it.
+
         :param email_index: 1-based index (1 = most recent email by UID)
         :param folder: Optional folder override (defaults to inbox_folder valve).
         """
         if not self.valves.allow_delete_single:
-            return "Delete operations are disabled. Enable 'allow_delete_single' in Valves to use this feature."
+            return (
+                "Delete operations are disabled. Permanent deletion is blocked for safety. "
+                "To move this email to Trash instead, use ``move_email`` with ``target_folder`` "
+                "set to your trash folder (e.g. 'Trash' or 'Deleted Items')."
+            )
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
@@ -935,11 +946,20 @@ class Tools:
         ),
     ) -> str:
         """
-        Delete all emails from the mailbox folder.
+        Permanently delete **all** emails from a mailbox folder.
+
+        This permanently removes every message — they are not moved to trash,
+        and cannot be recovered. Use ``move_email`` or ``move_emails_by_uid``
+        for reversible batch moves instead.
+
         :param folder: Optional folder override (defaults to inbox_folder valve).
         """
         if not self.valves.allow_delete_all:
-            return "Delete operations are disabled. Enable 'allow_delete_all' in Valves to use this feature."
+            return (
+                "Delete-all operations are disabled. Permanent deletion of all emails is blocked "
+                "for safety. To move emails in bulk, use ``move_emails_by_uid`` to move them to "
+                "Trash or another folder."
+            )
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
@@ -955,7 +975,7 @@ class Tools:
 
             if not uid_map:
                 self._safe_close(conn)
-                return f"Mailbox '{target_folder}' is already empty. No emails to delete."
+                return "'Delete-all' is disabled. Use 'move_email' or 'move_emails_by_uid' with target_folder='Trash' to move emails for safe archival."
 
             uid_list = list(uid_map.keys())
             for uid in uid_list:

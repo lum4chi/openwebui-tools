@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.4.0
+version: 2.4.1
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -897,8 +897,8 @@ class Tools:
         """
         if not self.valves.allow_delete_single:
             return (
-                "Delete operations are disabled. Permanent deletion is blocked for safety. "
-                "To move this email to Trash instead, use ``move_email`` with ``target_folder`` "
+                "Delete operations are disabled. Enable 'allow_delete_single' in Valves. "
+                "Permanent deletion is blocked for safety—to move this email to Trash instead, use ``move_email`` with ``target_folder`` "
                 "set to your trash folder (e.g. 'Trash' or 'Deleted Items')."
             )
         if not self.valves.username or not self.valves.password:
@@ -956,8 +956,8 @@ class Tools:
         """
         if not self.valves.allow_delete_all:
             return (
-                "Delete-all operations are disabled. Permanent deletion of all emails is blocked "
-                "for safety. To move emails in bulk, use ``move_emails_by_uid`` to move them to "
+                "Delete-all operations are disabled. Enable 'allow_delete_all' in Valves. "
+                "Permanent deletion of all emails is blocked for safety—to move emails in bulk, use ``move_emails_by_uid`` to move them to "
                 "Trash or another folder."
             )
         if not self.valves.username or not self.valves.password:
@@ -975,7 +975,7 @@ class Tools:
 
             if not uid_map:
                 self._safe_close(conn)
-                return "'Delete-all' is disabled. Use 'move_email' or 'move_emails_by_uid' with target_folder='Trash' to move emails for safe archival."
+                return f"Mailbox '{target_folder}' is already empty. No emails to delete. To move emails to trash instead, use ``move_emails_by_uid`` with ``target_folder`` set to your trash folder."
 
             uid_list = list(uid_map.keys())
             for uid in uid_list:

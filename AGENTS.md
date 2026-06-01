@@ -86,6 +86,7 @@ uv run pytest -v --cov           # tests with coverage
 - **No `@pytest.mark.asyncio` needed**: `asyncio_mode = "auto"` in `pyproject.toml`
 - Mock with `unittest.mock.MagicMock` + `patch` — no real mail server
 - Set valves on fixture instances; don't set on bare `Tools()` unless testing defaults
+- **Maximum 300 lines per test file**: when a test file exceeds this limit, split it into multiple files by feature/operation. Name files `test_<feature>.py` or `test_<operation>.py`. Move shared fixtures to `conftest.py`.
 
 ## Email tool implementation notes
 

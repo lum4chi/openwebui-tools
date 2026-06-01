@@ -57,7 +57,7 @@ class TestAttachmentDisplay:
         emails = [(msg.as_bytes(), "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_emails(uids="1")
+            result = await tools.read_emails(uids="1", folder="INBOX")
 
         assert "ReadAttach" in result
         assert "Attachments:" in result

@@ -26,11 +26,15 @@ class ErrorSpec:
 # Group 1 (6): IMAP exceptions via _IMAP_EXCEPTION() on login
 IMAP_EXCEPTION_TESTS: list[ErrorSpec] = [
     ErrorSpec("list_emails", {"folder": "INBOX", "count": 5}),
-    ErrorSpec("read_emails", {"uids": "1"}),
-    ErrorSpec("search_emails", {"query": "test", "count": 10}),
-    ErrorSpec("delete_emails", {"uids": "1"}, valve_overrides={"allow_delete_single": True}),
-    ErrorSpec("delete_all_emails", {}, valve_overrides={"allow_delete_all": True}),
-    ErrorSpec("move_emails", {"uids": "1", "target_folder": "Archive"}, valve_overrides={"allow_move": True}),
+    ErrorSpec("read_emails", {"uids": "1", "folder": "INBOX"}),
+    ErrorSpec("search_emails", {"query": "test", "count": 10, "folder": "INBOX"}),
+    ErrorSpec("delete_emails", {"uids": "1", "folder": "INBOX"}, valve_overrides={"allow_delete_single": True}),
+    ErrorSpec("delete_all_emails", {"folder": "INBOX"}, valve_overrides={"allow_delete_all": True}),
+    ErrorSpec(
+        "move_emails",
+        {"uids": "1", "target_folder": "Archive", "folder": "INBOX"},
+        valve_overrides={"allow_move": True},
+    ),
 ]
 
 
@@ -45,21 +49,21 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
     ),
     ErrorSpec(
         "read_emails",
-        {"uids": "1"},
+        {"uids": "1", "folder": "INBOX"},
         expected_error="Error reading emails",
         exception_class=NotImplementedError,
         mock_login_exception_msg="Generic error",
     ),
     ErrorSpec(
         "search_emails",
-        {"query": "test", "count": 10},
+        {"query": "test", "count": 10, "folder": "INBOX"},
         expected_error="Error searching emails",
         exception_class=NotImplementedError,
         mock_login_exception_msg="Generic error",
     ),
     ErrorSpec(
         "delete_emails",
-        {"uids": "1"},
+        {"uids": "1", "folder": "INBOX"},
         expected_error="Error deleting emails",
         valve_overrides={"allow_delete_single": True},
         exception_class=NotImplementedError,
@@ -67,7 +71,7 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
     ),
     ErrorSpec(
         "delete_all_emails",
-        {},
+        {"folder": "INBOX"},
         expected_error="Error deleting emails",
         valve_overrides={"allow_delete_all": True},
         exception_class=NotImplementedError,
@@ -75,7 +79,7 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
     ),
     ErrorSpec(
         "move_emails",
-        {"uids": "1", "target_folder": "Archive"},
+        {"uids": "1", "target_folder": "Archive", "folder": "INBOX"},
         expected_error="Error moving emails",
         valve_overrides={"allow_move": True},
         exception_class=NotImplementedError,
@@ -87,11 +91,15 @@ GENERIC_EXCEPTION_TESTS: list[ErrorSpec] = [
 # Group 3 (6): Missing server
 SERVER_NOT_CONFIGURED_TESTS: list[ErrorSpec] = [
     ErrorSpec("list_emails", {"folder": "INBOX", "count": 5}),
-    ErrorSpec("read_emails", {"uids": "1"}),
-    ErrorSpec("search_emails", {"query": "test", "count": 10}),
-    ErrorSpec("delete_emails", {"uids": "1"}, valve_overrides={"allow_delete_single": True}),
-    ErrorSpec("delete_all_emails", {}, valve_overrides={"allow_delete_all": True}),
-    ErrorSpec("move_emails", {"uids": "1", "target_folder": "Archive"}, valve_overrides={"allow_move": True}),
+    ErrorSpec("read_emails", {"uids": "1", "folder": "INBOX"}),
+    ErrorSpec("search_emails", {"query": "test", "count": 10, "folder": "INBOX"}),
+    ErrorSpec("delete_emails", {"uids": "1", "folder": "INBOX"}, valve_overrides={"allow_delete_single": True}),
+    ErrorSpec("delete_all_emails", {"folder": "INBOX"}, valve_overrides={"allow_delete_all": True}),
+    ErrorSpec(
+        "move_emails",
+        {"uids": "1", "target_folder": "Archive", "folder": "INBOX"},
+        valve_overrides={"allow_move": True},
+    ),
 ]
 
 

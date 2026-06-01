@@ -32,7 +32,7 @@ class TestIMAPSearchCandidateException:
         mock_server.select.return_value = ("OK", [b"1"])
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await t.search_emails(query="anything", count=5)
+            result = await t.search_emails(query="anything", count=5, folder="INBOX")
         assert "email" in result.lower()
 
 

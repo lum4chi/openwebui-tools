@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.0.0
+version: 3.1.0
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -566,11 +566,15 @@ class Tools:
         if not is_ok:
             raise _IMAP_EXCEPTION(f"Failed to select folder '{folder}'")
 
-    def _resolve_folder(self, folder: str | None = None, fallback: str | None = None) -> str:
-        """Return the effective folder name; falls back to valve config."""
-        if isinstance(folder, str) and folder:
-            return folder
-        return fallback or (getattr(self.valves, "inbox_folder", None) or "INBOX")
+    def _resolve_folder(self, folder: str) -> str:
+        """Return the effective folder name.
+
+        Folder is required — no silent fallback to INBOX or valve config.
+        Raises ValueError if folder is None, empty, or not a string.
+        """
+        if not isinstance(folder, str) or not folder:
+            raise ValueError("Folder parameter is required and cannot be empty or None.")
+        return folder
 
     def _normalize_uids(self, param: Any) -> list[str]:
         """Accept str | list[str] | FieldInfo, always return a list of UID strings.
@@ -619,7 +623,7 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        target_folder = self._resolve_folder(folder, fallback=folder)
+        target_folder = self._resolve_folder(folder)
 
         try:
             conn = self._connect()
@@ -692,7 +696,7 @@ class Tools:
             description="IMAP UID(s) to read. Accepts a single UID string (e.g. '42') or "
             "a comma-separated list of UIDs (e.g. '42,100,205')."
         ),
-        folder: str | None = Field(default=None, description="Optional IMAP folder to read from"),
+        folder: str = Field(description="IMAP folder to read from (required — no fallback)"),
     ) -> str:
         """
         Read specific email(s) by their IMAP UID(s).
@@ -702,7 +706,7 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        target_folder = self._resolve_folder(folder)
+        target_folder = self._resolve_folder(self._resolve_fieldinfo(folder, None))
 
         try:
             conn = self._connect()
@@ -753,25 +757,22 @@ class Tools:
             description="Search query to filter emails. Supports 'from:<sender>', 'subject:<text>', 'before:<YYYY-MM-DD>', 'after:<YYYY-MM-DD>'"
         ),
         count: int = Field(default=10, description="Maximum number of results to return (default: 10)"),
-        folder: str | None = Field(
-            default=None, description="Optional IMAP folder to search (uses valve 'folder' by default)"
-        ),
+        folder: str = Field(description="IMAP folder to search in (required — no fallback)"),
     ) -> str:
         """
         Search emails in the mailbox by sender, subject, or date range.
         :param query: Search criteria (e.g., 'from:alice@example.com', 'subject:invoice', 'after:2025-01-01')
         :param count: Maximum number of results
-        :param folder: Optional folder override (e.g. 'Archive', 'Sent'). Defaults to valve setting.
+        :param folder: IMAP folder to search in (required, no fallback)
         """
         count = self._resolve_fieldinfo(count, 10)
-        folder = self._resolve_fieldinfo(folder, None)
         query = self._resolve_fieldinfo(query, "")
         if not self.valves.username or not self.valves.password:
             return "Error: IMAP credentials (username and password) are not configured in Valves."
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        target_folder = self._resolve_folder(folder)
+        target_folder = self._resolve_folder(self._resolve_fieldinfo(folder, None))
 
         # Parse search criteria
         search_from: str | None = None
@@ -896,7 +897,7 @@ class Tools:
             description="IMAP UID(s) to permanently delete. Accepts a single UID string (e.g. '42') or "
             "a comma-separated list of UIDs. WARNING: This is irreversible — emails cannot be recovered."
         ),
-        folder: str | None = Field(default=None, description="Optional folder to delete from"),
+        folder: str = Field(description="IMAP folder to delete from (required — no fallback)"),
     ) -> str:
         """
         Permanently delete email(s) by their IMAP UID(s).
@@ -912,7 +913,7 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        target_folder = self._resolve_folder(folder)
+        target_folder = self._resolve_folder(self._resolve_fieldinfo(folder, None))
         uids_list = self._normalize_uids(uids)
 
         try:
@@ -951,10 +952,7 @@ class Tools:
 
     async def delete_all_emails(
         self,
-        folder: str | None = Field(
-            default=None,
-            description="Optional folder to delete all emails from. Defaults to inbox_folder valve.",
-        ),
+        folder: str = Field(description="IMAP folder to delete all emails from (required — no fallback)"),
     ) -> str:
         """
         Permanently delete **all** emails from a mailbox folder.
@@ -962,7 +960,7 @@ class Tools:
         This permanently removes every message — they are not moved to trash,
         and cannot be recovered. Use ``move_emails`` for reversible batch moves instead.
 
-        :param folder: Optional folder override (defaults to inbox_folder valve).
+        :param folder: IMAP folder to delete all emails from (required, no fallback).
         """
         if not self.valves.allow_delete_all:
             return (
@@ -975,7 +973,7 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        target_folder = self._resolve_folder(folder)
+        target_folder = self._resolve_folder(self._resolve_fieldinfo(folder, None))
 
         try:
             conn = self._connect()
@@ -1007,7 +1005,7 @@ class Tools:
             "a comma-separated list of UIDs (e.g. '42,100')."
         ),
         target_folder: str = Field(description="Target IMAP folder for the moved emails"),
-        folder: str | None = Field(default=None, description="Optional source folder (defaults to inbox_folder valve)"),
+        folder: str = Field(description="Source IMAP folder (required, no fallback)"),
     ) -> str:
         """
         Move email(s) from one IMAP folder to another by UID.
@@ -1019,7 +1017,7 @@ class Tools:
         if not self.valves.imap_server:
             return "Error: IMAP server is not configured in Valves."
 
-        source_folder = self._resolve_folder(folder, fallback=self.valves.inbox_folder)
+        source_folder = self._resolve_folder(self._resolve_fieldinfo(folder, None))
         uids_list = self._normalize_uids(uids)
 
         try:

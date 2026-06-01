@@ -6,8 +6,6 @@ import pytest
 
 from imap_mailbox import EncryptionMode, Tools
 
-from .conftest import SieveMockBuilder
-
 
 class TestSieveDefaults:
     """Test Sieve default configuration values."""

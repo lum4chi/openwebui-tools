@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import imap_mailbox
-from imap_mailbox import Tools
 
 from .conftest import _IMAP_EXCEPTION
 
@@ -97,7 +96,7 @@ class TestFieldInfoFallback:
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="test", count=Field(default=10))
+            result = await tools.search_emails(query="test", count=Field(default=10), folder="INBOX")
 
         assert "No emails" in result or "No emails found" in result
 
@@ -113,7 +112,7 @@ class TestFieldInfoFallback:
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query=Field(description="Search query"))
+            result = await tools.search_emails(query=Field(description="Search query"), folder="INBOX")
 
         assert "No emails" in result or "No emails found" in result
         # Should have called uid.search with the FieldInfo (treated as a string search)
@@ -133,6 +132,7 @@ class TestFieldInfoFallback:
             result = await tools.search_emails(
                 query=Field(description="Search query"),
                 count=Field(default=5),
+                folder="INBOX",
             )
 
         assert "No emails" in result or "No emails found" in result

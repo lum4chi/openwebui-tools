@@ -78,7 +78,7 @@ class TestIMAPSearchUidDataNone:
 
         mock_server = _make_mock_server([], override_uid=override_uid)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query='subject:"test"')
+            result = await tools.search_emails(query='subject:"test"', folder="INBOX")
         assert "No emails found" in result
 
 
@@ -94,7 +94,7 @@ class TestIMAPSearchFreeTextEmpty:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="xyznotfoundxyz", count=10)
+            result = await tools.search_emails(query="xyznotfoundxyz", count=10, folder="INBOX")
         assert "No emails found" in result
 
 
@@ -118,5 +118,5 @@ class TestIMAPSearchCombinedFilters:
         mock_server.select.return_value = ("OK", [b"1"])
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="totally-missing-keyword-xyz-999", count=5)
+            result = await tools.search_emails(query="totally-missing-keyword-xyz-999", count=5, folder="INBOX")
         assert "No emails found" in result

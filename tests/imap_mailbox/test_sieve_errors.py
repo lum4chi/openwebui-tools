@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from imap_mailbox import Tools
-
 from .conftest import SieveMockBuilder
 
 

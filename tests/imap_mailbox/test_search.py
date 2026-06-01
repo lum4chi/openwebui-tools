@@ -21,7 +21,7 @@ class TestSearchEmailsAdditional:
 
         mock_server = _make_mock_server([], override_uid=override_uid)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query='subject:"nonexistent"')
+            result = await tools.search_emails(query='subject:"nonexistent"', folder="INBOX")
         assert "No emails found matching criteria" in result
 
     @pytest.mark.asyncio
@@ -32,7 +32,7 @@ class TestSearchEmailsAdditional:
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             # We expect the uid search call to contain SINCE
-            result = await tools.search_emails(query="after:2025-04-01", count=10)
+            result = await tools.search_emails(query="after:2025-04-01", count=10, folder="INBOX")
         # The mock server handles search with ANY criteria via the ALL branch
         assert "alice@example.com" in result
 
@@ -43,7 +43,7 @@ class TestSearchEmailsAdditional:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="before:2025-12-01", count=10)
+            result = await tools.search_emails(query="before:2025-12-01", count=10, folder="INBOX")
         assert "alice@example.com" in result
 
     @pytest.mark.asyncio
@@ -53,7 +53,7 @@ class TestSearchEmailsAdditional:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="after:2025-01-01 before:2025-12-31", count=10)
+            result = await tools.search_emails(query="after:2025-01-01 before:2025-12-31", count=10, folder="INBOX")
         assert "alice@example.com" in result
 
     @pytest.mark.asyncio
@@ -64,7 +64,9 @@ class TestSearchEmailsAdditional:
         emails = [(raw, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query='from:"alice@example.com" subject:"Invoice"', count=10)
+            result = await tools.search_emails(
+                query='from:"alice@example.com" subject:"Invoice"', count=10, folder="INBOX"
+            )
         assert "alice@example.com" in result
         assert "carol@example.com" not in result
 
@@ -75,7 +77,7 @@ class TestSearchEmailsAdditional:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query="xyznotfound", count=10)
+            result = await tools.search_emails(query="xyznotfound", count=10, folder="INBOX")
         assert "No emails found" in result
 
 

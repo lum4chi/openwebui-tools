@@ -6,7 +6,7 @@ import pytest
 
 from imap_mailbox import Tools
 
-from .conftest import _make_raw_email, _make_mock_server
+from .conftest import _make_mock_server, _make_raw_email
 
 
 class TestIMAPEmptyMailboxPaths:
@@ -23,7 +23,7 @@ class TestIMAPEmptyMailboxPaths:
 
         mock_server = _make_mock_server([], override_uid=override_uid)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_emails(uids="1")
+            result = await tools.read_emails(uids="1", folder="INBOX")
         assert "empty" in result.lower() or "No emails found" in result
 
     @pytest.mark.asyncio
@@ -31,7 +31,7 @@ class TestIMAPEmptyMailboxPaths:
         """Test search_emails returns error without credentials."""
         t = Tools()
         t.valves.imap_server = "mail.example.com"
-        result = await t.search_emails(query="test", count=5)
+        result = await t.search_emails(query="test", count=5, folder="INBOX")
         assert "Error" in result and "credentials" in result
 
     @pytest.mark.asyncio
@@ -41,7 +41,7 @@ class TestIMAPEmptyMailboxPaths:
         t.valves.allow_delete_single = True
         t.valves.username = "u"
         t.valves.password = "p"
-        result = await t.delete_emails(uids="1")
+        result = await t.delete_emails(uids="1", folder="INBOX")
         assert "Error" in result and "server" in result
 
     @pytest.mark.asyncio
@@ -50,7 +50,7 @@ class TestIMAPEmptyMailboxPaths:
         t = Tools()
         t.valves.allow_delete_all = True
         t.valves.imap_server = "mail.example.com"
-        result = await t.delete_all_emails()
+        result = await t.delete_all_emails(folder="INBOX")
         assert "Error" in result and "credentials" in result
 
 
@@ -64,18 +64,18 @@ class TestResolveFolder:
         assert result == "Custom/Folder"
 
     @pytest.mark.asyncio
-    async def test_resolve_folder_empty_fallsback_to_valve(self, tools):
-        """Test _resolve_folder falls back to inbox_folder valve when folder is empty."""
-        tools.valves.inbox_folder = "MyInbox"
-        result = tools._resolve_folder(folder="")
-        assert result == "MyInbox"
+    async def test_resolve_folder_empty_raises(self):
+        """Test _resolve_folder raises ValueError when folder is empty."""
+        t = Tools()
+        with pytest.raises(ValueError, match="required and cannot be empty"):
+            t._resolve_folder(folder="")
 
     @pytest.mark.asyncio
-    async def test_resolve_folder_none_fallsback_to_valve(self, tools):
-        """Test _resolve_folder falls back to inbox_folder when folder is None."""
-        tools.valves.inbox_folder = "CustomInbox"
-        result = tools._resolve_folder(folder=None)
-        assert result == "CustomInbox"
+    async def test_resolve_folder_none_raises(self):
+        """Test _resolve_folder raises ValueError when folder is None."""
+        t = Tools()
+        with pytest.raises(ValueError, match="required"):
+            t._resolve_folder(folder=None)
 
 
 class TestDeleteEmailsPartialFailures:
@@ -90,7 +90,7 @@ class TestDeleteEmailsPartialFailures:
         raw3 = _make_raw_email("a@b.com", "c@d.com", "Msg 3", "Body 3")
         mock_server = _make_mock_server([(raw1, "10"), (raw2, "11"), (raw3, "12")])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_emails(uids=["10", "11", "12"])
+            result = await tools.delete_emails(uids=["10", "11", "12"], folder="INBOX")
         assert "3 email(s)" in result
         assert "INBOX" in result
 
@@ -120,14 +120,14 @@ class TestDeleteEmailsPartialFailures:
         raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
         mock_server = _make_mock_server([(raw, "1")], override_uid=uid_side_effect)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_emails(uids=["1", "2"])
+            result = await tools.delete_emails(uids=["1", "2"], folder="INBOX")
         assert "permanently deleted" in result.lower() or "1" in result
         assert "Failed" in result or "2" in result
 
     @pytest.mark.asyncio
     async def test_read_emails_invalid_uid(self, tools):
         """Test read_emails returns error for completely invalid UID."""
-        result = await tools.read_emails(uids="xyz")
+        result = await tools.read_emails(uids="xyz", folder="INBOX")
         assert (
             "Error" in result
             or "Invalid" in result
@@ -147,5 +147,5 @@ class TestDeleteEmailsPartialFailures:
         mock_server.select.return_value = ("OK", [b"0 Messages"])
         mock_server.close.return_value = None
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_emails(uids=field)
+            result = await tools.read_emails(uids=field, folder="INBOX")
         assert "No UIDs" in result

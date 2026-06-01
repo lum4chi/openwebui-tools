@@ -6,8 +6,6 @@ import pytest
 
 from imap_mailbox import EncryptionMode, Tools
 
-from .conftest import SieveMockBuilder
-
 
 class TestSieveImplicitTLS:
     """Test ManageSieve with implicit TLS encryption mode (lines 153-158)."""

@@ -6,7 +6,7 @@ import pytest
 
 from imap_mailbox import Tools
 
-from .conftest import _make_raw_email, _make_mock_server
+from .conftest import _make_mock_server, _make_raw_email
 
 
 class TestIMAPMailboxTool:
@@ -16,8 +16,10 @@ class TestIMAPMailboxTool:
     @pytest.mark.parametrize(
         "method,args,valve",
         [
-            ("delete_emails", {"uids": "42"}, "allow_delete_single"),
-            ("delete_all_emails", {}, "allow_delete_all"),
+            ("delete_emails", {"uids": "42", "folder": "INBOX"}, "allow_delete_single"),
+            ("delete_all_emails", {"folder": "INBOX"}, "allow_delete_all"),
+            ("read_emails", {"uids": "42", "folder": "INBOX"}, None),
+            ("search_emails", {"query": "test", "folder": "INBOX"}, None),
         ],
     )
     async def test_folder_operations_require_credentials(self, method, args, valve):
@@ -38,6 +40,45 @@ class TestIMAPMailboxTool:
         t.valves.password = "testpass"
         with pytest.raises(TypeError):
             await t.list_emails(count=5)  # pyright: ignore
+
+    @pytest.mark.asyncio
+    async def test_list_emails_empty_folder_raises(self):
+        """Test that list_emails raises ValueError when folder is empty."""
+        t = Tools()
+        t.valves.imap_server = "mail.example.com"
+        t.valves.imap_port = 993
+        t.valves.username = "testuser"
+        t.valves.password = "testpass"
+        with pytest.raises(ValueError, match="required"):
+            t._resolve_folder(folder="")
+
+    @pytest.mark.asyncio
+    async def test_read_emails_empty_folder_raises(self):
+        """Test that read_emails raises ValueError when folder is empty."""
+        t = Tools()
+        with pytest.raises(ValueError, match="required"):
+            t._resolve_folder(folder="")
+
+    @pytest.mark.asyncio
+    async def test_search_emails_empty_folder_raises(self):
+        """Test that search_emails raises ValueError when folder is empty."""
+        t = Tools()
+        with pytest.raises(ValueError, match="required"):
+            t._resolve_folder(folder="")
+
+    @pytest.mark.asyncio
+    async def test_delete_emails_empty_folder_raises(self):
+        """Test that delete_emails raises ValueError when folder is empty."""
+        t = Tools()
+        with pytest.raises(ValueError, match="required"):
+            t._resolve_folder(folder="")
+
+    @pytest.mark.asyncio
+    async def test_delete_all_emails_empty_folder_raises(self):
+        """Test that delete_all_emails raises ValueError when folder is empty."""
+        t = Tools()
+        with pytest.raises(ValueError, match="required"):
+            t._resolve_folder(folder="")
 
     @pytest.mark.asyncio
     async def test_list_emails_empty_mailbox(self, tools):
@@ -73,7 +114,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_emails(uids="2")
+            result = await tools.read_emails(uids="2", folder="INBOX")
         # UID 2 = carol (highest Uid)
         assert "carol@example.com" in result
         assert "Invoice #123" in result
@@ -87,7 +128,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_emails(uids=["1", "2"])
+            result = await tools.read_emails(uids=["1", "2"], folder="INBOX")
         assert "alice@example.com" in result
         assert "carol@example.com" in result
         assert "=== Email [1]" in result
@@ -110,7 +151,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.search_emails(query=query, count=10)
+            result = await tools.search_emails(query=query, count=10, folder="INBOX")
         for item in expected_in:
             assert item in result
         for item in expected_not:
@@ -125,7 +166,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_emails(uids="1")
+            result = await tools.delete_emails(uids="1", folder="INBOX")
         assert "deleted successfully" in result or "permanently deleted" in result
 
     @pytest.mark.asyncio
@@ -135,7 +176,7 @@ class TestIMAPMailboxTool:
         raw = _make_raw_email("test@example.com", "u@example.com", "Test", "Body")
         mock_server = _make_mock_server([(raw, "1")])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_emails(uids="99")
+            result = await tools.delete_emails(uids="99", folder="INBOX")
         # UID 99 doesn't exist but IMAP store command still succeeds in the mock
         assert "permanently deleted" in result or "deleted" in result.lower()
 
@@ -149,7 +190,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2"), (raw3, "3")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_all_emails()
+            result = await tools.delete_all_emails(folder="INBOX")
         assert "deleted successfully" in result
         assert "3 email" in result
         delete_calls = [c for c in mock_server.uid.call_args_list if c[0][0] == "store"]
@@ -161,7 +202,7 @@ class TestIMAPMailboxTool:
         tools.valves.allow_delete_all = True
         mock_server = _make_mock_server([])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_all_emails()
+            result = await tools.delete_all_emails(folder="INBOX")
         assert "already empty" in result.lower() or "No emails" in result
 
     @pytest.mark.asyncio
@@ -202,7 +243,7 @@ class TestIMAPMailboxTool:
         emails = [(raw, "1")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.read_emails(uids="1")
+            result = await tools.read_emails(uids="1", folder="INBOX")
         assert "regression@test.com" in result
         assert "Regression Test Subject" in result
         assert "This body text must appear" in result
@@ -232,9 +273,9 @@ class TestIMAPMailboxTool:
     @pytest.mark.parametrize(
         "valve_name,method,args",
         [
-            ("allow_delete_single", "delete_emails", {"uids": "1"}),
-            ("allow_delete_all", "delete_all_emails", {}),
-            ("allow_move", "move_emails", {"uids": "1", "target_folder": "Projects"}),
+            ("allow_delete_single", "delete_emails", {"uids": "1", "folder": "INBOX"}),
+            ("allow_delete_all", "delete_all_emails", {"folder": "INBOX"}),
+            ("allow_move", "move_emails", {"uids": "1", "target_folder": "Projects", "folder": "INBOX"}),
         ],
     )
     async def test_write_ops_disabled_by_default(self, valve_name, method, args):
@@ -253,7 +294,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_emails(uids="1")
+            result = await tools.delete_emails(uids="1", folder="INBOX")
         assert "deleted successfully" in result or "permanently deleted" in result
 
     @pytest.mark.asyncio
@@ -266,7 +307,7 @@ class TestIMAPMailboxTool:
         emails = [(raw1, "1"), (raw2, "2"), (raw3, "3")]
         mock_server = _make_mock_server(emails)
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await tools.delete_all_emails()
+            result = await tools.delete_all_emails(folder="INBOX")
         assert "deleted successfully" in result
         assert "3 email" in result
 

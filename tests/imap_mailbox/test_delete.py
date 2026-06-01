@@ -35,5 +35,5 @@ class TestDeleteEmailEmptyMailbox:
         mock_server.uid.side_effect = uid_side_effect
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
-            result = await t.delete_emails(uids="1")
+            result = await t.delete_emails(uids="1", folder="INBOX")
         assert "permanently deleted" in result.lower()

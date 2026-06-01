@@ -21,7 +21,7 @@ Each tool file must stay in **a single `*.py`** (Open WebUI imports a single fil
 Test files should be organized in subfolders with helper classes if they grow large.
 
 ### Meaningful tests at high coverage
-**99.9% coverage required** (`fail_under = 99.9` in `pyproject.toml`):
+**100% coverage required** (`fail_under = 100` in `pyproject.toml`):
 
 - **Test behaviour, not implementation**: assert return values, raised exceptions, state changes — not mock call counts.
 - **Test edge cases**: empty inputs, single items, boundary values, error paths.

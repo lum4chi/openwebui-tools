@@ -535,6 +535,18 @@ class Tools:
             with suppress(Exception, _IMAP_EXCEPTION):
                 conn.logout()
 
+    def _select_folder(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, folder: str, readonly: bool = False) -> None:
+        """Select an IMAP folder, raising on failure (server returns NO).
+
+        imaplib.select() does NOT raise on "NO" responses — it returns ("NO", ...).
+        We need to check the status because subsequent commands will fail with
+        "illegal in state AUTH" if the folder wasn't actually selected.
+        """
+        status, _ = conn.select(folder, readonly=readonly)
+        is_ok = status.strip() == b"OK" if isinstance(status, bytes) else str(status).strip().upper() == "OK"
+        if not is_ok:
+            raise _IMAP_EXCEPTION(f"Failed to select folder '{folder}'")
+
     def _resolve_folder(self, folder: str | None = None, fallback: str | None = None) -> str:
         """Return the effective folder name; falls back to valve config."""
         if folder:
@@ -574,7 +586,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(target_folder, readonly=True)
+            self._select_folder(conn, target_folder, readonly=True)
 
             uid_map = self._refresh_uid_index(conn)
 
@@ -658,7 +670,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(target_folder, readonly=True)
+            self._select_folder(conn, target_folder, readonly=True)
 
             uid_map = self._refresh_uid_index(conn)
 
@@ -756,7 +768,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(target_folder, readonly=True)
+            self._select_folder(conn, target_folder, readonly=True)
 
             # Build IMAP SEARCH criteria
             imap_criteria_parts = []
@@ -868,7 +880,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(target_folder)
+            self._select_folder(conn, target_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
@@ -918,7 +930,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(target_folder)
+            self._select_folder(conn, target_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
@@ -966,7 +978,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(source_folder)
+            self._select_folder(conn, source_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
@@ -1025,7 +1037,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(source_folder)
+            self._select_folder(conn, source_folder)
 
             uid_map = self._refresh_uid_index(conn)
 
@@ -1093,7 +1105,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.select(source_folder)
+            self._select_folder(conn, source_folder)
 
             # Ensure target folder exists
             with suppress(_IMAP_EXCEPTION):
@@ -1141,7 +1153,7 @@ class Tools:
         try:
             conn = self._connect()
             conn.create(folder)
-            conn.select(folder, readonly=True)
+            self._select_folder(conn, folder, readonly=True)
             self._safe_close(conn)
             return f"Folder '{folder}' has been created successfully."
 

@@ -19,6 +19,7 @@ class TestCreateFolder:
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
         mock_server.create.return_value = ("OK", [b"CREATE completed"])
+        mock_server.select.return_value = (b"OK", [b"0 Messages"])
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
@@ -35,6 +36,7 @@ class TestCreateFolder:
         mock_server = MagicMock()
         mock_server.login.return_value = ("OK", [b"Login successful"])
         mock_server.create.return_value = ("OK", [b"CREATE completed"])
+        mock_server.select.return_value = (b"OK", [b"0 Messages"])
         mock_server.close.return_value = None
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):

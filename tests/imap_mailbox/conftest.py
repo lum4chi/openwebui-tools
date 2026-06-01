@@ -173,7 +173,7 @@ def _make_mock_server(emails: list[tuple], uid_prefix: str = "", override_uid: C
         return ("OK", [b""])
 
     mock_server.login.return_value = ("OK", [b"Login successful"])
-    mock_server.select.return_value = ("OK", [b"0 Messages"])
+    mock_server.select.return_value = (b"OK", [b"0 Messages"])
     mock_server.uid.side_effect = uid_side_effect
     mock_server.logout.return_value = ("OK", [b"Logout successful"])
     mock_server.expunge.return_value = ("OK", [b"EXPUNGE"])

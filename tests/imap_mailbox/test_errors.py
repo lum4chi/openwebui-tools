@@ -328,8 +328,8 @@ class TestSafeCloseFallback:
     @pytest.mark.asyncio
     async def test_safe_close_fallback_to_logout_on_generic_error(self, tools):
         """Test _safe_close falls back to logout when close() raises generic exception."""
+
         import imap_mailbox
-        from pydantic import Field
 
         orig = imap_mailbox._IMAP_EXCEPTION
         imap_mailbox._IMAP_EXCEPTION = RuntimeError
@@ -370,6 +370,7 @@ class TestIMAPEmptyRawDataFetch:
 
         mock_server.uid.side_effect = uid_side_effect
         mock_server.login.return_value = ("OK", None)
+        mock_server.select.return_value = (b"OK", [b"1"])
         mock_server.examine.return_value = ("OK", [b"1"])
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):

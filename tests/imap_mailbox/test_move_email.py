@@ -88,7 +88,7 @@ class TestMoveEmailFunctional:
         assert "Projects/Finance/Invoices" in result
         assert "moved" in result.lower()
         assert mock_server.create.called
-        mock_server.create.assert_called_with("Projects/Finance/Invoices")
+        mock_server.create.assert_called_with('"Projects/Finance/Invoices"')
 
     @pytest.mark.asyncio
     async def test_move_email_uid_in_response(self, tools):

@@ -229,7 +229,7 @@ class TestIMAPMailboxTool:
             await tools.list_emails(folder="Sent", count=5)
         mock_server.select.assert_called()
         call_args = mock_server.select.call_args
-        assert call_args[0][0] == "Sent"
+        assert call_args[0][0] == '"Sent"'
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -334,7 +334,7 @@ class TestIMAPMailboxTool:
             if cmd == "search":
                 return ("OK", [b"1"])
             elif cmd == "COPY":
-                assert args[0] == "Gmail/All Mail"
+                assert args[0] == '"Gmail/All Mail"'
                 return ("OK", [b"COPY completed"])
             elif cmd == "store":
                 return ("OK", [b"FLAGS (\\Deleted)"])

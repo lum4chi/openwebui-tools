@@ -27,7 +27,7 @@ class TestCreateFolder:
 
         assert "created successfully" in result
         assert "Projects" in result
-        mock_server.create.assert_called_once_with("Projects")
+        mock_server.create.assert_called_once_with('"Projects"')
 
     @pytest.mark.asyncio
     async def test_create_folder_nested_success(self, tools):

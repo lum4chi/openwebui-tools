@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 2.3.1
+version: 2.3.2
 licence: MIT
 required_open_webui_version: 0.5.0
 """
@@ -19,6 +19,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from sievelib.managesieve import Client
 
@@ -32,6 +33,24 @@ class EncryptionMode(StrEnum):
 
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
 _IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
+
+
+def _quote(s: str) -> str:
+    """Quote an IMAP string literal per RFC 3501.
+
+    IMAP requires strings containing special characters to be enclosed in
+    double quotes with backslash and double-quote characters escaped.
+    This matches :meth:`imaplib.IMAP4._quote`.
+
+    Handles Pydantic FieldInfo objects (passed by Open WebUI) by resolving
+    to the string value first.
+    """
+    if isinstance(s, FieldInfo):
+        s = s.default
+    if isinstance(s, str):
+        s = s.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{s}"'
+    return s
 
 
 def _handle_sieve_list_result(
@@ -542,7 +561,7 @@ class Tools:
         We need to check the status because subsequent commands will fail with
         "illegal in state AUTH" if the folder wasn't actually selected.
         """
-        status, _ = conn.select(folder, readonly=readonly)
+        status, _ = conn.select(_quote(folder), readonly=readonly)
         is_ok = status.strip() == b"OK" if isinstance(status, bytes) else str(status).strip().upper() == "OK"
         if not is_ok:
             raise _IMAP_EXCEPTION(f"Failed to select folder '{folder}'")
@@ -993,7 +1012,7 @@ class Tools:
                 self._safe_close(conn)
                 return f"Error: Email index {email_index} is out of range. Mailbox has {len(uid_map)} message(s)."
 
-            conn.uid("COPY", uid, dst_folder)  # pyright: ignore[reportArgumentType]
+            conn.uid("COPY", uid, _quote(dst_folder))  # pyright: ignore[reportArgumentType]
             conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
             self._safe_close(conn)
@@ -1054,10 +1073,10 @@ class Tools:
 
             # Ensure target folder exists
             with suppress(_IMAP_EXCEPTION):
-                conn.create(target_folder)
+                conn.create(_quote(target_folder))
 
             # IMAP move = COPY to target + mark as deleted in source
-            conn.uid("COPY", uid, target_folder)  # pyright: ignore[reportArgumentType]
+            conn.uid("COPY", uid, _quote(target_folder))  # pyright: ignore[reportArgumentType]
             conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")  # pyright: ignore[reportArgumentType]
             conn.expunge()
             self._safe_close(conn)
@@ -1109,13 +1128,13 @@ class Tools:
 
             # Ensure target folder exists
             with suppress(_IMAP_EXCEPTION):
-                conn.create(target_folder)
+                conn.create(_quote(target_folder))
 
             moved: list[str] = []
             failed: list[tuple[str, str]] = []
             for uid in email_uids:
                 try:
-                    conn.uid("COPY", uid, target_folder)
+                    conn.uid("COPY", uid, _quote(target_folder))
                     conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
                     conn.expunge()
                     moved.append(uid)
@@ -1152,7 +1171,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.create(folder)
+            conn.create(_quote(folder))
             self._select_folder(conn, folder, readonly=True)
             self._safe_close(conn)
             return f"Folder '{folder}' has been created successfully."
@@ -1175,7 +1194,7 @@ class Tools:
 
         try:
             conn = self._connect()
-            conn.delete(folder)
+            conn.delete(_quote(folder))
             self._safe_close(conn)
             return f"Folder '{folder}' has been deleted successfully."
 

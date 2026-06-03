@@ -12,13 +12,12 @@ class TestCreateOrUpdateFilter:
 
     def _make_client(self, active="s", scripts=None, script_responses=None):
         from tests.imap_mailbox.conftest import SieveMockBuilder
+
         builder = SieveMockBuilder.make(active=active, scripts=scripts)
         if script_responses:
             for name, content in script_responses.items():
                 if name in ("filter1", "s"):
-                    builder.getscript.return_value = (
-                        f"=== Sieve Script: placeholder ===\n{content}"
-                    )
+                    builder.getscript.return_value = f"=== Sieve Script: placeholder ===\n{content}"
         return builder
 
     @pytest.mark.asyncio
@@ -73,12 +72,15 @@ class TestCreateOrUpdateFilter:
 
     @pytest.mark.asyncio
     async def test_update_existing_filter(self, sieve_tools):
-        """Update an existing filter script."""
+        """Update an existing filter script — preserves prior filters."""
         sieve_tools.valves.allow_create_sieve = True
         mock_client = MagicMock()
         mock_client.connect.return_value = True
-        # Script already exists — just update, no activation attempt
+        existing = 'require "fileinto";\n'
+        existing += '# __FILTER:{"name":"keep","type":"move","folder":"Inbox"}__\n'
+        existing += 'if true {\n  fileinto "Inbox";\n  stop;\n}\n'
         mock_client.listscripts.return_value = ("filter_a", ["filter_a"])
+        mock_client.getscript.return_value = f"=== Sieve Script: filter_a ===\n{existing}"
         with patch("imap_mailbox.Client", return_value=mock_client):
             result = await sieve_tools.create_or_update_filter(
                 name="filter_a",
@@ -87,8 +89,37 @@ class TestCreateOrUpdateFilter:
                 subject="updated subject",
             )
         assert "updated" in result.lower()
-        called_args = mock_client.putscript.call_args[0]
-        assert called_args[0] == "filter_a"
+        script = mock_client.putscript.call_args[0][1]
+        # new filter replaces existing one with same name
+        assert '"name":"filter_a"' in script
+        # existing unrelated filters are preserved
+        assert '"name":"keep"' in script
+        assert 'fileinto "Archive"' in script
+
+    @pytest.mark.asyncio
+    async def test_update_existing_same_name_replaces_not_duplicates(self, sieve_tools):
+        """Updating a filter with a name that already exists in the script replaces it, not duplicates."""
+        sieve_tools.valves.allow_create_sieve = True
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        existing = 'require "fileinto";\n'
+        existing += '# __FILTER:{"name":"dup","type":"move","folder":"Old"}__\n'
+        existing += 'if true {\n  fileinto "Old";\n  stop;\n}\n'
+        existing += '# __FILTER:{"name":"other","type":"discard"}__\n'
+        existing += "if true {\n  discard;\n  stop;\n}\n"
+        mock_client.listscripts.return_value = ("dup", ["dup", "other"])
+        mock_client.getscript.return_value = f"=== Sieve Script: dup ===\n{existing}"
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            await sieve_tools.create_or_update_filter(
+                name="dup",
+                filter_type="discard",
+                subject="new subject",
+            )
+        script = mock_client.putscript.call_args[0][1]
+        assert script.count('"name":"dup"') == 1
+        assert script.count('"name":"other"') == 1
+        assert 'fileinto "Old"' not in script
+        assert "discard" in script
 
     @pytest.mark.asyncio
     async def test_create_no_target_folder_for_move(self, sieve_tools):
@@ -135,9 +166,7 @@ class TestCreateOrUpdateFilter:
     async def test_create_disabled(self, sieve_tools):
         """Create when create permission is disabled."""
         with patch("imap_mailbox.Client", MagicMock()):
-            result = await sieve_tools.create_or_update_filter(
-                name="test", filter_type="move", target_folder="X"
-            )
+            result = await sieve_tools.create_or_update_filter(name="test", filter_type="move", target_folder="X")
         assert "disabled" in result.lower() and "allow_create_sieve" in result
 
     @pytest.mark.asyncio
@@ -425,9 +454,7 @@ class TestRemoveFilterFromScript:
         mock_client.listscripts.return_value = ("scripts", ["scripts"])
         mock_client.getscript.return_value = f"=== Sieve Script: scripts ===\n{script_content}"
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="scripts", name="to_remove"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="scripts", name="to_remove")
         assert "removed" in result.lower()
         updated = mock_client.putscript.call_args[0][1]
         assert "to_remove" not in updated
@@ -440,11 +467,11 @@ class TestRemoveFilterFromScript:
         mock_client = MagicMock()
         mock_client.connect.return_value = True
         mock_client.listscripts.return_value = ("scripts", ["scripts"])
-        mock_client.getscript.return_value = 'require "fileinto";\n# __FILTER:{"name":"only","type":"move"}__\nif true { stop; }\n'
+        mock_client.getscript.return_value = (
+            'require "fileinto";\n# __FILTER:{"name":"only","type":"move"}__\nif true { stop; }\n'
+        )
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="scripts", name="ghost"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="scripts", name="ghost")
         assert "not found" in result.lower()
 
     @pytest.mark.asyncio
@@ -455,9 +482,7 @@ class TestRemoveFilterFromScript:
         mock_client.connect.return_value = True
         mock_client.listscripts.return_value = (None, ["other"])
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="ghost", name="f1"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="ghost", name="f1")
         assert "not found" in result.lower()
 
     @pytest.mark.asyncio
@@ -468,18 +493,14 @@ class TestRemoveFilterFromScript:
         mock_client.connect.return_value = True
         mock_client.listscripts.return_value = (None, [])
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="ghost", name="f1"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="ghost", name="f1")
         assert "No Sieve scripts" in result
 
     @pytest.mark.asyncio
     async def test_remove_filter_disabled(self, sieve_tools):
         """Remove when update permission is disabled."""
         with patch("imap_mailbox.Client", MagicMock()):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="x", name="f1"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="x", name="f1")
         assert "disabled" in result.lower() and "allow_update_sieve" in result
 
     @pytest.mark.asyncio
@@ -494,9 +515,7 @@ class TestRemoveFilterFromScript:
         mock_client.getscript.side_effect = Exception("Server error")
         mock_client.listscripts.return_value = ("scripts", ["scripts"])
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="scripts", name="f1"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="scripts", name="f1")
         assert "Error removing filter rule" in result
 
     @pytest.mark.asyncio
@@ -509,9 +528,7 @@ class TestRemoveFilterFromScript:
         mock_client = MagicMock()
         mock_client.connect.return_value = False
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="scripts", name="f1"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="scripts", name="f1")
         assert "Connection or authentication failed" in result
 
 
@@ -530,7 +547,7 @@ class TestRemoveAllFiltersFromScript:
             '# __FILTER:{"name":"f1","type":"move"}__\n'
             'fileinto "A";\n'
             '# __FILTER:{"name":"f2","type":"discard"}__\n'
-            'discard;\n'
+            "discard;\n"
         )
         mock_client.listscripts.return_value = ("scripts", ["scripts"])
         mock_client.getscript.return_value = f"=== Sieve Script: scripts ===\n{script_content}"
@@ -644,9 +661,7 @@ class TestFullWorkflow:
                 filter_type="discard",
                 subject="x",
             )
-            result = await sieve_tools.remove_filter_from_script(
-                script_name="filters", name="rule2"
-            )
+            result = await sieve_tools.remove_filter_from_script(script_name="filters", name="rule2")
         assert "removed" in result.lower()
         # Verify that only rule1 (a@x.com) remains
         updated_content = mock_client.putscript.call_args_list[-1][0][1]

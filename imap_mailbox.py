@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.4.0
+version: 3.4.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -291,6 +291,12 @@ class SieveScriptBuilder:
             return script_content
         return SieveScriptBuilder.build_complete_script(existing)
 
+    @staticmethod
+    def replace_filter_in_script(script_content: str, new_filter: str, filter_name: str) -> str:
+        """Replace a filter block by name with a new filter, preserving all others."""
+        existing = _parse_filters_from_script(script_content, exclude_name=filter_name)
+        return SieveScriptBuilder.build_complete_script(existing + [new_filter])
+
 
 class Tools:
     def __init__(self):
@@ -571,7 +577,6 @@ class Tools:
                 target_folder=tf,
                 **conditions,
             )
-            script_content = SieveScriptBuilder.build_complete_script([filter_rule])
         except ValueError as e:
             return f"Error: {str(e)}"
 
@@ -583,10 +588,14 @@ class Tools:
             active, scripts, _ = _handle_sieve_list_result(client.listscripts())
 
             if name in (scripts or []):
+                raw_content = client.getscript(name)
+                existing_content = _extract_script_content(raw_content)
+                script_content = SieveScriptBuilder.replace_filter_in_script(existing_content, filter_rule, name)
                 client.putscript(name, script_content)
                 client.logout()
                 return f"Filter '{name}' has been updated in script '{name}'."
             else:
+                script_content = SieveScriptBuilder.build_complete_script([filter_rule])
                 client.putscript(name, script_content)
                 # Try to activate
                 with suppress(Exception):

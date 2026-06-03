@@ -147,7 +147,7 @@ def _make_status_mock(total: int, unseen: int, uid_validity: int, has_uids: bool
 
     mock_server = MagicMock()
 
-    status_str = f"(* STATUS \"INBOX\" (MESSAGES {total} UNSEEN {unseen} UIDVALIDITY {uid_validity}))"
+    status_str = f'(* STATUS "INBOX" (MESSAGES {total} UNSEEN {unseen} UIDVALIDITY {uid_validity}))'
     mock_server.examine.return_value = ("OK", [status_str.encode()])
 
     if has_uids:

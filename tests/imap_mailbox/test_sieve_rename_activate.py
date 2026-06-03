@@ -15,6 +15,7 @@ class TestRenameSieveScript:
     def _make_client(self, active="filter1", scripts=None):
         """Create a configured mock ManageSieve client."""
         from tests.imap_mailbox.conftest import SieveMockBuilder
+
         return SieveMockBuilder.make(active=active, scripts=scripts)
 
     @pytest.mark.asyncio
@@ -138,6 +139,7 @@ class TestCreateAndActivateSieveScript:
 
     def _make_client(self, active="existing", scripts=None):
         from tests.imap_mailbox.conftest import SieveMockBuilder
+
         return SieveMockBuilder.make(active=active, scripts=scripts)
 
     @pytest.mark.asyncio
@@ -170,9 +172,7 @@ class TestCreateAndActivateSieveScript:
         sieve_tools.valves.allow_create_sieve = True
         mock_client = self._make_client()
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.create_and_activate_sieve_script(
-                name="filter1", content="new content"
-            )
+            result = await sieve_tools.create_and_activate_sieve_script(name="filter1", content="new content")
         assert "already exists" in result
 
     @pytest.mark.asyncio
@@ -186,9 +186,7 @@ class TestCreateAndActivateSieveScript:
             ("other_script", ["filter1"]),  # After: different active (server quirk)
         ]
         with patch("imap_mailbox.Client", return_value=mock_client):
-            result = await sieve_tools.create_and_activate_sieve_script(
-                name="filter1", content="content"
-            )
+            result = await sieve_tools.create_and_activate_sieve_script(name="filter1", content="content")
         assert "Manual activation" in result or "manual activation" in result.lower()
 
     @pytest.mark.asyncio

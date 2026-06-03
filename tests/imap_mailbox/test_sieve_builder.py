@@ -60,7 +60,9 @@ class TestFilterRuleGeneration:
 
     def test_filter_with_has_attachment(self):
         """Filter matching emails with attachments."""
-        rule = SieveScriptBuilder.generate_filter_rule("has_attach", "move", "Docs", subject="report", has_attachment=True)
+        rule = SieveScriptBuilder.generate_filter_rule(
+            "has_attach", "move", "Docs", subject="report", has_attachment=True
+        )
         assert 'attachment :contains "Content-Type" "multipart/"' in rule
 
     def test_filter_with_false_has_attachment(self):
@@ -176,7 +178,7 @@ class TestBuildHeaderFromScript:
 
     def test_build_header_from_script_no_headers(self):
         """No require statements — fallback to fileinto."""
-        script = 'if true {\n  stop;\n}\n'
+        script = "if true {\n  stop;\n}\n"
         header = _build_header_from_script(script)
         assert header == 'require "fileinto";'
 
@@ -185,7 +187,7 @@ class TestBuildHeaderFromScript:
         script = 'fileinto "Inbox";\nrequire "fileinto";\n# some comment\nstop;\n'
         header = _build_header_from_script(script)
         assert 'require "fileinto"' in header
-        assert "fileinto \"Inbox\"" not in header
+        assert 'fileinto "Inbox"' not in header
 
 
 class TestExtractScriptContent:
@@ -193,7 +195,9 @@ class TestExtractScriptContent:
 
     def test_extract_from_standard_output(self):
         """Extract DSL from standard getscript response format."""
-        output = '=== Sieve Script: my_filter ===\nrequire "fileinto";\nif header :contains "From" "x" {\n  fileinto "Y";\n}'
+        output = (
+            '=== Sieve Script: my_filter ===\nrequire "fileinto";\nif header :contains "From" "x" {\n  fileinto "Y";\n}'
+        )
         content = _extract_script_content(output)
         assert 'require "fileinto"' in content
 
@@ -236,11 +240,7 @@ class TestParseFiltersFromScript:
 
     def test_parse_with_invalid_json_tag_ignores_unnamed(self):
         """Scripts with malformed tag JSON (non-JSON string) produce no named filters."""
-        script = (
-            'require "fileinto";\n'
-            "# __FILTER:{'name': broken}__\n"
-            'if true { fileinto "X"; }\n'
-        )
+        script = 'require "fileinto";\n# __FILTER:{\'name\': broken}__\nif true { fileinto "X"; }\n'
         filters = _parse_filters_from_script(script)
         # Invalid JSON → current_name=None, and None matches exclude_name=None → skipped
         assert filters == []

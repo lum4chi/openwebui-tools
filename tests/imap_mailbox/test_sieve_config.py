@@ -116,5 +116,3 @@ class TestManageSieveConnectNonTrue:
         with patch("imap_mailbox.Client", return_value=mock_client):
             result = tools._manage_sieve_connect()
         assert isinstance(result, str) and "Connection or authentication failed" in result
-
-

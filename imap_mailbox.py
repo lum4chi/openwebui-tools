@@ -436,208 +436,6 @@ class Tools:
                 client.logout()
             return f"Error retrieving Sieve script: {str(e)}"
 
-    async def create_sieve_script(
-        self,
-        name: str = Field(description="Name for the new Sieve script"),
-        content: str = Field(description="Sieve script content (Sieve DSL format)"),
-    ) -> str:
-        """Create or upload a new Sieve script.
-
-        Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange)
-        do not support ManageSieve script upload. Scripts must be created
-        via the provider's web interface.
-        """
-        if not self.valves.allow_create_sieve:
-            return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if name in scripts:
-                client.logout()
-                return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it."
-            client.putscript(name, content)
-            client.logout()
-            return f"Sieve script '{name}' has been created successfully."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error creating Sieve script: {str(e)}"
-
-    async def update_sieve_script(
-        self,
-        name: str = Field(description="Name of the existing Sieve script to update"),
-        content: str = Field(description="Updated Sieve script content"),
-    ) -> str:
-        """Update an existing Sieve script."""
-        if not self.valves.allow_update_sieve:
-            return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found. This is expected on providers that manage filters via their own API."
-            if name not in scripts:
-                client.logout()
-                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
-            client.putscript(name, content)
-            client.logout()
-            return f"Sieve script '{name}' has been updated successfully."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error updating Sieve script: {str(e)}"
-
-    async def delete_sieve_script(self, name: str = Field(description="Name of the Sieve script to delete")) -> str:
-        """Delete a Sieve script from the server."""
-        if not self.valves.allow_delete_sieve:
-            return "Delete script operations are disabled. Enable 'allow_delete_sieve' in Valves to use this feature."
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found. This is expected on providers that manage filters via their own API."
-            if name not in scripts:
-                client.logout()
-                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
-            client.deletescript(name)
-            if active == name:
-                client.setactive(None)
-            client.logout()
-            return f"Sieve script '{name}' has been deleted successfully."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error deleting Sieve script: {str(e)}"
-
-    async def rename_sieve_script(
-        self,
-        old_name: str = Field(description="Current name of the Sieve script"),
-        new_name: str = Field(description="New name for the Sieve script"),
-    ) -> str:
-        """Rename an existing Sieve script using ManageSieve RENAME."""
-        if not self.valves.allow_update_sieve:
-            return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API."
-            if old_name not in scripts:
-                client.logout()
-                return f"Error: Sieve script '{old_name}' not found. Available scripts: {', '.join(sorted(scripts))}"
-            if new_name in scripts and new_name != old_name:
-                client.logout()
-                return f"Error: A Sieve script named '{new_name}' already exists."
-            client.renamescript(old_name, new_name)
-            active = active or (scripts[0] if scripts else None)
-            if active == old_name:
-                client.setactive(new_name)
-            client.logout()
-            return f"Sieve script '{old_name}' has been renamed to '{new_name}'."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error renaming Sieve script: {str(e)}"
-
-    async def create_and_activate_sieve_script(
-        self,
-        name: str = Field(description="Name for the new Sieve script"),
-        content: str = Field(description="Sieve script content (Sieve DSL format)"),
-    ) -> str:
-        """Create a new Sieve script and activate it in a single step.
-
-        Uses putscript with activate=True, equivalent to calling
-        create_sieve_script() followed by set_active_sieve_script().
-        """
-        if not self.valves.allow_create_sieve:
-            return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if name in (scripts or []):
-                client.logout()
-                return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it or use a different name."
-            client.putscript(name, content, activate=True)
-            active, _, _ = _handle_sieve_list_result(client.listscripts())
-            client.logout()
-            if active == name:
-                return f"Sieve script '{name}' has been created and activated successfully."
-            return f"Sieve script '{name}' has been created. Manual activation may be required on this provider."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error creating and activating Sieve script: {str(e)}"
-
-    async def set_active_sieve_script(
-        self, name: str = Field(description="Name of the Sieve script to activate")
-    ) -> str:
-        """Activate a Sieve script (make it the active filter)."""
-        if not self.valves.allow_activate_sieve:
-            return (
-                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
-            )
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API."
-            if name not in scripts:
-                client.logout()
-                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
-            client.setactive(name)
-            client.logout()
-            return f"Sieve script '{name}' is now active."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error activating Sieve script: {str(e)}"
-
-    async def deactivate_sieve_script(self) -> str:
-        """Deactivate the currently active Sieve script (no scripts will filter mail)."""
-        if not self.valves.allow_activate_sieve:
-            return (
-                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
-            )
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, err = _handle_sieve_list_result(client.listscripts())
-
-            if not active:
-                client.logout()
-                return "No Sieve script is currently active."
-            client.setactive(None)
-            client.logout()
-            return f"Sieve script '{active}' has been deactivated. No scripts are currently active."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error deactivating Sieve script: {str(e)}"
-
     async def create_or_update_filter(
         self,
         name: str = Field(description="Name for the script (e.g. 'work_filters', 'auto_sort')"),
@@ -659,6 +457,9 @@ class Tools:
         This is a convenience method — provide filter parameters and the tool
         generates the Sieve DSL automatically. No need to write Sieve syntax.
 
+        Use this for fine-tuning filters. For raw script management, see
+        ``create_sieve_script`` and ``update_sieve_script``.
+
         :param name: Script name (will be created or updated)
         :param filter_type: 'move' to move to target_folder, 'discard' to delete silently, 'stop' to blacklist (move to Junk)
         :param target_folder: Required for 'move' type
@@ -669,9 +470,6 @@ class Tools:
         :param hour_range: Match time range as 'HH-HH' string (e.g. '9-17')
         :param has_attachment: Match emails with attachments
         """
-        if not self.valves.allow_create_sieve:
-            return "Filter creation is disabled. Enable 'allow_create_sieve' in Valves to use this feature."
-
         name = self._resolve_fieldinfo(name, "")
         filter_type = self._resolve_fieldinfo(filter_type, "")
         target_folder = self._resolve_fieldinfo(target_folder, "")
@@ -681,6 +479,9 @@ class Tools:
         day = self._resolve_fieldinfo(day, "")
         hour_range = self._resolve_fieldinfo(hour_range, "")
         has_attachment = self._resolve_fieldinfo(has_attachment, False)
+
+        if not self.valves.allow_create_sieve:
+            return "Filter creation is disabled. Enable 'allow_create_sieve' in Valves to use this feature."
 
         conditions: dict[str, Any] = {}
         if from_addr:
@@ -756,15 +557,15 @@ class Tools:
         This is a convenience method — provide filter parameters and the tool
         generates the Sieve DSL and appends it to the existing script.
 
+        Use this for fine-tuning filters. For raw script management, see
+        ``create_sieve_script`` and ``update_sieve_script``.
+
         :param script_name: Existing script to modify
         :param name: Unique identifier for this rule (for later removal/update)
         :param filter_type: 'move', 'discard', or 'stop'
         :param target_folder: Required for 'move' type
         :param from_addr/to_addr/subject/day/hour_range/has_attachment: Match conditions
         """
-        if not self.valves.allow_update_sieve:
-            return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
-
         script_name = self._resolve_fieldinfo(script_name, "")
         name = self._resolve_fieldinfo(name, "")
         filter_type = self._resolve_fieldinfo(filter_type, "")
@@ -776,6 +577,9 @@ class Tools:
         hour_range = self._resolve_fieldinfo(hour_range, "")
         has_attachment = self._resolve_fieldinfo(has_attachment, False)
 
+        if not self.valves.allow_update_sieve:
+            return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
+
         conditions: dict[str, Any] = {}
         if from_addr:
             conditions["from"] = from_addr
@@ -786,21 +590,24 @@ class Tools:
         if day:
             conditions["day"] = day
         if hour_range:
-            lo, hi = (int(x) for x in hour_range.split("-"))
-            if not (0 <= lo < 24 and 0 < hi <= 24 and lo < hi):
-                return "Error: Invalid hour_range. Use format 'HH-HH' where 0<=HH<HH<=24."
-            conditions["hour_range"] = (lo, hi)
+            try:
+                lo, hi = (int(x) for x in hour_range.split("-"))
+                if not (0 <= lo < 24 and 0 < hi <= 24 and lo < hi):
+                    return "Error: Invalid hour_range. Use format 'HH-HH' where 0<=HH<HH<=24 (e.g. '9-17')."
+                conditions["hour_range"] = (lo, hi)
+            except (ValueError, AttributeError):
+                return f"Error: Invalid hour_range format '{hour_range}'. Use 'HH-HH' (e.g. '9-17')."
         if has_attachment:
             conditions["has_attachment"] = True
 
         tf = target_folder if target_folder else None
 
         new_filter = SieveScriptBuilder.generate_filter_rule(
-                name=name,
-                filter_type=filter_type,
-                target_folder=tf,
-                **conditions,
-            )
+            name=name,
+            filter_type=filter_type,
+            target_folder=tf,
+            **conditions,
+        )
 
         result = self._manage_sieve_connect()
         if isinstance(result, str):
@@ -830,15 +637,21 @@ class Tools:
     async def remove_filter_from_script(
         self,
         script_name: str = Field(description="Name of the Sieve script to modify"),
-        name: str = Field(description="The unique name given to the filter rule to remove"),
+        name: str = Field(
+            description="The unique name given to the filter rule to remove, as set in add_filter_to_script or create_or_update_filter"
+        ),
     ) -> str:
         """Remove a specific filter rule from an existing script by its unique name.
 
+        Use this for fine-tuning filters (remove one rule at a time).
+        To delete the entire script, see ``delete_sieve_script``.
+
         :param script_name: The script to modify
-        :param name: The unique rule name as set in add_filter_to_script or create_or_update_filter
+        :param name: The unique rule name to remove
         """
         script_name = self._resolve_fieldinfo(script_name, "")
         name = self._resolve_fieldinfo(name, "")
+
         if not self.valves.allow_update_sieve:
             return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
 
@@ -876,9 +689,13 @@ class Tools:
     ) -> str:
         """Remove all filter rules from a script, keeping only the require headers.
 
-        This effectively disables all filtering while preserving the script.
+        Use this to clear all filters but preserve the script.
+        For script-level deletion, see ``delete_sieve_script``.
+
+        :param script_name: The script to clear
         """
         script_name = self._resolve_fieldinfo(script_name, "")
+
         if not self.valves.allow_update_sieve:
             return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
 
@@ -908,6 +725,252 @@ class Tools:
             with suppress(Exception):
                 client.logout()
             return f"Error clearing filters from script: {str(e)}"
+
+    async def create_sieve_script(
+        self,
+        name: str = Field(description="Name for the new Sieve script"),
+        content: str = Field(description="Sieve script content (raw Sieve DSL format)"),
+    ) -> str:
+        """Create or upload a new Sieve script from raw DSL content.
+
+        WARNING: This writes the entire script from raw Sieve syntax.
+        For fine-tuning filters (add/remove individual rules), use:
+        - ``create_or_update_filter`` — create/update a single filter rule
+        - ``add_filter_to_script`` — add one rule to an existing script
+        - ``remove_filter_from_script`` — remove one rule by name
+
+        Only use this when writing a complete script from scratch.
+
+        Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange)
+        do not support ManageSieve script upload. Scripts must be created
+        via the provider's web interface.
+        """
+        if not self.valves.allow_create_sieve:
+            return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if name in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it."
+            client.putscript(name, content)
+            client.logout()
+            return f"Sieve script '{name}' has been created successfully."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error creating Sieve script: {str(e)}"
+
+    async def update_sieve_script(
+        self,
+        name: str = Field(description="Name of the existing Sieve script to update"),
+        content: str = Field(description="Updated Sieve script content (full raw Sieve DSL)"),
+    ) -> str:
+        """Update an existing Sieve script with full raw DSL content.
+
+        WARNING: This replaces the entire script with new Sieve syntax.
+        For fine-tuning filters (add/remove individual rules), use:
+        - ``add_filter_to_script`` — add one rule to an existing script
+        - ``remove_filter_from_script`` — remove one rule by name
+        - ``remove_all_filters_from_script`` — clear all rules keeping headers
+
+        Only use this when rewriting a complete script.
+        """
+        if not self.valves.allow_update_sieve:
+            return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found. This is expected on providers that manage filters via their own API."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            client.putscript(name, content)
+            client.logout()
+            return f"Sieve script '{name}' has been updated successfully."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error updating Sieve script: {str(e)}"
+
+    async def delete_sieve_script(self, name: str = Field(description="Name of the Sieve script to delete")) -> str:
+        """Delete a Sieve script from the server.
+
+        WARNING: This deletes the entire script including all filter rules.
+        To remove individual filters from a script, use:
+        - ``remove_filter_from_script`` — remove one rule by name
+        - ``remove_all_filters_from_script`` — clear all rules keeping headers
+
+        Only use this when you want to remove the whole script.
+        """
+        if not self.valves.allow_delete_sieve:
+            return "Delete script operations are disabled. Enable 'allow_delete_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found. This is expected on providers that manage filters via their own API."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            client.deletescript(name)
+            if active == name:
+                client.setactive(None)
+            client.logout()
+            return f"Sieve script '{name}' has been deleted successfully."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error deleting Sieve script: {str(e)}"
+
+    async def rename_sieve_script(
+        self,
+        old_name: str = Field(description="Current name of the Sieve script"),
+        new_name: str = Field(description="New name for the Sieve script"),
+    ) -> str:
+        """Rename an existing Sieve script (script-level operation, not filter fine-tuning).
+
+        For filter-level operations, prefer:
+        - ``add_filter_to_script`` / ``remove_filter_from_script`` — manage individual rules
+        - ``remove_all_filters_from_script`` — clear rules keeping headers
+        """
+        if not self.valves.allow_update_sieve:
+            return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API."
+            if old_name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{old_name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            if new_name in scripts and new_name != old_name:
+                client.logout()
+                return f"Error: A Sieve script named '{new_name}' already exists."
+            client.renamescript(old_name, new_name)
+            active = active or (scripts[0] if scripts else None)
+            if active == old_name:
+                client.setactive(new_name)
+            client.logout()
+            return f"Sieve script '{old_name}' has been renamed to '{new_name}'."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error renaming Sieve script: {str(e)}"
+
+    async def create_and_activate_sieve_script(
+        self,
+        name: str = Field(description="Name for the new Sieve script"),
+        content: str = Field(description="Sieve script content (raw Sieve DSL format)"),
+    ) -> str:
+        """Create a new Sieve script with raw DSL and activate it in one step.
+
+        WARNING: This writes the entire script from raw Sieve syntax.
+        For fine-tuning filters, prefer ``create_or_update_filter`` which
+        generates Sieve DSL automatically from structured parameters.
+
+        Uses putscript with activate=True, equivalent to calling
+        create_sieve_script() followed by set_active_sieve_script().
+        """
+        if not self.valves.allow_create_sieve:
+            return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if name in (scripts or []):
+                client.logout()
+                return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it or use a different name."
+            client.putscript(name, content, activate=True)
+            active, _, _ = _handle_sieve_list_result(client.listscripts())
+            client.logout()
+            if active == name:
+                return f"Sieve script '{name}' has been created and activated successfully."
+            return f"Sieve script '{name}' has been created. Manual activation may be required on this provider."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error creating and activating Sieve script: {str(e)}"
+
+    async def set_active_sieve_script(
+        self, name: str = Field(description="Name of the Sieve script to activate")
+    ) -> str:
+        """Activate a Sieve script (make it the active filter).
+
+        For filter-level operations (adding/removing individual rules), prefer:
+        - ``create_or_update_filter`` — create/update a single filter rule
+        - ``add_filter_to_script`` — add one rule to an existing script
+        """
+        if not self.valves.allow_activate_sieve:
+            return (
+                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
+            )
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+            if not scripts:
+                client.logout()
+                return "No Sieve scripts found on the ManageSieve server. This is expected on providers that manage filters via their own API."
+            if name not in scripts:
+                client.logout()
+                return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
+            client.setactive(name)
+            client.logout()
+            return f"Sieve script '{name}' is now active."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error activating Sieve script: {str(e)}"
+
+    async def deactivate_sieve_script(self) -> str:
+        """Deactivate the currently active Sieve script (no scripts will filter mail).
+
+        For filter-level operations, use:
+        - ``remove_filter_from_script`` — remove one rule by name
+        - ``remove_all_filters_from_script`` — clear all rules keeping headers
+        """
+        if not self.valves.allow_activate_sieve:
+            return (
+                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
+            )
+        result = self._manage_sieve_connect()
+        if isinstance(result, str):
+            return result
+        client = result
+        try:
+            active, scripts, err = _handle_sieve_list_result(client.listscripts())
+
+            if not active:
+                client.logout()
+                return "No Sieve script is currently active."
+            client.setactive(None)
+            client.logout()
+            return f"Sieve script '{active}' has been deactivated. No scripts are currently active."
+        except Exception as e:
+            with suppress(Exception):
+                client.logout()
+            return f"Error deactivating Sieve script: {str(e)}"
 
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""

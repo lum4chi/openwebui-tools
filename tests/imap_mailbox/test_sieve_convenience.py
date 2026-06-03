@@ -281,6 +281,17 @@ class TestAddFilterToScript:
         assert "Invalid hour_range" in result
 
     @pytest.mark.asyncio
+    async def test_add_filter_invalid_hour_range_value_error(self, sieve_tools):
+        """Add filter with non-parseable hour_range triggers ValueError exception."""
+        sieve_tools.valves.allow_update_sieve = True
+        with patch("imap_mailbox.Client", MagicMock()):
+            result = await sieve_tools.add_filter_to_script(
+                script_name="x", name="f1", filter_type="move", target_folder="A", hour_range="abc-def"
+            )
+        assert "Invalid hour_range" in result
+        assert "abc-def" in result
+
+    @pytest.mark.asyncio
     async def test_add_filter_with_subject_day_and_attachment(self, sieve_tools):
         """Add filter with subject, day_of_week and has_attachment conditions."""
         sieve_tools.valves.allow_update_sieve = True

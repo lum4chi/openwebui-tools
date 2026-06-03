@@ -7,6 +7,15 @@ requirements: sievelib>=1.5.0
 version: 3.2.0
 licence: MIT
 required_open_webui_version: 0.5.0
+
+Agent instructions:
+  SIEVE FILTER MANAGEMENT:
+  1. create_or_update_filter — create or update a single filter rule
+  2. add_filter_to_script — add one filter rule to an existing script
+  3. remove_filter_from_script — remove one filter rule by name
+  4. remove_all_filters_from_script — clear all rules keeping headers
+  5. create/update/delete_sieve_script — ONLY for entire script creation/modification (never for single filter changes)
+  6. set_active/deactivate_sieve_script — ONLY for activating/deactivating scripts
 """
 
 import email.message
@@ -641,9 +650,8 @@ class Tools:
             description="The unique name given to the filter rule to remove, as set in add_filter_to_script or create_or_update_filter"
         ),
     ) -> str:
-        """Remove a specific filter rule from an existing script by its unique name.
-
-        Use this for fine-tuning filters (remove one rule at a time).
+        """Agent note: THIS is the correct method for removing individual filter rules.
+        Use this for removing a specific filter rule from a script by its unique name.
         To delete the entire script, see ``delete_sieve_script``.
 
         :param script_name: The script to modify
@@ -687,10 +695,9 @@ class Tools:
         self,
         script_name: str = Field(description="Name of the Sieve script to clear"),
     ) -> str:
-        """Remove all filter rules from a script, keeping only the require headers.
-
-        Use this to clear all filters but preserve the script.
-        For script-level deletion, see ``delete_sieve_script``.
+        """Agent note: THIS is the correct method for clearing all filter rules from a script.
+        Use this to clear all filter rules while preserving the script itself (keep require headers).
+        To remove the entire script, see ``delete_sieve_script``.
 
         :param script_name: The script to clear
         """
@@ -913,8 +920,7 @@ class Tools:
     async def set_active_sieve_script(
         self, name: str = Field(description="Name of the Sieve script to activate")
     ) -> str:
-        """Activate a Sieve script (make it the active filter).
-
+        """Agent note: This sets a specific script as the active filter.
         For filter-level operations (adding/removing individual rules), prefer:
         - ``create_or_update_filter`` — create/update a single filter rule
         - ``add_filter_to_script`` — add one rule to an existing script
@@ -944,8 +950,7 @@ class Tools:
             return f"Error activating Sieve script: {str(e)}"
 
     async def deactivate_sieve_script(self) -> str:
-        """Deactivate the currently active Sieve script (no scripts will filter mail).
-
+        """Agent note: This deactivates the currently active script entirely.
         For filter-level operations, use:
         - ``remove_filter_from_script`` — remove one rule by name
         - ``remove_all_filters_from_script`` — clear all rules keeping headers

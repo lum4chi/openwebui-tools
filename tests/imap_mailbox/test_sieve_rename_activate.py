@@ -163,7 +163,6 @@ class TestCreateAndActivateSieveScript:
         mock_client.putscript.assert_called_once_with(
             "my_filter",
             'require "fileinto";\nif true { stop; }',
-            activate=True,
         )
 
     @pytest.mark.asyncio

@@ -134,7 +134,7 @@ class TestSieveTools:
             result = await sieve_tools.delete_sieve_script(name="filter2")
         assert "deleted successfully" in result
         mock_client.deletescript.assert_called_once_with("filter2")
-        mock_client.setactive.assert_called_once_with(None)
+        mock_client.setactive.assert_called_once_with("")
 
     @pytest.mark.asyncio
     async def test_delete_sieve_script_not_found(self, sieve_tools):
@@ -189,7 +189,7 @@ class TestSieveTools:
         with patch("imap_mailbox.Client", return_value=mock_client):
             result = await sieve_tools.deactivate_sieve_script()
         assert "deactivated" in result.lower()
-        mock_client.setactive.assert_called_once_with(None)
+        mock_client.setactive.assert_called_once_with("")
 
     @pytest.mark.asyncio
     async def test_deactivate_sieve_script_none_active(self, sieve_tools):

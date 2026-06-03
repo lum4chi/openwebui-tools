@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.4.1
+version: 3.5.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -859,7 +859,10 @@ class Tools:
             if name not in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
-            client.putscript(name, content)
+            put_result = client.putscript(name, content)
+            if not put_result:
+                client.logout()
+                return f"Error updating Sieve script '{name}'. Server rejected the update."
             client.logout()
             return f"Sieve script '{name}' has been updated successfully."
         except Exception as e:
@@ -893,7 +896,7 @@ class Tools:
                 return f"Error: Sieve script '{name}' not found. Available scripts: {', '.join(sorted(scripts))}"
             client.deletescript(name)
             if active == name:
-                client.setactive(None)
+                client.setactive("")
             client.logout()
             return f"Sieve script '{name}' has been deleted successfully."
         except Exception as e:
@@ -965,7 +968,10 @@ class Tools:
             if name in (scripts or []):
                 client.logout()
                 return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it or use a different name."
-            client.putscript(name, content, activate=True)
+            put_result = client.putscript(name, content)
+            if not put_result:
+                client.logout()
+                return f"Error uploading Sieve script '{name}'. Server rejected the upload."
             active, _, _ = _handle_sieve_list_result(client.listscripts())
             client.logout()
             if active == name:
@@ -1028,7 +1034,7 @@ class Tools:
             if not active:
                 client.logout()
                 return "No Sieve script is currently active."
-            client.setactive(None)
+            client.setactive("")
             client.logout()
             return f"Sieve script '{active}' has been deactivated. No scripts are currently active."
         except Exception as e:

@@ -18,12 +18,12 @@ Agent instructions:
   6. set_active/deactivate_sieve_script — ONLY for activating/deactivating scripts
 """
 
-import email.message
 import imaplib
 import json
 import re
 from contextlib import suppress
 from datetime import datetime, timedelta
+from email import message_from_bytes
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
@@ -1024,7 +1024,7 @@ class Tools:
 
     def _parse_email(self, raw_data: bytes) -> dict:
         """Parse raw email bytes into a structured dict."""
-        msg = email.message_from_bytes(raw_data)
+        msg = message_from_bytes(raw_data)
 
         date_str = msg.get("Date", "")
         date_parsed = None

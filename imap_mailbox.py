@@ -4,11 +4,26 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.2.0
+version: 3.4.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
 Agent instructions:
+  IMAP EMAIL MANAGEMENT:
+  1. list_emails — list emails in a folder
+  2. read_emails — read email(s) by UID
+  3. search_emails — search by from/subject/date
+  4. mark_emails — mark read/unread (requires allow_modify_flags)
+  5. star_emails — add star/flag (requires allow_modify_flags)
+  6. unstar_emails — remove star/flag (requires allow_modify_flags)
+  7. copy_emails — copy to another folder without removing from source
+  8. archive_emails — convenience wrapper: move to archive folder (requires allow_archive)
+  9. trash_emails — convenience wrapper: move to trash folder (requires allow_trash)
+  10. get_folder_status — get message count and unseen count
+  11. create_folder / delete_folder — manage folders
+  12. list_folders — list all available folders
+  13. delete_emails / delete_all_emails — permanently delete (requires allow_delete_single/allow_delete_all)
+  14. move_emails — move between folders (requires allow_move)
   SIEVE FILTER MANAGEMENT:
   1. create_or_update_filter — create or update a single filter rule
   2. add_filter_to_script — add one filter rule to an existing script
@@ -43,7 +58,7 @@ class EncryptionMode(StrEnum):
 
 
 # Compatibility: imaplib.IMAP4Exception may not exist in all Python versions
-_IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
+_IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", OSError)
 
 
 def _quote(s: str) -> str:
@@ -75,7 +90,11 @@ def _handle_sieve_list_result(
     getscript/setactive etc. work with the active script name.
     """
     if result is None:
-        return (None, [], "Server responded that no scripts are available for this user.")
+        return (
+            None,
+            [],
+            "Server responded that no scripts are available for this user.",
+        )
     try:
         active = result[0]
         scripts = result[1]
@@ -86,7 +105,12 @@ def _handle_sieve_list_result(
     # sievelib intentionally skips adding active scripts via CONTINUE;
     # this fixes that so getscript/setactive work with the active name.
     # Skip for MagicMock — let test mocks behave as they were configured.
-    if active and isinstance(active, str) and isinstance(scripts, list) and active not in scripts:
+    if (
+        active
+        and isinstance(active, str)
+        and isinstance(scripts, list)
+        and active not in scripts
+    ):
         scripts.append(active)
     return active, scripts, None
 
@@ -110,7 +134,9 @@ def _build_header_from_script(script_content: str) -> str:
         stripped = line.strip()
         if stripped.startswith("require") and not stripped.startswith("#"):
             header_lines.append(stripped)
-        elif stripped.startswith("# __FILTER:") or (stripped and not stripped.startswith("#")):
+        elif stripped.startswith("# __FILTER:") or (
+            stripped and not stripped.startswith("#")
+        ):
             break
     if not header_lines:
         return 'require "fileinto";'
@@ -136,7 +162,9 @@ def _build_filter_tag_json(
     return "{" + ",".join(parts) + "}"
 
 
-def _parse_filters_from_script(script_content: str, exclude_name: str | None = None) -> list[str]:
+def _parse_filters_from_script(
+    script_content: str, exclude_name: str | None = None
+) -> list[str]:
     """Extract named filter blocks from a script, optionally excluding one.
 
     Each block starts with a # __FILTER:{"name":... }__ comment and is parsed
@@ -228,11 +256,15 @@ class SieveScriptBuilder:
                     header_conditions.append(f'date :value "lt" "hour" "{hi:02d}"')
             elif key == "has_attachment":
                 if value is True:
-                    header_conditions.append('attachment :contains "Content-Type" "multipart/"')
+                    header_conditions.append(
+                        'attachment :contains "Content-Type" "multipart/"'
+                    )
                 elif isinstance(value, bool):
                     pass
 
-        tag_json = _build_filter_tag_json(name, filter_type, target_folder, str(match_value))
+        tag_json = _build_filter_tag_json(
+            name, filter_type, target_folder, str(match_value)
+        )
 
         if header_conditions:
             combined = " ".join(header_conditions)
@@ -280,10 +312,17 @@ class Tools:
 
     class Valves(BaseModel):
         # connection
-        imap_server: str = Field(default="", description="IMAP server hostname (e.g., mail.example.com)")
-        imap_port: int = Field(default=993, description="IMAP server port (993 for implicit TLS, 143 for STARTTLS)")
+        imap_server: str = Field(
+            default="", description="IMAP server hostname (e.g., mail.example.com)"
+        )
+        imap_port: int = Field(
+            default=993,
+            description="IMAP server port (993 for implicit TLS, 143 for STARTTLS)",
+        )
         username: str = Field(default="", description="IMAP mailbox username")
-        password: str = Field(default="", description="IMAP mailbox password or app-specific password")
+        password: str = Field(
+            default="", description="IMAP mailbox password or app-specific password"
+        )
         encryption_method: EncryptionMode = Field(
             default=EncryptionMode.implicit,
             description="Encryption method: 'implicit' for TLS from start (port 993), 'starttls' for upgrade (port 143)",
@@ -291,39 +330,51 @@ class Tools:
         timeout: int = Field(default=30, description="Connection timeout in seconds")
 
         # folders
-        inbox_folder: str = Field(default="INBOX", description="Inbox folder name (default: 'INBOX')")
+        inbox_folder: str = Field(
+            default="INBOX", description="Inbox folder name (default: 'INBOX')"
+        )
         archive_folder: str = Field(
-            default="Archive", description="Archive folder name (e.g., 'Archive', '[Gmail]/All Mail')"
+            default="Archive",
+            description="Archive folder name (e.g., 'Archive', '[Gmail]/All Mail')",
         )
         trash_folder: str = Field(
-            default="Trash", description="Trash folder name; differs by provider (e.g., 'Deleted Items')"
+            default="Trash",
+            description="Trash folder name; differs by provider (e.g., 'Deleted Items')",
         )
-        sent_folder: str = Field(default="Sent", description="Sent folder name (e.g., 'Sent', 'Sent Items')")
+        sent_folder: str = Field(
+            default="Sent", description="Sent folder name (e.g., 'Sent', 'Sent Items')"
+        )
         drafts_folder: str = Field(
-            default="Drafts", description="Drafts folder name (e.g., 'Drafts', '[Gmail]/Drafts')"
+            default="Drafts",
+            description="Drafts folder name (e.g., 'Drafts', '[Gmail]/Drafts')",
         )
 
         # write permissions
         allow_delete_single: bool = Field(
-            default=False, description="Allow deleting individual emails (default: False for safety)"
+            default=False,
+            description="Allow deleting individual emails (default: False for safety)",
         )
         allow_delete_all: bool = Field(
-            default=False, description="Allow deleting all emails (default: False for safety)"
+            default=False,
+            description="Allow deleting all emails (default: False for safety)",
         )
         allow_move: bool = Field(
-            default=False, description="Allow moving emails between folders (default: False for safety)"
+            default=False,
+            description="Allow moving emails between folders (default: False for safety)",
         )
         allow_create_folder: bool = Field(
             default=False,
             description="Allow creating new IMAP folders (default: False for safety)",
         )
         allow_delete_folder: bool = Field(
-            default=False, description="Allow deleting IMAP folders (default: False for safety)"
+            default=False,
+            description="Allow deleting IMAP folders (default: False for safety)",
         )
 
         # manage sieve
         manage_sieve_server: str = Field(
-            default="", description="ManageSieve server hostname (default: same as imap_server)"
+            default="",
+            description="ManageSieve server hostname (default: same as imap_server)",
         )
         manage_sieve_port: int = Field(
             default=4190,
@@ -333,20 +384,40 @@ class Tools:
             default=EncryptionMode.starttls,
             description="Encryption method for ManageSieve. 'starttls' for STARTTLS upgrade (mailbox.org), 'implicit' for TLS from start (e.g. some Dovecot setups)",
         )
-        manage_sieve_timeout: int = Field(default=30, description="ManageSieve connection timeout in seconds")
+        manage_sieve_timeout: int = Field(
+            default=30, description="ManageSieve connection timeout in seconds"
+        )
+
+        # flag/archive/trash permissions
+        allow_modify_flags: bool = Field(
+            default=False,
+            description="Allow marking emails as read/unread and starring (default: False for safety)",
+        )
+        allow_archive: bool = Field(
+            default=False,
+            description="Allow archiving emails (default: False for safety)",
+        )
+        allow_trash: bool = Field(
+            default=False,
+            description="Allow trashing emails (default: False for safety)",
+        )
 
         # write permissions for sieve
         allow_create_sieve: bool = Field(
-            default=False, description="Allow creating or uploading Sieve scripts (default: False for safety)"
+            default=False,
+            description="Allow creating or uploading Sieve scripts (default: False for safety)",
         )
         allow_update_sieve: bool = Field(
-            default=False, description="Allow updating existing Sieve scripts (default: False for safety)"
+            default=False,
+            description="Allow updating existing Sieve scripts (default: False for safety)",
         )
         allow_delete_sieve: bool = Field(
-            default=False, description="Allow deleting Sieve scripts (default: False for safety)"
+            default=False,
+            description="Allow deleting Sieve scripts (default: False for safety)",
         )
         allow_activate_sieve: bool = Field(
-            default=False, description="Allow activating/deactivating Sieve scripts (default: False for safety)"
+            default=False,
+            description="Allow activating/deactivating Sieve scripts (default: False for safety)",
         )
 
     def _manage_sieve_connect(self) -> str | object:
@@ -419,7 +490,9 @@ class Tools:
                 client.logout()
             return f"Error listing Sieve scripts: {str(e)}. Note: Some providers manage filters via non-standard ManageSieve endpoints."
 
-    async def get_sieve_script(self, name: str = Field(description="Name of the Sieve script to retrieve")) -> str:
+    async def get_sieve_script(
+        self, name: str = Field(description="Name of the Sieve script to retrieve")
+    ) -> str:
         """Get the content of a Sieve script."""
         result = self._manage_sieve_connect()
         if isinstance(result, str):
@@ -447,19 +520,35 @@ class Tools:
 
     async def create_or_update_filter(
         self,
-        name: str = Field(description="Name for the script (e.g. 'work_filters', 'auto_sort')"),
-        filter_type: str = Field(description="Filter type: 'move', 'discard', or 'stop' (blacklist to Junk)"),
+        name: str = Field(
+            description="Name for the script (e.g. 'work_filters', 'auto_sort')"
+        ),
+        filter_type: str = Field(
+            description="Filter type: 'move', 'discard', or 'stop' (blacklist to Junk)"
+        ),
         target_folder: str = Field(
-            default="", description="Target folder (required for 'move' type, e.g. 'Work', 'Spam', 'Archive')"
+            default="",
+            description="Target folder (required for 'move' type, e.g. 'Work', 'Spam', 'Archive')",
         ),
-        from_addr: str = Field(default="", description="Filter emails from this sender address"),
-        to_addr: str = Field(default="", description="Filter emails to this recipient address"),
-        subject: str = Field(default="", description="Filter emails with this subject (partial match)"),
-        day: str = Field(default="", description="Filter on day of week (e.g. 'Saturday', 'Sunday')"),
+        from_addr: str = Field(
+            default="", description="Filter emails from this sender address"
+        ),
+        to_addr: str = Field(
+            default="", description="Filter emails to this recipient address"
+        ),
+        subject: str = Field(
+            default="", description="Filter emails with this subject (partial match)"
+        ),
+        day: str = Field(
+            default="", description="Filter on day of week (e.g. 'Saturday', 'Sunday')"
+        ),
         hour_range: str = Field(
-            default="", description="Filter by hour range in format 'HH-HH' (e.g. '9-17' for business hours)"
+            default="",
+            description="Filter by hour range in format 'HH-HH' (e.g. '9-17' for business hours)",
         ),
-        has_attachment: bool = Field(default=False, description="Filter emails that have attachments"),
+        has_attachment: bool = Field(
+            default=False, description="Filter emails that have attachments"
+        ),
     ) -> str:
         """Create or update a Sieve script with a single structured filter rule.
 
@@ -550,16 +639,28 @@ class Tools:
 
     async def add_filter_to_script(
         self,
-        script_name: str = Field(description="Name of existing Sieve script to update (e.g. 'work_filters')"),
-        name: str = Field(description="Unique name for this filter rule (e.g. 'move_work_emails', 'block_spam')"),
-        filter_type: str = Field(description="Filter type: 'move', 'discard', or 'stop'"),
-        target_folder: str = Field(default="", description="Target folder (required for 'move' type)"),
+        script_name: str = Field(
+            description="Name of existing Sieve script to update (e.g. 'work_filters')"
+        ),
+        name: str = Field(
+            description="Unique name for this filter rule (e.g. 'move_work_emails', 'block_spam')"
+        ),
+        filter_type: str = Field(
+            description="Filter type: 'move', 'discard', or 'stop'"
+        ),
+        target_folder: str = Field(
+            default="", description="Target folder (required for 'move' type)"
+        ),
         from_addr: str = Field(default="", description="Match sender address"),
         to_addr: str = Field(default="", description="Match recipient address"),
         subject: str = Field(default="", description="Match subject line"),
         day: str = Field(default="", description="Match day of week (e.g. 'Saturday')"),
-        hour_range: str = Field(default="", description="Match hour range as 'HH-HH' (e.g. '9-17')"),
-        has_attachment: bool = Field(default=False, description="Match emails with attachments"),
+        hour_range: str = Field(
+            default="", description="Match hour range as 'HH-HH' (e.g. '9-17')"
+        ),
+        has_attachment: bool = Field(
+            default=False, description="Match emails with attachments"
+        ),
     ) -> str:
         """Add a new filter rule to an existing Sieve script.
 
@@ -634,7 +735,9 @@ class Tools:
 
             raw_content = client.getscript(script_name)
             existing_content = _extract_script_content(raw_content)
-            updated_content = SieveScriptBuilder.merge_filter_into_script(existing_content, new_filter)
+            updated_content = SieveScriptBuilder.merge_filter_into_script(
+                existing_content, new_filter
+            )
             client.putscript(script_name, updated_content)
             client.logout()
             return f"Filter rule '{name}' has been added to script '{script_name}'."
@@ -679,7 +782,9 @@ class Tools:
 
             raw_content = client.getscript(script_name)
             existing_content = _extract_script_content(raw_content)
-            updated_content = SieveScriptBuilder.remove_filter_from_script(existing_content, name)
+            updated_content = SieveScriptBuilder.remove_filter_from_script(
+                existing_content, name
+            )
             if updated_content == existing_content:
                 client.logout()
                 return f"Filter rule '{name}' not found in script '{script_name}'. Nothing to remove."
@@ -725,9 +830,7 @@ class Tools:
             header = _build_header_from_script(existing_content)
             client.putscript(script_name, header)
             client.logout()
-            return (
-                f"All filter rules have been removed from script '{script_name}'. Only the require statements remain."
-            )
+            return f"All filter rules have been removed from script '{script_name}'. Only the require statements remain."
         except Exception as e:
             with suppress(Exception):
                 client.logout()
@@ -774,7 +877,9 @@ class Tools:
     async def update_sieve_script(
         self,
         name: str = Field(description="Name of the existing Sieve script to update"),
-        content: str = Field(description="Updated Sieve script content (full raw Sieve DSL)"),
+        content: str = Field(
+            description="Updated Sieve script content (full raw Sieve DSL)"
+        ),
     ) -> str:
         """Update an existing Sieve script with full raw DSL content.
 
@@ -808,7 +913,9 @@ class Tools:
                 client.logout()
             return f"Error updating Sieve script: {str(e)}"
 
-    async def delete_sieve_script(self, name: str = Field(description="Name of the Sieve script to delete")) -> str:
+    async def delete_sieve_script(
+        self, name: str = Field(description="Name of the Sieve script to delete")
+    ) -> str:
         """Delete a Sieve script from the server.
 
         WARNING: This deletes the entire script including all filter rules.
@@ -926,9 +1033,7 @@ class Tools:
         - ``add_filter_to_script`` — add one rule to an existing script
         """
         if not self.valves.allow_activate_sieve:
-            return (
-                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
-            )
+            return "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
         result = self._manage_sieve_connect()
         if isinstance(result, str):
             return result
@@ -956,9 +1061,7 @@ class Tools:
         - ``remove_all_filters_from_script`` — clear all rules keeping headers
         """
         if not self.valves.allow_activate_sieve:
-            return (
-                "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
-            )
+            return "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
         result = self._manage_sieve_connect()
         if isinstance(result, str):
             return result
@@ -976,6 +1079,478 @@ class Tools:
             with suppress(Exception):
                 client.logout()
             return f"Error deactivating Sieve script: {str(e)}"
+
+    async def mark_emails(
+        self,
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to mark. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs (e.g. '42,100,205')."
+        ),
+        folder: str = Field(description="IMAP folder (required — no fallback)"),
+        read: bool = Field(
+            default=True, description="True to mark as read, False to mark as unread"
+        ),
+    ) -> str:
+        """Mark email(s) as read or unread by setting/unsetting the \\Seen flag.
+
+        :param uids: IMAP UID(s) to mark (required)
+        :param folder: IMAP folder (required, no fallback)
+        :param read: True = mark as read (set \\Seen), False = mark as unread (unset \\Seen)
+        """
+        uids = self._normalize_uids(uids)
+        folder = self._resolve_fieldinfo(folder, None)
+
+        if not self.valves.allow_modify_flags:
+            return "Mark emails as read/unread is disabled. Enable 'allow_modify_flags' in Valves to use this feature."
+        if not uids:
+            return "Error: No UIDs provided. Specify at least one email UID."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        target_folder = self._resolve_folder(folder)
+
+        try:
+            conn = self._connect()
+            self._select_folder(conn, target_folder)
+
+            state = "\\Seen"
+            operation = "+FLAGS" if read else "-FLAGS"
+            flag_set = f"({state})"
+
+            marked: list[str] = []
+            failed: list[tuple[str, str]] = []
+            for uid in uids:
+                try:
+                    conn.uid("STORE", uid, operation, flag_set)
+                    marked.append(uid)
+                except Exception as e:
+                    failed.append((uid, str(e)))
+
+            self._safe_close(conn)
+
+            parts = []
+            if len(marked) == 1:
+                status = "read" if read else "unread"
+                parts.append(
+                    f"Email [{marked[0]}] marked as {status} in '{target_folder}'."
+                )
+            elif marked:
+                status = "read" if read else "unread"
+                parts.append(
+                    f"{len(marked)} email(s) marked as {status} in '{target_folder}'."
+                )
+                parts.append(f"UIDs: {', '.join(marked)}")
+
+            if failed:
+                parts.append(
+                    f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}"
+                )
+
+            return (
+                "\n".join(parts)
+                if parts
+                else f"No UIDs processed for '{target_folder}'."
+            )
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            return f"Error marking emails: {str(e)}"
+
+    async def star_emails(
+        self,
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to star. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs (e.g. '42,100')."
+        ),
+        folder: str = Field(description="IMAP folder (required — no fallback)"),
+    ) -> str:
+        """Star (flag) email(s) by setting the \\Flagged flag.
+
+        :param uids: IMAP UID(s) to star (required)
+        :param folder: IMAP folder (required, no fallback)
+        """
+        return await self._star_unstar_emails(uids, folder, star=True)
+
+    async def unstar_emails(
+        self,
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to unstar. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs (e.g. '42,100')."
+        ),
+        folder: str = Field(description="IMAP folder (required — no fallback)"),
+    ) -> str:
+        """Unstar (unflag) email(s) by resetting the \\Flagged flag.
+
+        :param uids: IMAP UID(s) to unstar (required)
+        :param folder: IMAP folder (required, no fallback)
+        """
+        return await self._star_unstar_emails(uids, folder, star=False)
+
+    async def _star_unstar_emails(
+        self,
+        uids: str | list[str],
+        folder: str | None,
+        star: bool,
+    ) -> str:
+        """Common logic for starring and unstaring emails.
+
+        Sets or removes the \\Flagged flag on the specified UIDs.
+        """
+        uids = self._normalize_uids(uids)
+        folder = self._resolve_fieldinfo(folder, None)
+
+        if not folder:
+            return "Error: Folder parameter is required and cannot be empty or None."
+        if not self.valves.allow_modify_flags:
+            return "Star/unstar operations are disabled. Enable 'allow_modify_flags' in Valves to use this feature."
+        if not uids:
+            return "Error: No UIDs provided. Specify at least one email UID."
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        target_folder = self._resolve_folder(folder)
+        flag_action = "+FLAGS" if star else "-FLAGS"
+        flag_set = "(\\Flagged)"
+
+        try:
+            conn = self._connect()
+            self._select_folder(conn, target_folder)
+
+            starred: list[str] = []
+            failed: list[tuple[str, str]] = []
+            for uid in uids:
+                try:
+                    conn.uid("STORE", uid, flag_action, flag_set)
+                    starred.append(uid)
+                except Exception as e:
+                    failed.append((uid, str(e)))
+
+            self._safe_close(conn)
+
+            action = "starred" if star else "unstarred"
+            parts = []
+            if len(starred) == 1:
+                parts.append(f"Email [{starred[0]}] {action} in '{target_folder}'.")
+            elif starred:
+                parts.append(f"{len(starred)} email(s) {action} in '{target_folder}'.")
+                parts.append(f"UIDs: {', '.join(starred)}")
+
+            if failed:
+                parts.append(
+                    f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}"
+                )
+
+            return (
+                "\n".join(parts)
+                if parts
+                else f"No UIDs processed for '{target_folder}'."
+            )
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            return f"Error starring emails: {str(e)}"
+
+    async def copy_emails(
+        self,
+        uids: str | list[str] = Field(
+            description="IMAP UID(s) to copy. Accepts a single UID string (e.g. '42') or "
+            "a comma-separated list of UIDs (e.g. '42,100')."
+        ),
+        target_folder: str = Field(
+            description="Target IMAP folder for the copied emails"
+        ),
+        folder: str = Field(description="Source IMAP folder (required, no fallback)"),
+    ) -> str:
+        """Copy email(s) from one IMAP folder to another by UID.
+
+        Unlike ``move_emails``, the original emails remain in the source folder.
+        """
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        source_folder = self._resolve_folder(self._resolve_fieldinfo(folder, None))
+        uids_list = self._normalize_uids(uids)
+
+        try:
+            conn = self._connect()
+            self._select_folder(conn, source_folder, readonly=True)
+
+            with suppress(_IMAP_EXCEPTION):
+                conn.create(_quote(target_folder))
+
+            self._select_folder(conn, source_folder)
+
+            copied: list[str] = []
+            failed: list[tuple[str, str]] = []
+            for uid in uids_list:
+                try:
+                    conn.uid("COPY", uid, _quote(target_folder))
+                    copied.append(uid)
+                except Exception as e:
+                    failed.append((uid, str(e)))
+
+            self._safe_close(conn)
+
+            parts = []
+            if len(copied) == 1:
+                parts.append(
+                    f"Email [{copied[0]}] copied from '{source_folder}' to '{target_folder}'."
+                )
+            elif copied:
+                parts.append(
+                    f"{len(copied)} email(s) copied from '{source_folder}' to '{target_folder}'."
+                )
+                parts.append(f"UIDs: {', '.join(copied)}")
+
+            if failed:
+                parts.append(
+                    f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}"
+                )
+
+            return (
+                "\n".join(parts) if parts else f"No UIDs copied for '{source_folder}'."
+            )
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            return f"Error copying emails: {str(e)}"
+
+    async def archive_emails(
+        self,
+        uids: str | list[str] = Field(
+            default="",
+            description="IMAP UID(s) to archive. If empty, no emails will be archived. "
+            "Accepts a single UID string (e.g. '42') or a comma-separated list (e.g. '42,100').",
+        ),
+        folder: str = Field(
+            default="INBOX",
+            description="Source IMAP folder (default: 'INBOX' — override with explicit folder)",
+        ),
+        target_folder: str = Field(
+            default="",
+            description="Target archive folder (default: uses 'archive_folder' valve setting)",
+        ),
+    ) -> str:
+        """Archive email(s) by moving them to the configured archive folder.
+
+        This is a convenience method — uses sensible defaults for destination folder.
+        Use ``move_emails`` for full control over both source and destination folders.
+
+        :param uids: IMAP UID(s) to archive (required — leave empty for no operation)
+        :param folder: Source folder (default: 'INBOX')
+        :param target_folder: Destination folder (default: valve setting 'archive_folder')
+        """
+        return await self._move_convenience(uids, folder, target_folder, "archive")
+
+    async def trash_emails(
+        self,
+        uids: str | list[str] = Field(
+            default="",
+            description="IMAP UID(s) to trash. If empty, no emails will be trashed. "
+            "Accepts a single UID string (e.g. '42') or a comma-separated list (e.g. '42,100').",
+        ),
+        folder: str = Field(
+            default="INBOX",
+            description="Source IMAP folder (default: 'INBOX' — override with explicit folder)",
+        ),
+        target_folder: str = Field(
+            default="",
+            description="Target trash folder (default: uses 'trash_folder' valve setting)",
+        ),
+    ) -> str:
+        """Trash email(s) by moving them to the configured trash folder.
+
+        This is a convenience method — uses sensible defaults for destination folder.
+        Use ``move_emails`` for full control over both source and destination folders.
+
+        :param uids: IMAP UID(s) to trash (required — leave empty for no operation)
+        :param folder: Source folder (default: 'INBOX')
+        :param target_folder: Destination folder (default: valve setting 'trash_folder')
+        """
+        return await self._move_convenience(uids, folder, target_folder, "trash")
+
+    async def _move_convenience(
+        self,
+        uids: str | list[str],
+        folder: str,
+        target_folder: str,
+        operation: str,
+    ) -> str:
+        """Common logic for archive_emails and trash_emails convenience methods.
+
+        Performs: COPY + STORE +FLAGS (\\Deleted) + expunge per UID.
+        """
+        uids = self._resolve_fieldinfo(uids, "")
+        folder = self._resolve_fieldinfo(folder, None)
+        if not folder:
+            folder = "INBOX"
+        target_folder = self._resolve_fieldinfo(target_folder, "")
+
+        if operation == "archive":
+            if not self.valves.allow_archive:
+                return "Archive operations are disabled. Enable 'allow_archive' in Valves to use this feature."
+            target_folder = (
+                target_folder if target_folder else self.valves.archive_folder
+            )
+        else:
+            if not self.valves.allow_trash:
+                return "Trash operations are disabled. Enable 'allow_trash' in Valves to use this feature."
+            target_folder = target_folder if target_folder else self.valves.trash_folder
+
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        uids_list = self._normalize_uids(uids)
+        if not uids_list:
+            return f"Error: No UIDs provided. Specify at least one email UID to {operation}."
+
+        try:
+            conn = self._connect()
+            self._select_folder(conn, folder)
+            conn.create(_quote(target_folder))
+
+            moved: list[str] = []
+            failed: list[tuple[str, str]] = []
+            for uid in uids_list:
+                try:
+                    conn.uid("COPY", uid, _quote(target_folder))
+                    conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+                    conn.expunge()
+                    moved.append(uid)
+                except Exception as e:
+                    failed.append((uid, str(e)))
+
+            self._safe_close(conn)
+
+            verb = "archived" if operation == "archive" else "trashed"
+            parts = []
+            if len(moved) == 1:
+                parts.append(
+                    f"Email [{moved[0]}] {verb} from '{folder}' to '{target_folder}'."
+                )
+            elif moved:
+                parts.append(
+                    f"{len(moved)} email(s) {verb} from '{folder}' to '{target_folder}'."
+                )
+                parts.append(f"UIDs: {', '.join(moved)}")
+
+            if failed:
+                parts.append(
+                    f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}"
+                )
+
+            return (
+                "\n".join(parts) if parts else f"No UIDs {operation}ed for '{folder}'."
+            )
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}"
+        except Exception as e:
+            if operation == "archive":
+                return f"Error archiving emails: {str(e)}"
+            return f"Error trashing emails: {str(e)}"
+
+    async def get_folder_status(
+        self,
+        folder: str = Field(
+            description="IMAP folder to get status for (required — no fallback)"
+        ),
+    ) -> str:
+        """Get folder status: total messages, unseen count, and highest/lowest UID.
+
+        This uses the IMAP EXAMINE command for a read-only status check.
+        """
+        folder = self._resolve_fieldinfo(folder, None)
+        if not self.valves.username or not self.valves.password:
+            return "Error: IMAP credentials (username and password) are not configured in Valves."
+        if not self.valves.imap_server:
+            return "Error: IMAP server is not configured in Valves."
+
+        target_folder = self._resolve_folder(folder)
+
+        try:
+            conn = self._connect()
+            status, data = conn.examine(_quote(target_folder))
+
+            is_ok = (
+                status.strip() == b"OK"
+                if isinstance(status, bytes)
+                else str(status).strip().upper() == "OK"
+            )
+            if not is_ok:
+                self._safe_close(conn)
+                return f"Error: Could not examine folder '{target_folder}'."
+
+            status_data = data[0].decode("utf-8") if data and data[0] else ""
+
+            total = 0
+            unseen = 0
+            uid_validity = 0
+            lowest_uid = 0
+            latest_uid = 0
+
+            tokens = status_data.split()
+            i = 0
+            while i < len(tokens):
+                raw = tokens[i].lstrip("(")
+                if raw in ("MESSAGES", "UNSEEN", "UIDVALIDITY"):
+                    i += 1
+                    if i < len(tokens):
+                        v = tokens[i].strip(")")
+                        val = int(v)
+                        if raw == "MESSAGES":
+                            total = val
+                        elif raw == "UNSEEN":
+                            unseen = val
+                        elif raw == "UIDVALIDITY":
+                            uid_validity = val
+                i += 1
+
+            try:
+                uid_search_data = conn.uid(
+                    "search", None, "ALL"
+                )  # pyright: ignore[reportArgumentType]
+                uid_data = uid_search_data[1] if len(uid_search_data) > 1 else None
+                if uid_data and uid_data[0] is not None:
+                    uid_str = uid_data[0].decode("utf-8").strip()
+                    if uid_str:
+                        uids = uid_str.split()
+                        if uids:
+                            lowest_uid = min(int(u) for u in uids)
+                            latest_uid = max(int(u) for u in uids)
+
+            except Exception:
+                pass
+            finally:
+                self._safe_close(conn)
+
+            first = lowest_uid if lowest_uid else "unknown"
+            last = latest_uid if latest_uid else "unknown"
+
+            return (
+                f"Folder '{target_folder}' status:\n"
+                f"  Messages:       {total}\n"
+                f"  Unseen:         {unseen}\n"
+                f"  UID Validity:   {uid_validity}\n"
+                f"  UID First:      {first}\n"
+                f"  UID Latest:     {last}"
+            )
+
+        except _IMAP_EXCEPTION as e:
+            return f"IMAP Error: {str(e)}. Check if folder '{target_folder}' exists."
+        except Exception as e:
+            return f"Error getting folder status: {str(e)}"
 
     def _decode_mime_header(self, header_value: str | None) -> str:
         """Decode a MIME header value that may be encoded."""
@@ -1001,7 +1576,10 @@ class Tools:
             for part in msg.walk():
                 content_type = part.get_content_type()
                 content_disposition = str(part.get("Content-Disposition", ""))
-                if content_type == "text/plain" and "attachment" not in content_disposition:
+                if (
+                    content_type == "text/plain"
+                    and "attachment" not in content_disposition
+                ):
                     charset = part.get_content_charset() or "utf-8"
                     try:
                         payload = part.get_payload(decode=True)
@@ -1077,13 +1655,17 @@ class Tools:
         conn.login(v.username, v.password)
         return conn
 
-    def _refresh_uid_index(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL) -> dict[str, int]:
+    def _refresh_uid_index(
+        self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL
+    ) -> dict[str, int]:
         """Return a mapping from UID string -> sort position (1 = newest/highest UID).
 
         Uses UID numbers as a proxy for recency. UIDs may have gaps due to deletions,
         so we assign consecutive 1-based positions from highest UID downward.
         """
-        _, uid_data = conn.uid("search", None, "ALL")  # type: ignore[arg-type]
+        _, uid_data = conn.uid(
+            "search", None, "ALL"
+        )  # pyright: ignore[reportArgumentType]  # type: ignore[arg-type]
         if uid_data[0] is None:
             return {}
 
@@ -1127,7 +1709,12 @@ class Tools:
             with suppress(Exception, _IMAP_EXCEPTION):
                 conn.logout()
 
-    def _select_folder(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, folder: str, readonly: bool = False) -> None:
+    def _select_folder(
+        self,
+        conn: imaplib.IMAP4 | imaplib.IMAP4_SSL,
+        folder: str,
+        readonly: bool = False,
+    ) -> None:
         """Select an IMAP folder, raising on failure (server returns NO).
 
         imaplib.select() does NOT raise on "NO" responses — it returns ("NO", ...).
@@ -1135,7 +1722,11 @@ class Tools:
         "illegal in state AUTH" if the folder wasn't actually selected.
         """
         status, _ = conn.select(_quote(folder), readonly=readonly)
-        is_ok = status.strip() == b"OK" if isinstance(status, bytes) else str(status).strip().upper() == "OK"
+        is_ok = (
+            status.strip() == b"OK"
+            if isinstance(status, bytes)
+            else str(status).strip().upper() == "OK"
+        )
         if not is_ok:
             raise _IMAP_EXCEPTION(f"Failed to select folder '{folder}'")
 
@@ -1146,7 +1737,9 @@ class Tools:
         Raises ValueError if folder is None, empty, or not a string.
         """
         if not isinstance(folder, str) or not folder:
-            raise ValueError("Folder parameter is required and cannot be empty or None.")
+            raise ValueError(
+                "Folder parameter is required and cannot be empty or None."
+            )
         return folder
 
     def _normalize_uids(self, param: Any) -> list[str]:
@@ -1162,7 +1755,9 @@ class Tools:
             return [u.strip() for u in resolved.split(",") if u.strip()]
         return [str(u) for u in resolved]
 
-    def _fetch_emails_by_uid(self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, uids: list[str]) -> list[dict]:
+    def _fetch_emails_by_uid(
+        self, conn: imaplib.IMAP4 | imaplib.IMAP4_SSL, uids: list[str]
+    ) -> list[dict]:
         """Fetch and parse multiple emails by UID. Returns list of parsed dicts."""
         results = []
         for uid in uids:
@@ -1184,7 +1779,9 @@ class Tools:
     async def list_emails(
         self,
         folder: str,
-        count: int = Field(default=10, description="Number of recent emails to list (default: 10)"),
+        count: int = Field(
+            default=10, description="Number of recent emails to list (default: 10)"
+        ),
     ) -> str:
         """
         List emails in a specific IMAP folder. Requires explicit folder name — no fallback.
@@ -1217,7 +1814,9 @@ class Tools:
             for uid in target_uids:
                 try:
                     _, raw_data = conn.uid("fetch", uid, "(RFC822)")
-                    raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                    raw_bytes = (
+                        raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                    )
                     parsed = self._parse_email(raw_bytes)
                     parsed["uid"] = uid
                     emails.append(parsed)
@@ -1241,12 +1840,20 @@ class Tools:
 
             total_count = len(uid_map)
 
-            result_lines = [f"Folder '{target_folder}': {total_count} total message(s)\n"]
+            result_lines = [
+                f"Folder '{target_folder}': {total_count} total message(s)\n"
+            ]
             for _idx, email_data in enumerate(emails):
                 attachment_info = ""
                 if email_data["has_attachments"]:
-                    attachment_info = f" [{email_data['attachment_count']} attachment(s)]"
-                body_preview = email_data["body"][:200] + "..." if len(email_data["body"]) > 200 else email_data["body"]
+                    attachment_info = (
+                        f" [{email_data['attachment_count']} attachment(s)]"
+                    )
+                body_preview = (
+                    email_data["body"][:200] + "..."
+                    if len(email_data["body"]) > 200
+                    else email_data["body"]
+                )
                 result_lines.append(
                     f"---\n"
                     f"  From:    {email_data['from']}\n"
@@ -1261,7 +1868,9 @@ class Tools:
         except _IMAP_EXCEPTION as e:
             return f"IMAP Error: {str(e)}. Check your credentials and server settings."
         except Exception as e:
-            return f"Error connecting to IMAP server '{self.valves.imap_server}': {str(e)}"
+            return (
+                f"Error connecting to IMAP server '{self.valves.imap_server}': {str(e)}"
+            )
 
     async def read_emails(
         self,
@@ -1269,7 +1878,9 @@ class Tools:
             description="IMAP UID(s) to read. Accepts a single UID string (e.g. '42') or "
             "a comma-separated list of UIDs (e.g. '42,100,205')."
         ),
-        folder: str = Field(description="IMAP folder to read from (required — no fallback)"),
+        folder: str = Field(
+            description="IMAP folder to read from (required — no fallback)"
+        ),
     ) -> str:
         """
         Read specific email(s) by their IMAP UID(s).
@@ -1329,8 +1940,12 @@ class Tools:
         query: str = Field(
             description="Search query to filter emails. Supports 'from:<sender>', 'subject:<text>', 'before:<YYYY-MM-DD>', 'after:<YYYY-MM-DD>'"
         ),
-        count: int = Field(default=10, description="Maximum number of results to return (default: 10)"),
-        folder: str = Field(description="IMAP folder to search in (required — no fallback)"),
+        count: int = Field(
+            default=10, description="Maximum number of results to return (default: 10)"
+        ),
+        folder: str = Field(
+            description="IMAP folder to search in (required — no fallback)"
+        ),
     ) -> str:
         """
         Search emails in the mailbox by sender, subject, or date range.
@@ -1365,7 +1980,9 @@ class Tools:
                     search_after = datetime.strptime(part[6:], "%Y-%m-%d")
             elif part.lower().startswith("before:"):
                 with suppress(ValueError):
-                    search_before = datetime.strptime(part[7:], "%Y-%m-%d") + timedelta(days=1)
+                    search_before = datetime.strptime(part[7:], "%Y-%m-%d") + timedelta(
+                        days=1
+                    )
             else:
                 search_text = part
 
@@ -1378,8 +1995,14 @@ class Tools:
 
             if search_after:
                 imap_criteria_parts.append(f"SINCE {search_after.strftime('%d-%b-%Y')}")
-            if search_before and search_after is not None and search_before > search_after:
-                imap_criteria_parts.append(f"BEFORE {search_before.strftime('%d-%b-%Y')}")
+            if (
+                search_before
+                and search_after is not None
+                and search_before > search_after
+            ):
+                imap_criteria_parts.append(
+                    f"BEFORE {search_before.strftime('%d-%b-%Y')}"
+                )
             if search_from:
                 imap_criteria_parts.append(f'FROM "{search_from}"')
             if search_subject:
@@ -1387,9 +2010,13 @@ class Tools:
 
             if imap_criteria_parts:
                 criteria = " ".join(imap_criteria_parts)
-                _, uid_data = conn.uid("search", None, criteria)  # pyright: ignore[reportArgumentType]
+                _, uid_data = conn.uid(
+                    "search", None, criteria
+                )  # pyright: ignore[reportArgumentType]
             else:
-                _, uid_data = conn.uid("search", None, "ALL")  # pyright: ignore[reportArgumentType]
+                _, uid_data = conn.uid(
+                    "search", None, "ALL"
+                )  # pyright: ignore[reportArgumentType]  # pyright: ignore[reportArgumentType]
 
             if uid_data[0] is None:
                 self._safe_close(conn)
@@ -1410,7 +2037,9 @@ class Tools:
                         break
                     try:
                         _, raw_data = conn.uid("fetch", uid, "(RFC822)")
-                        raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                        raw_bytes = (
+                            raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                        )
                         parsed = self._parse_email(raw_bytes)
                         if (
                             search_text.lower() in parsed["subject"].lower()
@@ -1427,7 +2056,9 @@ class Tools:
                 for uid in candidate_uids[:count]:
                     try:
                         _, raw_data = conn.uid("fetch", uid, "(RFC822)")
-                        raw_bytes = raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                        raw_bytes = (
+                            raw_data[0][1] if raw_data and len(raw_data) > 0 else b""
+                        )
                         parsed = self._parse_email(raw_bytes)
                         if parsed is not None:
                             parsed["uid"] = uid
@@ -1442,12 +2073,20 @@ class Tools:
             if not matches:
                 return f"No emails found matching criteria: {query}"
 
-            result_lines = [f"Folder '{target_folder}': Found {len(matches)} email(s) matching: {query}\n"]
+            result_lines = [
+                f"Folder '{target_folder}': Found {len(matches)} email(s) matching: {query}\n"
+            ]
             for _idx, email_data in enumerate(matches):
                 attachment_info = ""
                 if email_data["has_attachments"]:
-                    attachment_info = f" [{email_data['attachment_count']} attachment(s)]"
-                body_preview = email_data["body"][:200] + "..." if len(email_data["body"]) > 200 else email_data["body"]
+                    attachment_info = (
+                        f" [{email_data['attachment_count']} attachment(s)]"
+                    )
+                body_preview = (
+                    email_data["body"][:200] + "..."
+                    if len(email_data["body"]) > 200
+                    else email_data["body"]
+                )
                 result_lines.append(
                     f"---\n"
                     f"  From:    {email_data['from']}\n"
@@ -1470,7 +2109,9 @@ class Tools:
             description="IMAP UID(s) to permanently delete. Accepts a single UID string (e.g. '42') or "
             "a comma-separated list of UIDs. WARNING: This is irreversible — emails cannot be recovered."
         ),
-        folder: str = Field(description="IMAP folder to delete from (required — no fallback)"),
+        folder: str = Field(
+            description="IMAP folder to delete from (required — no fallback)"
+        ),
     ) -> str:
         """
         Permanently delete email(s) by their IMAP UID(s).
@@ -1507,13 +2148,19 @@ class Tools:
 
             parts = []
             if len(deleted) == 1:
-                parts.append(f"Email [{deleted[0]}] permanently deleted from '{target_folder}'.")
+                parts.append(
+                    f"Email [{deleted[0]}] permanently deleted from '{target_folder}'."
+                )
             elif deleted:
-                parts.append(f"{len(deleted)} email(s) permanently deleted from '{target_folder}'.")
+                parts.append(
+                    f"{len(deleted)} email(s) permanently deleted from '{target_folder}'."
+                )
                 parts.append(f"UIDs deleted: {', '.join(deleted)}")
 
             if failed:
-                parts.append(f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}")
+                parts.append(
+                    f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}"
+                )
 
             result = "\n".join(parts) if len(parts) > 1 else parts[0]
             return result
@@ -1525,7 +2172,9 @@ class Tools:
 
     async def delete_all_emails(
         self,
-        folder: str = Field(description="IMAP folder to delete all emails from (required — no fallback)"),
+        folder: str = Field(
+            description="IMAP folder to delete all emails from (required — no fallback)"
+        ),
     ) -> str:
         """
         Permanently delete **all** emails from a mailbox folder.
@@ -1577,7 +2226,9 @@ class Tools:
             description="IMAP UID(s) to move. Accepts a single UID string (e.g. '42') or "
             "a comma-separated list of UIDs (e.g. '42,100')."
         ),
-        target_folder: str = Field(description="Target IMAP folder for the moved emails"),
+        target_folder: str = Field(
+            description="Target IMAP folder for the moved emails"
+        ),
         folder: str = Field(description="Source IMAP folder (required, no fallback)"),
     ) -> str:
         """
@@ -1616,13 +2267,19 @@ class Tools:
 
             parts = []
             if len(moved) == 1:
-                parts.append(f"Email [{moved[0]}] moved from '{source_folder}' to '{target_folder}' successfully.")
+                parts.append(
+                    f"Email [{moved[0]}] moved from '{source_folder}' to '{target_folder}' successfully."
+                )
             elif moved:
-                parts.append(f"{len(moved)} email(s) moved from '{source_folder}' to '{target_folder}'.")
+                parts.append(
+                    f"{len(moved)} email(s) moved from '{source_folder}' to '{target_folder}'."
+                )
                 parts.append(f"UIDs moved: {', '.join(moved)}")
 
             if failed:
-                parts.append(f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}")
+                parts.append(
+                    f"Failed on {len(failed)} UID(s): {', '.join(u for u, _ in failed)}"
+                )
 
             result = "\n".join(parts) if len(parts) > 1 else parts[0]
             return result
@@ -1633,7 +2290,10 @@ class Tools:
             return f"Error moving emails: {str(e)}"
 
     async def create_folder(
-        self, folder: str = Field(description="Name of the new IMAP folder to create (e.g., 'Projects/Invoices')")
+        self,
+        folder: str = Field(
+            description="Name of the new IMAP folder to create (e.g., 'Projects/Invoices')"
+        ),
     ) -> str:
         """Create a new IMAP folder/mailbox."""
         if not self.valves.allow_create_folder:
@@ -1656,7 +2316,8 @@ class Tools:
             return f"Error creating folder '{folder}': {str(e)}"
 
     async def delete_folder(
-        self, folder: str = Field(description="Name of the folder to delete (must be empty)")
+        self,
+        folder: str = Field(description="Name of the folder to delete (must be empty)"),
     ) -> str:
         """Delete an existing IMAP folder (must be empty)."""
         if not self.valves.allow_delete_folder:

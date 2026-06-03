@@ -10,7 +10,7 @@ from imap_mailbox import Tools as ImapTools
 from pop3_mailbox import EncryptionMode as Pop3EncryptionMode
 from pop3_mailbox import Tools as Pop3Tools
 
-_IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", Exception)
+_IMAP_EXCEPTION = getattr(imaplib, "IMAP4Exception", OSError)
 
 # Re-export MIME classes for convenient use in test files
 __all__ = [

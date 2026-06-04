@@ -56,3 +56,125 @@ class TestPutscriptReturnValueChecked:
         assert "rejected" in result.lower()
         assert "Error" in result
         mock_client.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_sieve_script_putscript_fails_returns_error(self, sieve_tools):
+        """create_sieve_script returns error when putscript() returns False."""
+        sieve_tools.valves.allow_create_sieve = True
+        sieve_tools.valves.imap_server = "sieve.example.com"
+        sieve_tools.valves.username = "testuser"
+        sieve_tools.valves.password = "testpass"
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        mock_client.listscripts.return_value = (None, [])
+        mock_client.putscript.return_value = False
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.create_sieve_script(name="new_script", content="rejected")
+        assert "rejected" in result.lower()
+        assert "Error" in result
+        mock_client.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_add_filter_to_script_putscript_fails_returns_error(self, sieve_tools):
+        """add_filter_to_script returns error when putscript() returns False."""
+        sieve_tools.valves.allow_update_sieve = True
+        sieve_tools.valves.imap_server = "sieve.example.com"
+        sieve_tools.valves.username = "testuser"
+        sieve_tools.valves.password = "testpass"
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        mock_client.listscripts.return_value = ("script_a", ["script_a"])
+        mock_client.getscript.return_value = "=== Sieve Script: script_a ===\nrequire \"fileinto\";\n"
+        mock_client.putscript.return_value = False
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.add_filter_to_script(
+                script_name="script_a",
+                name="rule_x",
+                filter_type="move",
+                target_folder="A",
+                from_addr="a@x.com",
+            )
+        assert "rejected" in result.lower()
+        assert "Error" in result
+        mock_client.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_remove_filter_from_script_putscript_fails_returns_error(self, sieve_tools):
+        """remove_filter_from_script returns error when putscript() returns False."""
+        sieve_tools.valves.allow_update_sieve = True
+        sieve_tools.valves.imap_server = "sieve.example.com"
+        sieve_tools.valves.username = "testuser"
+        sieve_tools.valves.password = "testpass"
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        mock_client.listscripts.return_value = ("script_a", ["script_a"])
+        mock_client.getscript.return_value = '=== Sieve Script: script_a ===\n# __FILTER:{"name":"rule_x"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        mock_client.putscript.return_value = False
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.remove_filter_from_script(script_name="script_a", name="rule_x")
+        assert "rejected" in result.lower()
+        assert "Error" in result
+        mock_client.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_remove_all_filters_from_script_putscript_fails_returns_error(self, sieve_tools):
+        """remove_all_filters_from_script returns error when putscript() returns False."""
+        sieve_tools.valves.allow_update_sieve = True
+        sieve_tools.valves.imap_server = "sieve.example.com"
+        sieve_tools.valves.username = "testuser"
+        sieve_tools.valves.password = "testpass"
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        mock_client.listscripts.return_value = ("script_a", ["script_a"])
+        mock_client.getscript.return_value = '=== Sieve Script: script_a ===\n# __FILTER:{"name":"rule"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        mock_client.putscript.return_value = False
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.remove_all_filters_from_script(script_name="script_a")
+        assert "rejected" in result.lower()
+        assert "Error" in result
+        mock_client.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_or_update_filter_update_putscript_fails(self, sieve_tools):
+        """create_or_update_filter returns error when putscript() returns False on update path."""
+        sieve_tools.valves.allow_create_sieve = True
+        sieve_tools.valves.imap_server = "sieve.example.com"
+        sieve_tools.valves.username = "testuser"
+        sieve_tools.valves.password = "testpass"
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        mock_client.listscripts.return_value = ("filter_name", ["filter_name", "other_script"])
+        mock_client.getscript.return_value = '=== Sieve Script: filter_name ===\n# __FILTER:{"name":"filter_name"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        mock_client.putscript.return_value = False
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.create_or_update_filter(
+                name="filter_name",
+                filter_type="move",
+                target_folder="A",
+                from_addr="a@x.com",
+            )
+        assert "rejected" in result.lower()
+        assert "Error" in result
+        mock_client.logout.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_or_update_filter_create_putscript_fails(self, sieve_tools):
+        """create_or_update_filter returns error when putscript() returns False on create path."""
+        sieve_tools.valves.allow_create_sieve = True
+        sieve_tools.valves.imap_server = "sieve.example.com"
+        sieve_tools.valves.username = "testuser"
+        sieve_tools.valves.password = "testpass"
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        mock_client.listscripts.return_value = ("script_a", ["script_a"])
+        mock_client.putscript.return_value = False
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.create_or_update_filter(
+                name="new_filter",
+                filter_type="move",
+                target_folder="A",
+                from_addr="a@x.com",
+            )
+        assert "rejected" in result.lower()
+        assert "Error" in result
+        mock_client.logout.assert_called_once()

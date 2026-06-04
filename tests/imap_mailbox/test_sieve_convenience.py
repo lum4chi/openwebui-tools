@@ -636,6 +636,7 @@ class TestFullWorkflow:
         def putscript_side_effect(name, content, activate=False):
             if name == "filters":
                 script_state["content"] = content
+            return True
 
         mock_client = MagicMock()
         mock_client.connect.return_value = True

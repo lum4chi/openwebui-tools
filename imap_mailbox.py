@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.5.0
+version: 3.5.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -591,12 +591,16 @@ class Tools:
                 raw_content = client.getscript(name)
                 existing_content = _extract_script_content(raw_content)
                 script_content = SieveScriptBuilder.replace_filter_in_script(existing_content, filter_rule, name)
-                client.putscript(name, script_content)
+                if not client.putscript(name, script_content):
+                    client.logout()
+                    return f"Error updating filter '{name}': server rejected the update."
                 client.logout()
                 return f"Filter '{name}' has been updated in script '{name}'."
             else:
                 script_content = SieveScriptBuilder.build_complete_script([filter_rule])
-                client.putscript(name, script_content)
+                if not client.putscript(name, script_content):
+                    client.logout()
+                    return f"Error creating filter '{name}': server rejected the update."
                 # Try to activate
                 with suppress(Exception):
                     client.setactive(name)
@@ -694,7 +698,9 @@ class Tools:
             raw_content = client.getscript(script_name)
             existing_content = _extract_script_content(raw_content)
             updated_content = SieveScriptBuilder.merge_filter_into_script(existing_content, new_filter)
-            client.putscript(script_name, updated_content)
+            if not client.putscript(script_name, updated_content):
+                client.logout()
+                return f"Error adding filter rule '{name}': server rejected the update."
             client.logout()
             return f"Filter rule '{name}' has been added to script '{script_name}'."
         except Exception as e:
@@ -742,7 +748,9 @@ class Tools:
             if updated_content == existing_content:
                 client.logout()
                 return f"Filter rule '{name}' not found in script '{script_name}'. Nothing to remove."
-            client.putscript(script_name, updated_content)
+            if not client.putscript(script_name, updated_content):
+                client.logout()
+                return f"Error removing filter rule '{name}': server rejected the update."
             client.logout()
             return f"Filter rule '{name}' has been removed from script '{script_name}'."
         except Exception as e:
@@ -782,7 +790,9 @@ class Tools:
             raw_content = client.getscript(script_name)
             existing_content = _extract_script_content(raw_content)
             header = _build_header_from_script(existing_content)
-            client.putscript(script_name, header)
+            if not client.putscript(script_name, header):
+                client.logout()
+                return f"Error clearing filters from script '{script_name}': server rejected the update."
             client.logout()
             return (
                 f"All filter rules have been removed from script '{script_name}'. Only the require statements remain."
@@ -822,7 +832,9 @@ class Tools:
             if name in scripts:
                 client.logout()
                 return f"Error: Sieve script '{name}' already exists. Use update_sieve_script to modify it."
-            client.putscript(name, content)
+            if not client.putscript(name, content):
+                client.logout()
+                return f"Error creating Sieve script '{name}': server rejected the update."
             client.logout()
             return f"Sieve script '{name}' has been created successfully."
         except Exception as e:

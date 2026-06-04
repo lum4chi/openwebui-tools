@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.5.1
+version: 3.6.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -25,12 +25,14 @@ Agent instructions:
   13. delete_emails / delete_all_emails — permanently delete (requires allow_delete_single/allow_delete_all)
   14. move_emails — move between folders (requires allow_move)
   SIEVE FILTER MANAGEMENT:
-  1. create_or_update_filter — create or update a single filter rule
-  2. add_filter_to_script — add one filter rule to an existing script
-  3. remove_filter_from_script — remove one filter rule by name
-  4. remove_all_filters_from_script — clear all rules keeping headers
-  5. create/update/delete_sieve_script — ONLY for entire script creation/modification (never for single filter changes)
-  6. set_active/deactivate_sieve_script — ONLY for activating/deactivating scripts
+   1. create_or_update_filter — create or update a single filter rule
+      NOTE: Uses independent `if` statements (NOT `anyof`/`allof`) for
+      universal server compatibility (e.g. Open-Xchange/jsieve).
+   2. add_filter_to_script — add one filter rule to an existing script
+   3. remove_filter_from_script — remove one filter rule by name
+   4. remove_all_filters_from_script — clear all rules keeping headers
+   5. create/update/delete_sieve_script — ONLY for entire script creation/modification (never for single filter changes)
+   6. set_active/deactivate_sieve_script — ONLY for activating/deactivating scripts
 """
 
 import imaplib
@@ -200,6 +202,10 @@ def _parse_filters_from_script(script_content: str, exclude_name: str | None = N
 class SieveScriptBuilder:
     """Generates Sieve DSL for common email filter patterns.
 
+    Uses independent `if` statements for each condition (OR semantics)
+    instead of `anyof`/`allof` combinators for universal server compatibility.
+    E.g. Open-Xchange/jsieve does not support `anyof()` or `allof()`.
+
     Each filter is tracked by a JSON-tagged comment so rules can be
     individually added, removed, or replaced without rewriting the whole
     script.
@@ -213,6 +219,9 @@ class SieveScriptBuilder:
         **conditions: str | int | bool | tuple[int, ...],
     ) -> str:
         """Generate a single Sieve filter rule block with a unique tag.
+
+        Each condition gets its own `if` block with shared tag for OR semantics.
+        This avoids `anyof`/`allof` combinators for universal server compatibility.
 
         :param name: Unique identifier for tracking (written to tag comment)
         :param filter_type: One of "move", "discard", "stop"
@@ -252,19 +261,27 @@ class SieveScriptBuilder:
                     pass
 
         tag_json = _build_filter_tag_json(name, filter_type, target_folder, str(match_value))
+        tag = f"# __FILTER:{tag_json}__"
 
-        if header_conditions:
-            combined = " ".join(header_conditions)
-            if filter_type == "move":
-                rule = f'if anyof ({combined}) {{\n  fileinto "{target_folder}";\n  stop;\n}}\n'
-            elif filter_type == "discard":
-                rule = f"if anyof ({combined}) {{\n  discard;\n  stop;\n}}\n"
-            else:
-                rule = f'if anyof ({combined}) {{\n  fileinto "Junk";\n  stop;\n}}\n'
+        if not header_conditions:
+            folder_or_junk = target_folder or "Junk"
+            return f'{tag}\nif true {{\n  fileinto "{folder_or_junk}";\n  stop;\n}}\n'
+
+        if filter_type == "move":
+            action = f'fileinto "{target_folder}";'
+        elif filter_type == "discard":
+            action = "discard;"
         else:
-            rule = f'if true {{\n  fileinto "{target_folder or "Junk"}";\n  stop;\n}}\n'
+            action = 'fileinto "Junk";'
 
-        return f"# __FILTER:{tag_json}__\n{rule}"
+        # Use independent if blocks for universal compatibility.
+        # Some servers (e.g. Open-Xchange) do not support anyof()/allof() combinators.
+        # Each block triggers on its own condition — any match performs the action.
+        blocks: list[str] = []
+        for cond in header_conditions:
+            blocks.append(f"{tag}\nif {cond} {{\n  {action}\n  stop;\n}}\n")
+
+        return "\n".join(blocks)
 
     @staticmethod
     def build_complete_script(filter_rules: list[str]) -> str:

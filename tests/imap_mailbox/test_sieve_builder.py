@@ -82,6 +82,36 @@ class TestFilterRuleGeneration:
         assert 'header :contains "To" "team@example.com"' in rule
         assert '"match":"team@example.com"' in rule
 
+    def test_no_anyof_or_allof_combinators(self):
+        """Generated rules use nested if for universal server compatibility."""
+        rule = SieveScriptBuilder.generate_filter_rule(
+            "multi",
+            "move",
+            "Test",
+            subject="x",
+            from_addr="a@x.com",
+            day="Monday",
+            hour_range=(9, 17),
+        )
+        assert "anyof" not in rule
+        assert "allof" not in rule
+        assert "if header" in rule
+        assert "if date" in rule
+
+    def test_filter_with_two_conditions_has_two_blocks(self):
+        """Multiple conditions produce multiple independent if blocks."""
+        rule = SieveScriptBuilder.generate_filter_rule(
+            "two_cond",
+            "move",
+            "Folder",
+            from_addr="a@x.com",
+            subject="hello",
+        )
+        assert 'header :contains "From"' in rule
+        assert 'header :contains "Subject"' in rule
+        assert rule.count('fileinto "Folder"') == 2
+        assert rule.count("stop;") == 2
+
 
 class TestBuildCompleteScript:
     """Test build_complete_script — combining rules into full script."""

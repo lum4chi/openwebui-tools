@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.7.0
+version: 3.7.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -17,8 +17,8 @@ Agent instructions:
   5. star_emails — add star/flag (requires allow_modify_flags)
   6. unstar_emails — remove star/flag (requires allow_modify_flags)
   7. copy_emails — copy to another folder without removing from source
-  8. archive_emails — convenience wrapper: move to archive folder (requires allow_archive)
-  9. trash_emails — convenience wrapper: move to trash folder (requires allow_trash)
+  8. archive_emails — convenience wrapper: move to archive folder (requires allow_move)
+   9. trash_emails — convenience wrapper: move to trash folder (requires allow_move)
   10. get_folder_status — get message count and unseen count
   11. create_folder / delete_folder — manage folders
   12. list_folders — list all available folders
@@ -439,14 +439,6 @@ class Tools:
         allow_modify_flags: bool = Field(
             default=False,
             description="Allow marking emails as read/unread and starring (default: False for safety)",
-        )
-        allow_archive: bool = Field(
-            default=False,
-            description="Allow archiving emails (default: False for safety)",
-        )
-        allow_trash: bool = Field(
-            default=False,
-            description="Allow trashing emails (default: False for safety)",
         )
 
         # write permissions for sieve
@@ -1404,13 +1396,11 @@ class Tools:
             folder = "INBOX"
         target_folder = self._resolve_fieldinfo(target_folder, "")
 
+        if not self.valves.allow_move:
+            return f"{operation.title()} operations are disabled. Enable 'allow_move' in Valves to use this feature."
         if operation == "archive":
-            if not self.valves.allow_archive:
-                return "Archive operations are disabled. Enable 'allow_archive' in Valves to use this feature."
             target_folder = target_folder if target_folder else self.valves.archive_folder
         else:
-            if not self.valves.allow_trash:
-                return "Trash operations are disabled. Enable 'allow_trash' in Valves to use this feature."
             target_folder = target_folder if target_folder else self.valves.trash_folder
 
         if not self.valves.username or not self.valves.password:

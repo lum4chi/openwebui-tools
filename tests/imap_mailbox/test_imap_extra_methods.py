@@ -88,7 +88,7 @@ class TestMoveConvenienceMissingCoverage:
 
     async def test_multiple_moved_output(self, tools):
         """Test archive with multiple UIDs produces multi-line output with UIDs line (lines 1368-1372)."""
-        tools.valves.allow_archive = True
+        tools.valves.allow_move = True
         raw = _make_raw_email("a@b.com", "c@d.com", "Test", "Body")
         mock_server = _make_mock_server([(raw, "1"), (raw, "2"), (raw, "3")])
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
@@ -98,7 +98,7 @@ class TestMoveConvenienceMissingCoverage:
 
     async def test_archive_partial_failure(self, tools):
         """Test archive where some COPY succeed and some fail (lines 1357-1358, 1374-1376)."""
-        tools.valves.allow_archive = True
+        tools.valves.allow_move = True
 
         def override_archive(cmd, criteria=None, *args, **kwargs):
             if isinstance(criteria, (list, tuple)):
@@ -192,7 +192,7 @@ class TestMoveGenericException:
                 raise TypeError("connection failed")
 
         t = BrokenTools()
-        t.valves.allow_archive = True
+        t.valves.allow_move = True
         t.valves.imap_server = "mail.example.com"
         t.valves.username = "testuser"
         t.valves.password = "testpass"
@@ -207,7 +207,7 @@ class TestMoveGenericException:
                 raise TypeError("connection failed")
 
         t = BrokenTools()
-        t.valves.allow_trash = True
+        t.valves.allow_move = True
         t.valves.imap_server = "mail.example.com"
         t.valves.username = "testuser"
         t.valves.password = "testpass"

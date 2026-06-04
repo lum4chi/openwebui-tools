@@ -84,7 +84,7 @@ class TestPutscriptReturnValueChecked:
         mock_client = MagicMock()
         mock_client.connect.return_value = True
         mock_client.listscripts.return_value = ("script_a", ["script_a"])
-        mock_client.getscript.return_value = "=== Sieve Script: script_a ===\nrequire \"fileinto\";\n"
+        mock_client.getscript.return_value = '=== Sieve Script: script_a ===\nrequire "fileinto";\n'
         mock_client.putscript.return_value = False
         with patch("imap_mailbox.Client", return_value=mock_client):
             result = await sieve_tools.add_filter_to_script(
@@ -108,7 +108,9 @@ class TestPutscriptReturnValueChecked:
         mock_client = MagicMock()
         mock_client.connect.return_value = True
         mock_client.listscripts.return_value = ("script_a", ["script_a"])
-        mock_client.getscript.return_value = '=== Sieve Script: script_a ===\n# __FILTER:{"name":"rule_x"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        mock_client.getscript.return_value = (
+            '=== Sieve Script: script_a ===\n# __FILTER:{"name":"rule_x"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        )
         mock_client.putscript.return_value = False
         with patch("imap_mailbox.Client", return_value=mock_client):
             result = await sieve_tools.remove_filter_from_script(script_name="script_a", name="rule_x")
@@ -126,7 +128,9 @@ class TestPutscriptReturnValueChecked:
         mock_client = MagicMock()
         mock_client.connect.return_value = True
         mock_client.listscripts.return_value = ("script_a", ["script_a"])
-        mock_client.getscript.return_value = '=== Sieve Script: script_a ===\n# __FILTER:{"name":"rule"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        mock_client.getscript.return_value = (
+            '=== Sieve Script: script_a ===\n# __FILTER:{"name":"rule"}__\nif true {\n  fileinto "A";\n  stop;\n}\n'
+        )
         mock_client.putscript.return_value = False
         with patch("imap_mailbox.Client", return_value=mock_client):
             result = await sieve_tools.remove_all_filters_from_script(script_name="script_a")

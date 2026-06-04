@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from imap_mailbox import Tools
 
 from .conftest import _IMAP_EXCEPTION, _make_mock_server, _make_raw_email, patch_imap_mailbox_attr

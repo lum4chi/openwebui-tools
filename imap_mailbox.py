@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.6.0
+version: 3.7.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -140,6 +140,11 @@ def _build_header_from_script(script_content: str) -> str:
 
 _FILTER_TAG_RE = re.compile(r"#.*?__FILTER:(\{.*?\})", re.DOTALL)
 
+# Matches Sieve if-block lines that start a filter rule, excluding bare "if true {"
+# which is only used as a catch-all in generated rules without actual conditions.
+# Allows any amount of leading whitespace (including none).
+_UNTAGGED_FILTER_BLOCK_RE = re.compile(r"^\s*if (?!true\b)\S")
+
 
 def _build_filter_tag_json(
     name: str,
@@ -157,11 +162,15 @@ def _build_filter_tag_json(
     return "{" + ",".join(parts) + "}"
 
 
-def _parse_filters_from_script(script_content: str, exclude_name: str | None = None) -> list[str]:
-    """Extract named filter blocks from a script, optionally excluding one.
+def _parse_filters_from_script(
+    script_content: str, exclude_name: str | None = None, include_untagged: bool = False
+) -> list[str]:
+    """Extract filter blocks from a script.
 
-    Each block starts with a # __FILTER:{"name":... }__ comment and is parsed
-    by scanning for the next tag line or end of string.
+    Tags (``# __FILTER:{...}__``) identify named filters for removal/replacement.
+    When *include_untagged* is ``True``, any ``if``-block that does *not* start with
+    ``if true`` is also treated as a filter block so that filters created outside
+    this tool are preserved during merge.
     """
     filters: list[str] = []
     current_block: list[str] = []
@@ -173,7 +182,7 @@ def _parse_filters_from_script(script_content: str, exclude_name: str | None = N
     for line in script_content.split("\n"):
         tag_match = _FILTER_TAG_RE.search(line)
         if tag_match:
-            # Start new block
+            # Tag comment — start a named filter block including the tag line itself
             current_block = [line]
             in_block = True
             brace_started = False
@@ -189,14 +198,43 @@ def _parse_filters_from_script(script_content: str, exclude_name: str | None = N
             if not brace_started and "{" in line:
                 brace_started = True
             if brace_started and brace_depth <= 0:
-                if current_name != exclude_name:
+                if current_name is not None and current_name == exclude_name:
+                    # Skip excluded named filter
+                    pass
+                else:
                     filters.append("\n".join(current_block).strip())
                 current_block = []
                 in_block = False
                 brace_depth = 0
                 brace_started = False
+        elif include_untagged and _UNTAGGED_FILTER_BLOCK_RE.match(line):
+            # Untagged filter block — starts with "if" (not "if true")
+            current_block = [line]
+            in_block = True
+            brace_started = "{" in line
+            brace_depth = line.count("{") - line.count("}")
+            current_name = None  # no tag → no name to exclude
 
     return filters
+
+
+def _extract_preamble(script_content: str) -> str:
+    """Return lines that precede the first filter block (tag comment, ``if``-block).
+
+    The preamble typically contains ``require`` statements and module-level
+    comments.  Everything after the end of the last filter block is discarded
+    during rebuild.
+    """
+    preamble_lines: list[str] = []
+    for line in script_content.split("\n"):
+        stripped = line.strip()
+        if _FILTER_TAG_RE.search(stripped):
+            break
+        if stripped.lstrip().startswith("if"):
+            break
+        # Lines before any filter block are preamble (requires, comments, blank lines)
+        preamble_lines.append(line)
+    return "\n".join(preamble_lines)
 
 
 class SieveScriptBuilder:
@@ -284,9 +322,9 @@ class SieveScriptBuilder:
         return "\n".join(blocks)
 
     @staticmethod
-    def build_complete_script(filter_rules: list[str]) -> str:
-        """Build a complete Sieve script with standard requires and the given filter blocks."""
-        lines = ['require "fileinto";']
+    def build_complete_script(filter_rules: list[str], preamble: str = 'require "fileinto";') -> str:
+        """Build a complete Sieve script with the given preamble and filter blocks."""
+        lines = [preamble]
         for rule_block in filter_rules:
             lines.append("")
             lines.append(rule_block)
@@ -294,25 +332,34 @@ class SieveScriptBuilder:
 
     @staticmethod
     def merge_filter_into_script(script_content: str, new_filter: str) -> str:
-        """Add a new filter block to an existing script, preserving existing filters."""
-        existing = _parse_filters_from_script(script_content)
+        """Add a new filter block to an existing script, preserving existing filters and headers.
+
+        Existing filters are identified by ``# __FILTER:{...}`` tag comments **or**
+        by matching ``if``-block lines (untagged filters from providers/manual scripts).
+        All require / preamble lines preceding the first filter block are preserved.
+        """
+        preamble = _extract_preamble(script_content)
+        existing = _parse_filters_from_script(script_content, include_untagged=True)
         all_filters = existing + [new_filter]
-        return SieveScriptBuilder.build_complete_script(all_filters)
+        return SieveScriptBuilder.build_complete_script(all_filters, preamble)
 
     @staticmethod
     def remove_filter_from_script(script_content: str, filter_name: str) -> str:
         """Remove a filter block identified by its tag comment from a script."""
-        existing = _parse_filters_from_script(script_content, exclude_name=filter_name)
-        if len(existing) == len(_parse_filters_from_script(script_content)):
+        preamble = _extract_preamble(script_content)
+        all_count = len(_parse_filters_from_script(script_content, include_untagged=True))
+        remaining = _parse_filters_from_script(script_content, exclude_name=filter_name, include_untagged=True)
+        if len(remaining) == all_count:
             # No filter was removed (name not found) — return unchanged
             return script_content
-        return SieveScriptBuilder.build_complete_script(existing)
+        return SieveScriptBuilder.build_complete_script(remaining, preamble)
 
     @staticmethod
     def replace_filter_in_script(script_content: str, new_filter: str, filter_name: str) -> str:
         """Replace a filter block by name with a new filter, preserving all others."""
-        existing = _parse_filters_from_script(script_content, exclude_name=filter_name)
-        return SieveScriptBuilder.build_complete_script(existing + [new_filter])
+        preamble = _extract_preamble(script_content)
+        existing = _parse_filters_from_script(script_content, exclude_name=filter_name, include_untagged=True)
+        return SieveScriptBuilder.build_complete_script(existing + [new_filter], preamble)
 
 
 class Tools:

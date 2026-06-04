@@ -3,8 +3,10 @@
 import pytest
 
 from imap_mailbox import (
+    _UNTAGGED_FILTER_BLOCK_RE,
     SieveScriptBuilder,
     _build_header_from_script,
+    _extract_preamble,
     _extract_script_content,
     _parse_filters_from_script,
 )
@@ -268,12 +270,14 @@ class TestParseFiltersFromScript:
         assert "keep" in filters[0]
         assert "drop" not in filters[0]
 
-    def test_parse_with_invalid_json_tag_ignores_unnamed(self):
-        """Scripts with malformed tag JSON (non-JSON string) produce no named filters."""
+    def test_parse_with_invalid_json_tag_keeps_block(self):
+        """Scripts with malformed tag JSON produce the block — exclusion logic changed."""
         script = 'require "fileinto";\n# __FILTER:{\'name\': broken}__\nif true { fileinto "X"; }\n'
         filters = _parse_filters_from_script(script)
-        # Invalid JSON → current_name=None, and None matches exclude_name=None → skipped
-        assert filters == []
+        # Invalid JSON → current_name=None, but None is not excluded anymore
+        # (it means "no specific name to exclude" not "skip all unnamed")
+        assert len(filters) == 1
+        assert "if true" in filters[0]
 
     def test_parse_empty_script(self):
         """Script with no filter blocks returns empty list."""
@@ -288,3 +292,285 @@ class TestParseFiltersFromScript:
         filters = _parse_filters_from_script(script, exclude_name="drop")
         assert len(filters) == 1
         assert "keep" in filters[0]
+
+    def test_parse_untagged_header_filter(self):
+        """Tag mode only — provider-created header filters are NOT parsed."""
+        script = 'require "fileinto";\nif header :from "boss@x.com" {\n  fileinto "Boss";\n  stop;\n}\n'
+        filters = _parse_filters_from_script(script)
+        assert filters == []
+
+    def test_parse_untagged_header_filter_with_include(self):
+        """Untagged mode — provider filters are extracted."""
+        script = 'require "fileinto";\nif header :from "boss@x.com" {\n  fileinto "Boss";\n  stop;\n}\n'
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 1
+        assert "header :from" in filters[0]
+
+    def test_parse_tag_and_untagged_together(self):
+        """Tag-based filters and untagged filters both extracted."""
+        tagged = SieveScriptBuilder.generate_filter_rule("tagged", "move", "T", subject="x")
+        untagged_script = (
+            'require "fileinto";\n'
+            '# __FILTER:{"name":"tagged"}__\n'
+            f"{tagged}\n"
+            'if header :from "boss@x.com" {\n'
+            '  fileinto "Boss";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(untagged_script, include_untagged=True)
+        assert len(filters) == 2
+
+    def test_parse_untagged_multi_conditions(self):
+        """Untagged filter with multi-line if condition (nested braces)."""
+        script = (
+            'require "fileinto";\n'
+            'if address :is "To" "team@x.com" {\n'
+            '  if date :is "day" "Monday" {\n'
+            '    fileinto "WorkMon";\n'
+            "    stop;\n"
+            "  }\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 1
+        assert "address :is" in filters[0]
+        assert 'fileinto "WorkMon"' in filters[0]
+
+    def test_parse_untagged_skips_if_true(self):
+        """Untagged mode does NOT match bare 'if true' lines without a tag."""
+        script = 'require "fileinto";\nif true {\n  fileinto "Archive";\n  stop;\n}\n'
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert filters == []
+
+    def test_parse_untagged_multiple_filters(self):
+        """Multiple untagged filters all extracted."""
+        script = (
+            'require "fileinto";\n'
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "a@x.com" in filters[0]
+        assert "b@x.com" in filters[1]
+
+    def test_parse_empty_script_with_include_untagged(self):
+        """Empty script returns empty list even with include_untagged."""
+        filters = _parse_filters_from_script("", include_untagged=True)
+        assert filters == []
+
+
+class TestExtractPreamble:
+    """Test _extract_preamble helper."""
+
+    def test_preamble_with_requires(self):
+        """Preamble extracts all require statements before filters."""
+        script = (
+            'require "fileinto";\n'
+            'require "variables";\n'
+            '# __FILTER:{"name":"f1"}__\n'
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        preamble = _extract_preamble(script)
+        assert 'require "fileinto"' in preamble
+        assert 'require "variables"' in preamble
+
+    def test_preamble_stops_at_unfiltered_if(self):
+        """Preamble stops at untagged if-block (no filters in preamble)."""
+        script = 'require "fileinto";\nif header :from "a@x.com" {\n  fileinto "A";\n  stop;\n}\n'
+        preamble = _extract_preamble(script)
+        assert 'require "fileinto"' in preamble
+        assert "if header" not in preamble
+
+    def test_preamble_empty_no_filters(self):
+        """Script with only requires — preamble returns them all."""
+        script = 'require "fileinto";\nrequire "vacation";\n'
+        preamble = _extract_preamble(script)
+        assert 'require "fileinto"' in preamble
+        assert 'require "vacation"' in preamble
+
+    def test_preamble_empty_script(self):
+        """Empty script returns empty string."""
+        assert _extract_preamble("") == ""
+
+
+class TestMergeUntaggedFilters:
+    """Test merge_filter_into_script — preserving untagged and header content."""
+
+    def test_merge_preserves_untagged_filter(self):
+        """Adding a filter to a script created by a provider preserves existing untagged filters."""
+        existing = 'require "fileinto";\nif header :from "boss@x.com" {\n  fileinto "Boss";\n  stop;\n}\n'
+        new_filter = SieveScriptBuilder.generate_filter_rule("new_rule", "move", "New", from_addr="new@x.com")
+        result = SieveScriptBuilder.merge_filter_into_script(existing, new_filter)
+        # Existing untagged filter preserved
+        assert "boss@x.com" in result
+        assert 'fileinto "Boss"' in result
+        # New filter added
+        assert "new_rule" in result
+        assert 'fileinto "New"' in result
+
+    def test_merge_preserves_multiple_untagged_filters(self):
+        """Adding preserves ALL untagged filters, not just the first."""
+        existing = (
+            'require "fileinto";\n'
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        new_filter = SieveScriptBuilder.generate_filter_rule("c_rule", "move", "C", to_addr="c@x.com")
+        result = SieveScriptBuilder.merge_filter_into_script(existing, new_filter)
+        assert "a@x.com" in result
+        assert "b@x.com" in result
+        assert "c@x.com" in result
+
+    def test_merge_preserves_header_with_extra_requires(self):
+        """Custom require statements are preserved during merge."""
+        existing = 'require "fileinto";\nrequire "variables";\nrequire "mime";\n'
+        new_filter = SieveScriptBuilder.generate_filter_rule("f1", "move", "Inbox", from_addr="x@x.com")
+        result = SieveScriptBuilder.merge_filter_into_script(existing, new_filter)
+        assert 'require "variables"' in result
+        assert 'require "mime"' in result
+        assert '"name":"f1"' in result
+
+    def test_merge_tagged_and_untagged_together(self):
+        """Scripts with both tagged and untagged filters preserve everything."""
+        tagged = SieveScriptBuilder.generate_filter_rule("tagged_filter", "move", "Tagged", subject="x")
+        existing = f'require "fileinto";\n{tagged}\nif header :from "boss@x.com" {{\n  fileinto "Boss";\n  stop;\n}}\n'
+        new_filter = SieveScriptBuilder.generate_filter_rule("new_rule", "move", "New", from_addr="new@x.com")
+        result = SieveScriptBuilder.merge_filter_into_script(existing, new_filter)
+        # Tagged filter preserved
+        assert '"name":"tagged_filter"' in result
+        # Untagged filter preserved
+        assert "boss@x.com" in result
+        assert 'fileinto "Boss"' in result
+        # New filter added
+        assert '"name":"new_rule"' in result
+
+    def test_merge_preserves_tagged_with_include_untagged(self):
+        """Adding filter alongside existing tagged filters still works."""
+        f1 = SieveScriptBuilder.generate_filter_rule("keep", "move", "Keep", from_addr="old@x.com")
+        existing = SieveScriptBuilder.build_complete_script([f1])
+        new_filter = SieveScriptBuilder.generate_filter_rule("new_rule", "move", "New", subject="urgent")
+        result = SieveScriptBuilder.merge_filter_into_script(existing, new_filter)
+        assert '"name":"keep"' in result
+        assert '"name":"new_rule"' in result
+
+    def test_merge_script_only_requires(self):
+        """Merging into a script that only has require statements works."""
+        existing = 'require "fileinto";\n'
+        new_filter = SieveScriptBuilder.generate_filter_rule("f1", "move", "Work", from_addr="boss@x.com")
+        result = SieveScriptBuilder.merge_filter_into_script(existing, new_filter)
+        assert '"name":"f1"' in result
+        assert 'if header :contains "From" "boss@x.com"' in result
+
+    def test_merge_empty_script(self):
+        """Merging into empty content produces valid script with new filter."""
+        new_filter = SieveScriptBuilder.generate_filter_rule("f1", "move", "Work", from_addr="boss@x.com")
+        result = SieveScriptBuilder.merge_filter_into_script("", new_filter)
+        assert '"name":"f1"' in result
+
+
+class TestRemoveUntaggedFilters:
+    """Test remove_filter_from_script behavior with mixed tag/untagged."""
+
+    def test_remove_tagged_from_mixed_script(self):
+        """Removing a named tag does not affect untagged filters."""
+        tagged = SieveScriptBuilder.generate_filter_rule("remove_me", "move", "Drop", subject="x")
+        existing = f'require "fileinto";\n{tagged}\nif header :from "boss@x.com" {{\n  fileinto "Boss";\n  stop;\n}}\n'
+        result = SieveScriptBuilder.remove_filter_from_script(existing, "remove_me")
+        assert "remove_me" not in result
+        assert "boss@x.com" in result
+        assert 'fileinto "Boss"' in result
+
+    def test_remove_untagged_name_not_found(self):
+        """Removing an untagged filter by name returns unchanged script."""
+        existing = 'require "fileinto";\nif header :from "a@x.com" {\n  fileinto "A";\n  stop;\n}\n'
+        result = SieveScriptBuilder.remove_filter_from_script(existing, "a_rule")
+        assert result == existing
+
+    def test_remove_nonexistent_tag_from_tagged_only(self):
+        """Removing a nonexistent tag from a tagged-only script returns unchanged."""
+        f1 = SieveScriptBuilder.generate_filter_rule("f1", "move", "A", from_addr="a@x.com")
+        script = SieveScriptBuilder.build_complete_script([f1])
+        result = SieveScriptBuilder.remove_filter_from_script(script, "ghost")
+        assert result == script
+
+
+class TestReplaceUntaggedFilters:
+    """Test replace_filter_in_script with mixed content."""
+
+    def test_replace_tagged_preserves_untagged(self):
+        """Replacing a tagged filter keeps untagged ones intact."""
+        tagged = SieveScriptBuilder.generate_filter_rule("replace_me", "move", "Old", subject="x")
+        existing = f'require "fileinto";\n{tagged}\nif header :from "boss@x.com" {{\n  fileinto "Boss";\n  stop;\n}}\n'
+        new_tag = SieveScriptBuilder.generate_filter_rule("replace_me", "move", "New", subject="y")
+        result = SieveScriptBuilder.replace_filter_in_script(existing, new_tag, "replace_me")
+        assert '"name":"replace_me"' in result
+        assert '"type":"move"' in result
+        assert 'fileinto "New"' in result
+        assert "boss@x.com" in result
+        assert 'fileinto "Boss"' in result
+
+
+class TestBuildCompleteScriptPreamble:
+    """Test build_complete_script with custom preamble."""
+
+    def test_custom_preamble(self):
+        """build_complete_script accepts custom preamble with multiple requires."""
+        rules = ["rule1"]
+        preamble = 'require "fileinto";\nrequire "variables";\n'
+        result = SieveScriptBuilder.build_complete_script(rules, preamble=preamble)
+        assert 'require "fileinto"' in result
+        assert 'require "variables"' in result
+        assert "rule1" in result
+
+    def test_default_preamble(self):
+        """Default preamble is still just require fileinto."""
+        rules = ["rule1"]
+        result = SieveScriptBuilder.build_complete_script(rules)
+        assert 'require "fileinto"' in result
+
+
+class TestFilterBlockRegex:
+    """Test the _UNTAGGED_FILTER_BLOCK_RE pattern behavior."""
+
+    def test_bare_if_true_not_matched(self):
+        """'if true' is not matched by the untagged filter regex."""
+
+        assert not _UNTAGGED_FILTER_BLOCK_RE.match("  if true {")
+
+    def test_header_condition_matched(self):
+        """'if header' is matched."""
+
+        assert _UNTAGGED_FILTER_BLOCK_RE.match('  if header :contains "From" "a"')
+
+    def test_date_condition_matched(self):
+        """'if date' is matched."""
+
+        assert _UNTAGGED_FILTER_BLOCK_RE.match('  if date :is "day" "Monday"')
+
+    def test_address_condition_matched(self):
+        """'if address' is matched."""
+
+        assert _UNTAGGED_FILTER_BLOCK_RE.match('  if address :is "To" "a@x.com"')
+
+    def test_other_if_conditions_matched(self):
+        """Other sieve conditions are matched."""
+
+        assert _UNTAGGED_FILTER_BLOCK_RE.match("  if size :over 1M")
+        assert _UNTAGGED_FILTER_BLOCK_RE.match('  if exists "X-Custom-Header"')

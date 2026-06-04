@@ -668,3 +668,151 @@ class TestFullWorkflow:
         updated_content = mock_client.putscript.call_args_list[-1][0][1]
         assert "a@x.com" in updated_content
         assert "rule2" not in updated_content
+
+
+class TestAddFilterToProviderScript:
+    """Tests for add_filter_to_script when the server has a pre-existing, untagged script.
+
+    Regression tests for: adding a filter should NOT overwrite provider-created filters.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_filter_to_untagged_provider_script(self, sieve_tools):
+        """Adding a filter to a provider-created script preserves the existing filter."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        provider_script = 'require "fileinto";\nif header :from "boss@x.com" {\n  fileinto "Boss";\n  stop;\n}\n'
+        mock_client.listscripts.return_value = ("worker", ["worker"])
+        mock_client.getscript.return_value = f"=== Sieve Script: worker ===\n{provider_script}"
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            result = await sieve_tools.add_filter_to_script(
+                script_name="worker",
+                name="auto_move",
+                filter_type="move",
+                target_folder="Auto",
+                from_addr="newsletter@x.com",
+            )
+        assert "added" in result.lower()
+        uploaded = mock_client.putscript.call_args[0][1]
+        # The provider's existing filter must be preserved
+        assert "boss@x.com" in uploaded
+        assert 'fileinto "Boss"' in uploaded
+        assert "stop;" in uploaded
+        # The new filter must also be present
+        assert "auto_move" in uploaded
+        assert '"name":"auto_move"' in uploaded
+        assert 'fileinto "Auto"' in uploaded
+
+    @pytest.mark.asyncio
+    async def test_add_filter_two_provider_filters_preserved(self, sieve_tools):
+        """Two provider filters are both preserved when adding a third."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        provider_script = (
+            'require "fileinto";\n'
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        mock_client.listscripts.return_value = ("worker", ["worker"])
+        mock_client.getscript.return_value = f"=== Sieve Script: worker ===\n{provider_script}"
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            await sieve_tools.add_filter_to_script(
+                script_name="worker",
+                name="new_rule",
+                filter_type="move",
+                target_folder="C",
+                to_addr="c@x.com",
+            )
+        uploaded = mock_client.putscript.call_args[0][1]
+        assert "a@x.com" in uploaded
+        assert "b@x.com" in uploaded
+        assert "c@x.com" in uploaded
+
+    @pytest.mark.asyncio
+    async def test_add_filter_preserves_extra_requires(self, sieve_tools):
+        """Custom require statements are preserved during add_filter_to_script."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        provider_script = 'require "fileinto";\nrequire "variables";\nrequire "complaint";\n'
+        mock_client.listscripts.return_value = ("worker", ["worker"])
+        mock_client.getscript.return_value = f"=== Sieve Script: worker ===\n{provider_script}"
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            await sieve_tools.add_filter_to_script(
+                script_name="worker",
+                name="move_rule",
+                filter_type="move",
+                target_folder="Inbox",
+                from_addr="x@x.com",
+            )
+        uploaded = mock_client.putscript.call_args[0][1]
+        assert 'require "fileinto"' in uploaded
+        assert 'require "variables"' in uploaded
+        assert 'require "complaint"' in uploaded
+
+    @pytest.mark.asyncio
+    async def test_add_filter_provider_script_with_both_tagged_and_untagged(self, sieve_tools):
+        """Adding a filter when script has mixed tagged and untagged filters preserves all."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        tagged = '# __FILTER:{"name":"old_tagged","type":"move","folder":"Old"}__\n'
+        tagged += 'if header :from "old@x.com" {\n  fileinto "Old";\n  stop;\n}\n'
+        untagged = 'if header :from "boss@x.com" {\n  fileinto "Boss";\n  stop;\n}\n'
+        provider_script = 'require "fileinto";\n' + tagged + untagged
+        mock_client.listscripts.return_value = ("mixed", ["mixed"])
+        mock_client.getscript.return_value = f"=== Sieve Script: mixed ===\n{provider_script}"
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            await sieve_tools.add_filter_to_script(
+                script_name="mixed",
+                name="new_untagged",
+                filter_type="move",
+                target_folder="New",
+                from_addr="new@x.com",
+            )
+        uploaded = mock_client.putscript.call_args[0][1]
+        assert "old@x.com" in uploaded
+        assert "boss@x.com" in uploaded
+        assert "new@x.com" in uploaded
+
+    @pytest.mark.asyncio
+    async def test_add_filter_untagged_with_multiple_conditions(self, sieve_tools):
+        """Adding a filter preserves an untagged filter that has multiple conditions."""
+        sieve_tools.valves.allow_update_sieve = True
+        mock_client = MagicMock()
+        mock_client.connect.return_value = True
+        # Multi-condition filter (separate if blocks like our generated rules)
+        provider_script = (
+            'require "fileinto";\n'
+            'if header :from "sender@x.com" {\n'
+            '  fileinto "SenderFolder";\n'
+            "  stop;\n"
+            "}\n"
+            'if header :subject "urgent" {\n'
+            '  fileinto "SenderFolder";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        mock_client.listscripts.return_value = ("worker", ["worker"])
+        mock_client.getscript.return_value = f"=== Sieve Script: worker ===\n{provider_script}"
+        with patch("imap_mailbox.Client", return_value=mock_client):
+            await sieve_tools.add_filter_to_script(
+                script_name="worker",
+                name="new_filter",
+                filter_type="move",
+                target_folder="Auto",
+                from_addr="auto@x.com",
+            )
+        uploaded = mock_client.putscript.call_args[0][1]
+        assert "sender@x.com" in uploaded
+        assert "urgent" in uploaded
+        assert "auto@x.com" in uploaded
+        assert 'fileinto "Auto"' in uploaded

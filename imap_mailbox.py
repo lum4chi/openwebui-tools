@@ -443,11 +443,11 @@ class Tools:
     async def list_sieve_scripts(self) -> str:
         """List all available Sieve filters/scripts on the server.
 
-        Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange)
-        manage Sieve filters via their own API rather than standard
-        ManageSieve. In those cases no scripts will be listed even though
-        filters may be active on the server.
+        Note: Some providers manage Sieve filters via their own API rather
+        than standard ManageSieve. In those cases no scripts will be listed
+        even though filters may be active on the server.
         """
+
         result = self._manage_sieve_connect()
         if isinstance(result, str):
             return result
@@ -458,7 +458,7 @@ class Tools:
                 client.logout()
                 return (
                     "No Sieve scripts found on the ManageSieve server.\n"
-                    "Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange) manage filters via their own API. "
+                    "Note: Some providers manage filters via their own API. "
                     "The ACTIVITY/*.sieve files on disk are not always visible via ManageSieve."
                 )
             active_label = " (active)" if active else " (none active)"
@@ -485,7 +485,7 @@ class Tools:
                 client.logout()
                 return (
                     "No Sieve scripts found on the ManageSieve server.\n"
-                    "Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange) manage filters via their own API. "
+                    "Note: Some providers manage filters via their own API. "
                     "The ACTIVITY/*.sieve files on disk are not always visible via ManageSieve."
                 )
             if name not in scripts:
@@ -817,9 +817,8 @@ class Tools:
 
         Only use this when writing a complete script from scratch.
 
-        Note: Some providers (e.g. mailbox.org with Nextcloud/Open-Xchange)
-        do not support ManageSieve script upload. Scripts must be created
-        via the provider's web interface.
+        Note: Some providers do not support ManageSieve script upload.
+        Scripts must be created via the provider's web interface.
         """
         if not self.valves.allow_create_sieve:
             return "Create script operations are disabled. Enable 'allow_create_sieve' in Valves to use this feature."

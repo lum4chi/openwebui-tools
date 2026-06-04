@@ -366,6 +366,354 @@ class TestParseFiltersFromScript:
         filters = _parse_filters_from_script("", include_untagged=True)
         assert filters == []
 
+    def test_parse_comment_captured_from_named_filter_section(self):
+        """Section comment inside a named filter block is captured for the next untagged filter."""
+        tagged = SieveScriptBuilder.generate_filter_rule("filter_a", "move", "Archive/A", subject="test_a")
+        script = (
+            'require "fileinto";\n'
+            "# Section Header A\n"
+            f"{tagged}\n"
+            'if header :from "user@x.com" {\n'
+            '  fileinto "Other";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        # Filter with tag should have section comment inside it
+        assert "# Section Header A" in filters[0]
+        # Untagged filter should have section comment prepended
+        assert "# Section Header A" in filters[1]
+        assert 'if header :from "user@x.com"' in filters[1]
+
+    def test_parse_no_comment_when_none_present(self):
+        """Original behavior — untagged filter has no extra comments when none exist."""
+        tagged = SieveScriptBuilder.generate_filter_rule("f1", "move", "A", subject="x")
+        script = SieveScriptBuilder.build_complete_script([tagged])
+        script += '\nif header :from "y@x.com" {\n  fileinto "B";\n  stop;\n}\n'
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        # Untagged filter should only have the if-line (no blank line above it)
+        assert filters[1].startswith('if header :from "y@x.com"')
+
+    def test_parse_block_closed_with_no_untagged_following(self):
+        """When no untagged filter follows, _last_comment is simply discarded."""
+        tagged = SieveScriptBuilder.generate_filter_rule("f1", "move", "A", subject="x")
+        script = SieveScriptBuilder.build_complete_script([tagged])
+        script += '\nif header :from "y@x.com" {\n  fileinto "B";\n  stop;\n}\n'
+        # Second tag block follows but no bare if
+        tagged2 = SieveScriptBuilder.generate_filter_rule("f2", "move", "C", subject="z")
+        script += "\n# Another Section\n" + tagged2
+
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 3
+        # First filter — tag + if block, no "Another Section"
+        assert "# Another Section" not in filters[0]
+        assert '"name":"f1"' in filters[0]
+        # Middle untagged filter — no section comment (blank lines clear)
+        assert filters[1].startswith("if header")
+        # Second filter should be standalone — tag + if block
+        assert "# Another Section" in filters[2]
+        assert '"name":"f2"' in filters[2]
+
+    def test_parse_multiple_untagged_filters_in_one_section(self):
+        """When several untagged filters share one section header, all get it."""
+        script = (
+            'require "fileinto";\n'
+            "# Section Comment\n"
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Section Comment" in filters[0]
+        assert "# Section Comment" in filters[1]
+        assert "a@x.com" in filters[0]
+        assert "b@x.com" in filters[1]
+
+    def test_parse_untagged_tag_reset_clears_comment(self):
+        """A new tag resets _last_comment so the next untagged filter has no section."""
+        tagged1 = SieveScriptBuilder.generate_filter_rule("t1", "move", "A", subject="x")
+        tagged2 = SieveScriptBuilder.generate_filter_rule("t2", "move", "B", subject="y")
+        script = (
+            'require "fileinto";\n'
+            "# Top Section\n"
+            f"{tagged1}\n"
+            "if header :from 'u1@x.com' {\n  fileinto 'U1';\n  stop;\n}\n"
+            "# Mid Section\n"
+            f"{tagged2}\n"
+            "if header :from 'u2@x.com' {\n  fileinto 'U2';\n  stop;\n}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 4
+        # Both untagged filters should have their preceding section comment
+        assert "# Top Section" in filters[1]
+        assert "# Mid Section" in filters[3]
+
+    def test_parse_blank_line_clears_last_comment(self):
+        """A blank line between a tag block's if-closing and another block clears _last_comment."""
+        tagged = SieveScriptBuilder.generate_filter_rule("f1", "move", "A", subject="x")
+        script = (
+            'require "fileinto";\n'
+            "# Section\n"
+            f"{tagged}\n"
+            "   \n"  # whitespace-only line — treated as blank, clears _last_comment
+            'if header :from "u@x.com" {\n'
+            '  fileinto "U";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Section" not in filters[1]
+        assert filters[1].startswith('if header :from "u@x.com"')
+
+    def test_blank_lines_dont_clear_comment_between_untagged(self):
+        """Multiple blank lines between untagged blocks do NOT clear the comment."""
+        script = (
+            'require "fileinto";\n'
+            "# Section A\n"
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            "\n"
+            "\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Section A" in filters[0]
+        assert "# Section A" in filters[1]
+
+    def test_whitespace_only_line_clears_comment(self):
+        """Whitespace-only line between tag and untagged clears _last_comment."""
+        tagged = SieveScriptBuilder.generate_filter_rule("f1", "move", "A", subject="x")
+        script = (
+            'require "fileinto";\n'
+            "# Section\n"
+            f"{tagged}\n"
+            "\t\t\t\n"
+            'if header :from "u@x.com" {\n'
+            '  fileinto "U";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Section" not in filters[1]
+        assert filters[1].startswith('if header :from "u@x.com"')
+
+    def test_two_comments_before_one_filter_last_wins(self):
+        """Two consecutive comments before one filter — only the last comment applies."""
+        f1 = SieveScriptBuilder.generate_filter_rule("only", "move", "Inbox", subject="x")
+        script = f'require "fileinto";\n# First Comment\n# Second Comment\n{f1}\n'
+        filters = _parse_filters_from_script(script)
+        assert len(filters) == 1
+        assert "# Second Comment" in filters[0]
+        assert "# First Comment" not in filters[0]
+
+    def test_comment_at_script_start_earlier_than_requires(self):
+        """Comment at the very start of script applies to the first filter block."""
+        f1 = SieveScriptBuilder.generate_filter_rule("first", "move", "A", subject="x")
+        script = f'# Top Level Comment\nrequire "fileinto";\n{f1}\n'
+        filters = _parse_filters_from_script(script)
+        assert len(filters) == 1
+        assert "# Top Level Comment" in filters[0]
+
+    def test_multiple_tags_each_get_own_preceding_comment(self):
+        """Multiple tags in sequence each receive only their own preceding section comment."""
+        t1 = SieveScriptBuilder.generate_filter_rule("t1", "move", "A", subject="x")
+        t2 = SieveScriptBuilder.generate_filter_rule("t2", "move", "B", subject="y")
+        script = f'require "fileinto";\n# Section A\n{t1}\n\n# Section B\n{t2}\n'
+        filters = _parse_filters_from_script(script)
+        assert len(filters) == 2
+        assert "# Section A" in filters[0]
+        assert "# Section B" in filters[1]
+        assert "# Section A" not in filters[1]
+        assert "# Section B" not in filters[0]
+
+    def test_tag_then_blank_lines_then_untagged_propagates_comment(self):
+        """Comment through blank lines to untagged filter after a tag block."""
+        tagged = SieveScriptBuilder.generate_filter_rule("t1", "move", "A", subject="x")
+        script = (
+            'require "fileinto";\n'
+            "# Section A\n"
+            f"{tagged}\n"
+            "\n"
+            "\n"
+            'if header :from "u@x.com" {\n'
+            '  fileinto "U";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Section A" in filters[0]
+        assert "# Section A" in filters[1]
+
+    def test_excluded_tag_doesnt_pollute_next_untagged_comment(self):
+        """Excluded tag via exclude_name — untagged after it does not inherit its comment."""
+        tagged = SieveScriptBuilder.generate_filter_rule("excluded", "discard", subject="drop")
+        script = (
+            'require "fileinto";\n'
+            "# Exclude Section\n"
+            f"{tagged}\n"
+            "\n"
+            'if header :from "u@x.com" {\n'
+            '  fileinto "U";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True, exclude_name="excluded")
+        assert len(filters) == 1
+        assert "# Exclude Section" not in filters[0]
+
+    def test_non_comment_line_doesnt_become_section_comment(self):
+        """Non-#, non-tag, non-filter line doesn't become a section comment itself."""
+        script = (
+            'require "fileinto";\n'
+            "keep;\n"
+            '# __FILTER:{"name":"x"}\n'
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 1
+        # Non-comment line "keep;" does not become a section comment — the tag has no leading comment
+        assert filters[0].startswith("# __FILTER")
+
+    def test_multiple_blanks_between_untagged_share_comment(self):
+        """Multiple blank lines between untagged filters — all share the same section comment."""
+        script = (
+            'require "fileinto";\n'
+            "# Shared Section\n"
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            "\n"
+            "\n"
+            "\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Shared Section" in filters[0]
+        assert "# Shared Section" in filters[1]
+
+    def test_comment_with_leading_indentation_used(self):
+        """Comment with extra leading whitespace — stripped version as section comment."""
+        f1 = SieveScriptBuilder.generate_filter_rule("whitespace", "move", "A", subject="x")
+        script = f'require "fileinto";\n  # Indented Section\n{f1}\n'
+        filters = _parse_filters_from_script(script)
+        assert len(filters) == 1
+        assert "# Indented Section" in filters[0]
+
+    def test_no_comment_when_only_empty_lines_before_filters(self):
+        """Empty lines (no comments) before filter — filter starts without leading comment."""
+        f1 = SieveScriptBuilder.generate_filter_rule("no_comment", "move", "A", subject="x")
+        script = f'require "fileinto";\n\n\n{f1}\n'
+        filters = _parse_filters_from_script(script)
+        assert len(filters) == 1
+        first_line = filters[0].split("\n")[0]
+        assert first_line.startswith("# __FILTER")
+
+    def test_tag_comment_followed_by_new_section_before_untagged(self):
+        """New section comment after tag clears previous comment for untagged filter."""
+        tagged = SieveScriptBuilder.generate_filter_rule("t1", "move", "A", subject="x")
+        script = (
+            'require "fileinto";\n'
+            "# Old Section\n"
+            f"{tagged}\n"
+            "\n"
+            "# New Section\n"
+            'if header :from "u@x.com" {\n'
+            '  fileinto "U";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Old Section" in filters[0]
+        assert "# New Section" in filters[1]
+        assert "# Old Section" not in filters[1]
+
+    def test_untagged_then_tag_then_comment_reset(self):
+        """Comment between untagged and tag — tag gets new comment, not untagged's."""
+        script = (
+            'require "fileinto";\n'
+            "# Untagged Section\n"
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            "# Tag Section\n"
+            '# __FILTER:{"name":"tagged"}\n'
+            'if header :contains "Subject" "test" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=True)
+        assert len(filters) == 2
+        assert "# Untagged Section" in filters[0]
+        assert "# Tag Section" in filters[1]
+
+    def test_include_untagged_false_ignores_all_untagged(self):
+        """include_untagged=False — untagged if-blocks not captured at all."""
+        script = (
+            'require "fileinto";\n'
+            '# __FILTER:{"name":"named"}\n'
+            'if header :from "a@x.com" {\n'
+            '  fileinto "A";\n'
+            "  stop;\n"
+            "}\n"
+            'if header :from "b@x.com" {\n'
+            '  fileinto "B";\n'
+            "  stop;\n"
+            "}\n"
+        )
+        filters = _parse_filters_from_script(script, include_untagged=False)
+        assert len(filters) == 1
+        assert '"name":"named"' in filters[0]
+
+    def test_comment_with_special_characters(self):
+        """Comment containing special chars like colons, dashes, slashes."""
+        f1 = SieveScriptBuilder.generate_filter_rule("special", "move", "A", subject="x")
+        script = f'require "fileinto";\n# Filters: Inbox & Trash - Auto Move\n{f1}\n'
+        filters = _parse_filters_from_script(script)
+        assert len(filters) == 1
+        assert "# Filters: Inbox & Trash - Auto Move" in filters[0]
+
+    def test_tag_excluded_in_middle_of_script(self):
+        """Excluded tag in middle — surrounding untagged blocks handle comments correctly."""
+        before = SieveScriptBuilder.generate_filter_rule("keep", "move", "K", subject="a")
+        skip = SieveScriptBuilder.generate_filter_rule("skip", "discard", subject="b")
+        after = SieveScriptBuilder.generate_filter_rule("also_keep", "move", "L", subject="c")
+        script = f'require "fileinto";\n{before}\n\n# Skip Section\n{skip}\n\n# Keep Section\n{after}\n'
+        filters = _parse_filters_from_script(script, exclude_name="skip")
+        assert len(filters) == 2
+        first_start = filters[0].split("\n")[0]
+        assert first_start.startswith("# __FILTER") or first_start == "# Keep Section"
+        assert "# Skip Section" not in filters[0]
+        assert "# Skip Section" not in filters[1]
+        assert "# Keep Section" in filters[1]
+
 
 class TestExtractPreamble:
     """Test _extract_preamble helper."""

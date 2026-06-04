@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.7.1
+version: 3.8.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -143,6 +143,8 @@ _FILTER_TAG_RE = re.compile(r"#.*?__FILTER:(\{.*?\})", re.DOTALL)
 # Matches Sieve if-block lines that start a filter rule, excluding bare "if true {"
 # which is only used as a catch-all in generated rules without actual conditions.
 # Allows any amount of leading whitespace (including none).
+# Leading section comments are captured separately via _last_comment in the parser
+# (tag blocks reset it; blank lines inside a tag block before "{ clears it).
 _UNTAGGED_FILTER_BLOCK_RE = re.compile(r"^\s*if (?!true\b)\S")
 
 
@@ -178,12 +180,23 @@ def _parse_filters_from_script(
     in_block = False
     brace_depth = 0
     brace_started = False
+    _last_comment = ""  # last non-blank line outside any block (for untagged)
+    _tag_leading_comment = ""  # comment from within a tagged block
+    _has_external_comment = False  # tracks whether a section comment is active
 
     for line in script_content.split("\n"):
         tag_match = _FILTER_TAG_RE.search(line)
         if tag_match:
-            # Tag comment — start a named filter block including the tag line itself
-            current_block = [line]
+            # Prepend section comment to tag line if available.
+            comment = _tag_leading_comment or _last_comment
+            if comment:
+                block_lines = [comment, line]
+                _has_external_comment = not _tag_leading_comment  # preserve for untagged after
+            else:
+                block_lines = [line]
+                _has_external_comment = False
+            _tag_leading_comment = ""
+            current_block = block_lines
             in_block = True
             brace_started = False
             brace_depth = 0
@@ -199,8 +212,9 @@ def _parse_filters_from_script(
                 brace_started = True
             if brace_started and brace_depth <= 0:
                 if current_name is not None and current_name == exclude_name:
-                    # Skip excluded named filter
-                    pass
+                    # Excluded block — clear comment state so untagged after doesn't inherit it
+                    _last_comment = ""
+                    _has_external_comment = False
                 else:
                     filters.append("\n".join(current_block).strip())
                 current_block = []
@@ -208,12 +222,20 @@ def _parse_filters_from_script(
                 brace_depth = 0
                 brace_started = False
         elif include_untagged and _UNTAGGED_FILTER_BLOCK_RE.match(line):
-            # Untagged filter block — starts with "if" (not "if true")
-            current_block = [line]
+            current_block = [_last_comment, "", line] if _last_comment and _has_external_comment else [line]
             in_block = True
             brace_started = "{" in line
             brace_depth = line.count("{") - line.count("}")
-            current_name = None  # no tag → no name to exclude
+            current_name = None
+        else:
+            stripped = line.strip()
+            if stripped and stripped.startswith("#"):
+                _last_comment = stripped
+                _has_external_comment = True
+            elif stripped == "" and line != "":
+                # Whitespace-only line (not empty) — clears _last_comment
+                _last_comment = ""
+                _has_external_comment = False
 
     return filters
 

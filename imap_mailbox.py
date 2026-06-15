@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Manage a generic IMAP mailbox. Supports listing, reading, searching, and deleting emails via IMAP. Also manages Sieve email filters via ManageSieve.
 requirements: sievelib>=1.5.0
-version: 3.8.0
+version: 4.0.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -24,20 +24,19 @@ Agent instructions:
   12. list_folders — list all available folders
   13. delete_emails / delete_all_emails — permanently delete (requires allow_delete_single/allow_delete_all)
   14. move_emails — move between folders (requires allow_move)
-  SIEVE FILTER MANAGEMENT:
-   1. create_or_update_filter — create or update a single filter rule
-      NOTE: Uses independent `if` statements (NOT `anyof`/`allof`) for
-      universal server compatibility (e.g. Open-Xchange/jsieve).
-   2. add_filter_to_script — add one filter rule to an existing script
-   3. remove_filter_from_script — remove one filter rule by name
-   4. remove_all_filters_from_script — clear all rules keeping headers
-   5. create/update/delete_sieve_script — ONLY for entire script creation/modification (never for single filter changes)
-   6. set_active/deactivate_sieve_script — ONLY for activating/deactivating scripts
+   SIEVE SCRIPT MANAGEMENT:
+    1. list_sieve_scripts — list all scripts
+    2. get_sieve_script — retrieve script content
+    3. create_sieve_script — create a new script
+    4. update_sieve_script — update an existing script
+    5. delete_sieve_script — delete a script
+    6. rename_sieve_script — rename a script
+    7. create_and_activate_sieve_script — create and activate in one step
+    8. set_active_sieve_script — activate a script
+    9. deactivate_sieve_script — deactivate the current script
 """
 
 import imaplib
-import json
-import re
 from contextlib import suppress
 from datetime import datetime, timedelta
 from email import message_from_bytes
@@ -110,278 +109,6 @@ def _handle_sieve_list_result(
     if active and isinstance(active, str) and isinstance(scripts, list) and active not in scripts:
         scripts.append(active)
     return active, scripts, None
-
-
-def _extract_script_content(getscript_output: str) -> str:
-    """Extract raw sieve DSL from '=== Sieve Script: X ===\\n<content>' output.
-
-    If the output doesn't start with '=== Sieve Script:', treat it as raw DSL.
-    """
-    if getscript_output.startswith("=== Sieve Script:"):
-        lines = getscript_output.split("\n", 1)
-        if len(lines) > 1:
-            return lines[1]
-    return getscript_output
-
-
-def _build_header_from_script(script_content: str) -> str:
-    """Extract the header (require statements) from an existing script."""
-    header_lines: list[str] = []
-    for line in script_content.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("require") and not stripped.startswith("#"):
-            header_lines.append(stripped)
-        elif stripped.startswith("# __FILTER:") or (stripped and not stripped.startswith("#")):
-            break
-    if not header_lines:
-        return 'require "fileinto";'
-    return "\n".join(header_lines)
-
-
-_FILTER_TAG_RE = re.compile(r"#.*?__FILTER:(\{.*?\})", re.DOTALL)
-
-# Matches Sieve if-block lines that start a filter rule, excluding bare "if true {"
-# which is only used as a catch-all in generated rules without actual conditions.
-# Allows any amount of leading whitespace (including none).
-# Leading section comments are captured separately via _last_comment in the parser
-# (tag blocks reset it; blank lines inside a tag block before "{ clears it).
-_UNTAGGED_FILTER_BLOCK_RE = re.compile(r"^\s*if (?!true\b)\S")
-
-
-def _build_filter_tag_json(
-    name: str,
-    filter_type: str,
-    target_folder: str | None,
-    match_value: str,
-) -> str:
-    """Build the JSON string used inside the filter tag comment."""
-    parts = [f'"name":"{name}"']
-    parts.append(f'"type":"{filter_type}"')
-    if target_folder:
-        parts.append(f'"folder":"{target_folder}"')
-    if match_value and match_value != "unknown":
-        parts.append(f'"match":"{match_value}"')
-    return "{" + ",".join(parts) + "}"
-
-
-def _parse_filters_from_script(
-    script_content: str, exclude_name: str | None = None, include_untagged: bool = False
-) -> list[str]:
-    """Extract filter blocks from a script.
-
-    Tags (``# __FILTER:{...}__``) identify named filters for removal/replacement.
-    When *include_untagged* is ``True``, any ``if``-block that does *not* start with
-    ``if true`` is also treated as a filter block so that filters created outside
-    this tool are preserved during merge.
-    """
-    filters: list[str] = []
-    current_block: list[str] = []
-    current_name: str | None = None
-    in_block = False
-    brace_depth = 0
-    brace_started = False
-    _last_comment = ""  # last non-blank line outside any block (for untagged)
-    _tag_leading_comment = ""  # comment from within a tagged block
-    _has_external_comment = False  # tracks whether a section comment is active
-
-    for line in script_content.split("\n"):
-        tag_match = _FILTER_TAG_RE.search(line)
-        if tag_match:
-            # Prepend section comment to tag line if available.
-            comment = _tag_leading_comment or _last_comment
-            if comment:
-                block_lines = [comment, line]
-                _has_external_comment = not _tag_leading_comment  # preserve for untagged after
-            else:
-                block_lines = [line]
-                _has_external_comment = False
-            _tag_leading_comment = ""
-            current_block = block_lines
-            in_block = True
-            brace_started = False
-            brace_depth = 0
-            try:
-                tag = json.loads(tag_match.group(1))
-            except (json.JSONDecodeError, TypeError):
-                tag = {}
-            current_name = tag.get("name") or None
-        elif in_block:
-            current_block.append(line)
-            brace_depth += line.count("{") - line.count("}")
-            if not brace_started and "{" in line:
-                brace_started = True
-            if brace_started and brace_depth <= 0:
-                if current_name is not None and current_name == exclude_name:
-                    # Excluded block — clear comment state so untagged after doesn't inherit it
-                    _last_comment = ""
-                    _has_external_comment = False
-                else:
-                    filters.append("\n".join(current_block).strip())
-                current_block = []
-                in_block = False
-                brace_depth = 0
-                brace_started = False
-        elif include_untagged and _UNTAGGED_FILTER_BLOCK_RE.match(line):
-            current_block = [_last_comment, "", line] if _last_comment and _has_external_comment else [line]
-            in_block = True
-            brace_started = "{" in line
-            brace_depth = line.count("{") - line.count("}")
-            current_name = None
-        else:
-            stripped = line.strip()
-            if stripped and stripped.startswith("#"):
-                _last_comment = stripped
-                _has_external_comment = True
-            elif stripped == "" and line != "":
-                # Whitespace-only line (not empty) — clears _last_comment
-                _last_comment = ""
-                _has_external_comment = False
-
-    return filters
-
-
-def _extract_preamble(script_content: str) -> str:
-    """Return lines that precede the first filter block (tag comment, ``if``-block).
-
-    The preamble typically contains ``require`` statements and module-level
-    comments.  Everything after the end of the last filter block is discarded
-    during rebuild.
-    """
-    preamble_lines: list[str] = []
-    for line in script_content.split("\n"):
-        stripped = line.strip()
-        if _FILTER_TAG_RE.search(stripped):
-            break
-        if stripped.lstrip().startswith("if"):
-            break
-        # Lines before any filter block are preamble (requires, comments, blank lines)
-        preamble_lines.append(line)
-    return "\n".join(preamble_lines)
-
-
-class SieveScriptBuilder:
-    """Generates Sieve DSL for common email filter patterns.
-
-    Uses independent `if` statements for each condition (OR semantics)
-    instead of `anyof`/`allof` combinators for universal server compatibility.
-    E.g. Open-Xchange/jsieve does not support `anyof()` or `allof()`.
-
-    Each filter is tracked by a JSON-tagged comment so rules can be
-    individually added, removed, or replaced without rewriting the whole
-    script.
-    """
-
-    @staticmethod
-    def generate_filter_rule(
-        name: str,
-        filter_type: str,
-        target_folder: str | None = None,
-        **conditions: str | int | bool | tuple[int, ...],
-    ) -> str:
-        """Generate a single Sieve filter rule block with a unique tag.
-
-        Each condition gets its own `if` block with shared tag for OR semantics.
-        This avoids `anyof`/`allof` combinators for universal server compatibility.
-
-        :param name: Unique identifier for tracking (written to tag comment)
-        :param filter_type: One of "move", "discard", "stop"
-        :param target_folder: Target folder (required for "move")
-        :param conditions: keyword arguments — from, to, subject, day, hour_range, has_attachment
-        """
-        if filter_type == "move" and not target_folder:
-            raise ValueError("target_folder is required for 'move' filter type")
-
-        # Normalize parameter names for direct calls (e.g. from_addr -> from)
-        _key_map = {"from_addr": "from", "to_addr": "to"}
-        conditions = {(_key_map.get(k, k)): v for k, v in conditions.items()}
-
-        header_conditions: list[str] = []
-        match_value: str = "unknown"
-        for key, value in conditions.items():
-            if key == "from":
-                header_conditions.append(f'header :contains "From" "{value}"')
-                match_value = str(value)
-            elif key == "to":
-                header_conditions.append(f'header :contains "To" "{value}"')
-                match_value = str(value)
-            elif key == "subject":
-                header_conditions.append(f'header :contains "Subject" "{value}"')
-                match_value = str(value)
-            elif key == "day":
-                header_conditions.append(f'date :is "day" "{value}"')
-            elif key == "hour_range":
-                if isinstance(value, tuple):
-                    lo, hi = value[0], value[1]
-                    header_conditions.append(f'date :value "ge" "hour" "{lo:02d}"')
-                    header_conditions.append(f'date :value "lt" "hour" "{hi:02d}"')
-            elif key == "has_attachment":
-                if value is True:
-                    header_conditions.append('attachment :contains "Content-Type" "multipart/"')
-                elif isinstance(value, bool):
-                    pass
-
-        tag_json = _build_filter_tag_json(name, filter_type, target_folder, str(match_value))
-        tag = f"# __FILTER:{tag_json}__"
-
-        if not header_conditions:
-            folder_or_junk = target_folder or "Junk"
-            return f'{tag}\nif true {{\n  fileinto "{folder_or_junk}";\n  stop;\n}}\n'
-
-        if filter_type == "move":
-            action = f'fileinto "{target_folder}";'
-        elif filter_type == "discard":
-            action = "discard;"
-        else:
-            action = 'fileinto "Junk";'
-
-        # Use independent if blocks for universal compatibility.
-        # Some servers (e.g. Open-Xchange) do not support anyof()/allof() combinators.
-        # Each block triggers on its own condition — any match performs the action.
-        blocks: list[str] = []
-        for cond in header_conditions:
-            blocks.append(f"{tag}\nif {cond} {{\n  {action}\n  stop;\n}}\n")
-
-        return "\n".join(blocks)
-
-    @staticmethod
-    def build_complete_script(filter_rules: list[str], preamble: str = 'require "fileinto";') -> str:
-        """Build a complete Sieve script with the given preamble and filter blocks."""
-        lines = [preamble]
-        for rule_block in filter_rules:
-            lines.append("")
-            lines.append(rule_block)
-        return "\n".join(lines)
-
-    @staticmethod
-    def merge_filter_into_script(script_content: str, new_filter: str) -> str:
-        """Add a new filter block to an existing script, preserving existing filters and headers.
-
-        Existing filters are identified by ``# __FILTER:{...}`` tag comments **or**
-        by matching ``if``-block lines (untagged filters from providers/manual scripts).
-        All require / preamble lines preceding the first filter block are preserved.
-        """
-        preamble = _extract_preamble(script_content)
-        existing = _parse_filters_from_script(script_content, include_untagged=True)
-        all_filters = existing + [new_filter]
-        return SieveScriptBuilder.build_complete_script(all_filters, preamble)
-
-    @staticmethod
-    def remove_filter_from_script(script_content: str, filter_name: str) -> str:
-        """Remove a filter block identified by its tag comment from a script."""
-        preamble = _extract_preamble(script_content)
-        all_count = len(_parse_filters_from_script(script_content, include_untagged=True))
-        remaining = _parse_filters_from_script(script_content, exclude_name=filter_name, include_untagged=True)
-        if len(remaining) == all_count:
-            # No filter was removed (name not found) — return unchanged
-            return script_content
-        return SieveScriptBuilder.build_complete_script(remaining, preamble)
-
-    @staticmethod
-    def replace_filter_in_script(script_content: str, new_filter: str, filter_name: str) -> str:
-        """Replace a filter block by name with a new filter, preserving all others."""
-        preamble = _extract_preamble(script_content)
-        existing = _parse_filters_from_script(script_content, exclude_name=filter_name, include_untagged=True)
-        return SieveScriptBuilder.build_complete_script(existing + [new_filter], preamble)
 
 
 class Tools:
@@ -577,309 +304,6 @@ class Tools:
                 client.logout()
             return f"Error retrieving Sieve script: {str(e)}"
 
-    async def create_or_update_filter(
-        self,
-        name: str = Field(description="Name for the script (e.g. 'work_filters', 'auto_sort')"),
-        filter_type: str = Field(description="Filter type: 'move', 'discard', or 'stop' (blacklist to Junk)"),
-        target_folder: str = Field(
-            default="",
-            description="Target folder (required for 'move' type, e.g. 'Work', 'Spam', 'Archive')",
-        ),
-        from_addr: str = Field(default="", description="Filter emails from this sender address"),
-        to_addr: str = Field(default="", description="Filter emails to this recipient address"),
-        subject: str = Field(default="", description="Filter emails with this subject (partial match)"),
-        day: str = Field(default="", description="Filter on day of week (e.g. 'Saturday', 'Sunday')"),
-        hour_range: str = Field(
-            default="",
-            description="Filter by hour range in format 'HH-HH' (e.g. '9-17' for business hours)",
-        ),
-        has_attachment: bool = Field(default=False, description="Filter emails that have attachments"),
-    ) -> str:
-        """Create or update a Sieve script with a single structured filter rule.
-
-        This is a convenience method — provide filter parameters and the tool
-        generates the Sieve DSL automatically. No need to write Sieve syntax.
-
-        Use this for fine-tuning filters. For raw script management, see
-        ``create_sieve_script`` and ``update_sieve_script``.
-
-        :param name: Script name (will be created or updated)
-        :param filter_type: 'move' to move to target_folder, 'discard' to delete silently, 'stop' to blacklist (move to Junk)
-        :param target_folder: Required for 'move' type
-        :param from_addr: Match sender
-        :param to_addr: Match recipient
-        :param subject: Match subject line
-        :param day: Match day of week (e.g. 'Saturday')
-        :param hour_range: Match time range as 'HH-HH' string (e.g. '9-17')
-        :param has_attachment: Match emails with attachments
-        """
-        name = self._resolve_fieldinfo(name, "")
-        filter_type = self._resolve_fieldinfo(filter_type, "")
-        target_folder = self._resolve_fieldinfo(target_folder, "")
-        from_addr = self._resolve_fieldinfo(from_addr, "")
-        to_addr = self._resolve_fieldinfo(to_addr, "")
-        subject = self._resolve_fieldinfo(subject, "")
-        day = self._resolve_fieldinfo(day, "")
-        hour_range = self._resolve_fieldinfo(hour_range, "")
-        has_attachment = self._resolve_fieldinfo(has_attachment, False)
-
-        if not self.valves.allow_create_sieve:
-            return "Filter creation is disabled. Enable 'allow_create_sieve' in Valves to use this feature."
-
-        conditions: dict[str, Any] = {}
-        if from_addr:
-            conditions["from"] = from_addr
-        if to_addr:
-            conditions["to"] = to_addr
-        if subject:
-            conditions["subject"] = subject
-        if day:
-            conditions["day"] = day
-        if hour_range:
-            try:
-                lo, hi = (int(x) for x in hour_range.split("-"))
-                if not (0 <= lo < 24 and 0 < hi <= 24 and lo < hi):
-                    return "Error: Invalid hour_range. Use format 'HH-HH' where 0<=HH<HH<=24 (e.g. '9-17')."
-                conditions["hour_range"] = (lo, hi)
-            except (ValueError, AttributeError):
-                return f"Error: Invalid hour_range format '{hour_range}'. Use 'HH-HH' (e.g. '9-17')."
-        if has_attachment:
-            conditions["has_attachment"] = True
-
-        tf = target_folder if target_folder else None
-
-        try:
-            filter_rule = SieveScriptBuilder.generate_filter_rule(
-                name=name,
-                filter_type=filter_type,
-                target_folder=tf,
-                **conditions,
-            )
-        except ValueError as e:
-            return f"Error: {str(e)}"
-
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, _ = _handle_sieve_list_result(client.listscripts())
-
-            if name in (scripts or []):
-                raw_content = client.getscript(name)
-                existing_content = _extract_script_content(raw_content)
-                script_content = SieveScriptBuilder.replace_filter_in_script(existing_content, filter_rule, name)
-                if not client.putscript(name, script_content):
-                    client.logout()
-                    return f"Error updating filter '{name}': server rejected the update."
-                client.logout()
-                return f"Filter '{name}' has been updated in script '{name}'."
-            else:
-                script_content = SieveScriptBuilder.build_complete_script([filter_rule])
-                if not client.putscript(name, script_content):
-                    client.logout()
-                    return f"Error creating filter '{name}': server rejected the update."
-                # Try to activate
-                with suppress(Exception):
-                    client.setactive(name)
-                client.logout()
-                return f"Filter '{name}' has been created and activated in script '{name}'."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error creating filter: {str(e)}"
-
-    async def add_filter_to_script(
-        self,
-        script_name: str = Field(description="Name of existing Sieve script to update (e.g. 'work_filters')"),
-        name: str = Field(description="Unique name for this filter rule (e.g. 'move_work_emails', 'block_spam')"),
-        filter_type: str = Field(description="Filter type: 'move', 'discard', or 'stop'"),
-        target_folder: str = Field(default="", description="Target folder (required for 'move' type)"),
-        from_addr: str = Field(default="", description="Match sender address"),
-        to_addr: str = Field(default="", description="Match recipient address"),
-        subject: str = Field(default="", description="Match subject line"),
-        day: str = Field(default="", description="Match day of week (e.g. 'Saturday')"),
-        hour_range: str = Field(default="", description="Match hour range as 'HH-HH' (e.g. '9-17')"),
-        has_attachment: bool = Field(default=False, description="Match emails with attachments"),
-    ) -> str:
-        """Add a new filter rule to an existing Sieve script.
-
-        This is a convenience method — provide filter parameters and the tool
-        generates the Sieve DSL and appends it to the existing script.
-
-        Use this for fine-tuning filters. For raw script management, see
-        ``create_sieve_script`` and ``update_sieve_script``.
-
-        :param script_name: Existing script to modify
-        :param name: Unique identifier for this rule (for later removal/update)
-        :param filter_type: 'move', 'discard', or 'stop'
-        :param target_folder: Required for 'move' type
-        :param from_addr/to_addr/subject/day/hour_range/has_attachment: Match conditions
-        """
-        script_name = self._resolve_fieldinfo(script_name, "")
-        name = self._resolve_fieldinfo(name, "")
-        filter_type = self._resolve_fieldinfo(filter_type, "")
-        target_folder = self._resolve_fieldinfo(target_folder, "")
-        from_addr = self._resolve_fieldinfo(from_addr, "")
-        to_addr = self._resolve_fieldinfo(to_addr, "")
-        subject = self._resolve_fieldinfo(subject, "")
-        day = self._resolve_fieldinfo(day, "")
-        hour_range = self._resolve_fieldinfo(hour_range, "")
-        has_attachment = self._resolve_fieldinfo(has_attachment, False)
-
-        if not self.valves.allow_update_sieve:
-            return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
-
-        conditions: dict[str, Any] = {}
-        if from_addr:
-            conditions["from"] = from_addr
-        if to_addr:
-            conditions["to"] = to_addr
-        if subject:
-            conditions["subject"] = subject
-        if day:
-            conditions["day"] = day
-        if hour_range:
-            try:
-                lo, hi = (int(x) for x in hour_range.split("-"))
-                if not (0 <= lo < 24 and 0 < hi <= 24 and lo < hi):
-                    return "Error: Invalid hour_range. Use format 'HH-HH' where 0<=HH<HH<=24 (e.g. '9-17')."
-                conditions["hour_range"] = (lo, hi)
-            except (ValueError, AttributeError):
-                return f"Error: Invalid hour_range format '{hour_range}'. Use 'HH-HH' (e.g. '9-17')."
-        if has_attachment:
-            conditions["has_attachment"] = True
-
-        tf = target_folder if target_folder else None
-
-        new_filter = SieveScriptBuilder.generate_filter_rule(
-            name=name,
-            filter_type=filter_type,
-            target_folder=tf,
-            **conditions,
-        )
-
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, _ = _handle_sieve_list_result(client.listscripts())
-
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found. This is expected on providers that manage filters via their own API."
-            if script_name not in scripts:
-                client.logout()
-                return f"Error: Script '{script_name}' not found. Available: {', '.join(sorted(scripts))}"
-
-            raw_content = client.getscript(script_name)
-            existing_content = _extract_script_content(raw_content)
-            updated_content = SieveScriptBuilder.merge_filter_into_script(existing_content, new_filter)
-            if not client.putscript(script_name, updated_content):
-                client.logout()
-                return f"Error adding filter rule '{name}': server rejected the update."
-            client.logout()
-            return f"Filter rule '{name}' has been added to script '{script_name}'."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error adding filter rule: {str(e)}"
-
-    async def remove_filter_from_script(
-        self,
-        script_name: str = Field(description="Name of the Sieve script to modify"),
-        name: str = Field(
-            description="The unique name given to the filter rule to remove, as set in add_filter_to_script or create_or_update_filter"
-        ),
-    ) -> str:
-        """Agent note: THIS is the correct method for removing individual filter rules.
-        Use this for removing a specific filter rule from a script by its unique name.
-        To delete the entire script, see ``delete_sieve_script``.
-
-        :param script_name: The script to modify
-        :param name: The unique rule name to remove
-        """
-        script_name = self._resolve_fieldinfo(script_name, "")
-        name = self._resolve_fieldinfo(name, "")
-
-        if not self.valves.allow_update_sieve:
-            return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
-
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, _ = _handle_sieve_list_result(client.listscripts())
-
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found."
-            if script_name not in scripts:
-                client.logout()
-                return f"Error: Script '{script_name}' not found. Available: {', '.join(sorted(scripts))}"
-
-            raw_content = client.getscript(script_name)
-            existing_content = _extract_script_content(raw_content)
-            updated_content = SieveScriptBuilder.remove_filter_from_script(existing_content, name)
-            if updated_content == existing_content:
-                client.logout()
-                return f"Filter rule '{name}' not found in script '{script_name}'. Nothing to remove."
-            if not client.putscript(script_name, updated_content):
-                client.logout()
-                return f"Error removing filter rule '{name}': server rejected the update."
-            client.logout()
-            return f"Filter rule '{name}' has been removed from script '{script_name}'."
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error removing filter rule: {str(e)}"
-
-    async def remove_all_filters_from_script(
-        self,
-        script_name: str = Field(description="Name of the Sieve script to clear"),
-    ) -> str:
-        """Agent note: THIS is the correct method for clearing all filter rules from a script.
-        Use this to clear all filter rules while preserving the script itself (keep require headers).
-        To remove the entire script, see ``delete_sieve_script``.
-
-        :param script_name: The script to clear
-        """
-        script_name = self._resolve_fieldinfo(script_name, "")
-
-        if not self.valves.allow_update_sieve:
-            return "Filter operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
-
-        result = self._manage_sieve_connect()
-        if isinstance(result, str):
-            return result
-        client = result
-        try:
-            active, scripts, _ = _handle_sieve_list_result(client.listscripts())
-
-            if not scripts:
-                client.logout()
-                return "No Sieve scripts found."
-            if script_name not in scripts:
-                client.logout()
-                return f"Error: Script '{script_name}' not found. Available: {', '.join(sorted(scripts))}"
-
-            raw_content = client.getscript(script_name)
-            existing_content = _extract_script_content(raw_content)
-            header = _build_header_from_script(existing_content)
-            if not client.putscript(script_name, header):
-                client.logout()
-                return f"Error clearing filters from script '{script_name}': server rejected the update."
-            client.logout()
-            return (
-                f"All filter rules have been removed from script '{script_name}'. Only the require statements remain."
-            )
-        except Exception as e:
-            with suppress(Exception):
-                client.logout()
-            return f"Error clearing filters from script: {str(e)}"
-
     async def create_sieve_script(
         self,
         name: str = Field(description="Name for the new Sieve script"),
@@ -887,13 +311,9 @@ class Tools:
     ) -> str:
         """Create or upload a new Sieve script from raw DSL content.
 
-        WARNING: This writes the entire script from raw Sieve syntax.
-        For fine-tuning filters (add/remove individual rules), use:
-        - ``create_or_update_filter`` — create/update a single filter rule
-        - ``add_filter_to_script`` — add one rule to an existing script
-        - ``remove_filter_from_script`` — remove one rule by name
-
-        Only use this when writing a complete script from scratch.
+        WARNING: This requires knowledge of valid Sieve syntax — write your own scripts
+        using the provider documentation or a Sieve editor. Use ``update_sieve_script`` to modify existing scripts,
+        ``deactivate_sieve_script`` to disable all filtering, and ``delete_sieve_script`` to remove scripts entirely.
 
         Note: Some providers do not support ManageSieve script upload.
         Scripts must be created via the provider's web interface.
@@ -926,13 +346,8 @@ class Tools:
     ) -> str:
         """Update an existing Sieve script with full raw DSL content.
 
-        WARNING: This replaces the entire script with new Sieve syntax.
-        For fine-tuning filters (add/remove individual rules), use:
-        - ``add_filter_to_script`` — add one rule to an existing script
-        - ``remove_filter_from_script`` — remove one rule by name
-        - ``remove_all_filters_from_script`` — clear all rules keeping headers
-
-        Only use this when rewriting a complete script.
+        WARNING: This replaces the entire script with your Sieve syntax. Use ``update_sieve_script`` to modify existing scripts,
+        ``deactivate_sieve_script`` to disable all filtering, and ``delete_sieve_script`` to remove scripts entirely.
         """
         if not self.valves.allow_update_sieve:
             return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
@@ -962,12 +377,7 @@ class Tools:
     async def delete_sieve_script(self, name: str = Field(description="Name of the Sieve script to delete")) -> str:
         """Delete a Sieve script from the server.
 
-        WARNING: This deletes the entire script including all filter rules.
-        To remove individual filters from a script, use:
-        - ``remove_filter_from_script`` — remove one rule by name
-        - ``remove_all_filters_from_script`` — clear all rules keeping headers
-
-        Only use this when you want to remove the whole script.
+        WARNING: This removes the entire script and all its filter rules.
         """
         if not self.valves.allow_delete_sieve:
             return "Delete script operations are disabled. Enable 'allow_delete_sieve' in Valves to use this feature."
@@ -998,12 +408,7 @@ class Tools:
         old_name: str = Field(description="Current name of the Sieve script"),
         new_name: str = Field(description="New name for the Sieve script"),
     ) -> str:
-        """Rename an existing Sieve script (script-level operation, not filter fine-tuning).
-
-        For filter-level operations, prefer:
-        - ``add_filter_to_script`` / ``remove_filter_from_script`` — manage individual rules
-        - ``remove_all_filters_from_script`` — clear rules keeping headers
-        """
+        """Rename an existing Sieve script (script-level operation, not filter fine-tuning)."""
         if not self.valves.allow_update_sieve:
             return "Update script operations are disabled. Enable 'allow_update_sieve' in Valves to use this feature."
         result = self._manage_sieve_connect()
@@ -1039,10 +444,6 @@ class Tools:
     ) -> str:
         """Create a new Sieve script with raw DSL and activate it in one step.
 
-        WARNING: This writes the entire script from raw Sieve syntax.
-        For fine-tuning filters, prefer ``create_or_update_filter`` which
-        generates Sieve DSL automatically from structured parameters.
-
         Uses putscript with activate=True, equivalent to calling
         create_sieve_script() followed by set_active_sieve_script().
         """
@@ -1074,11 +475,7 @@ class Tools:
     async def set_active_sieve_script(
         self, name: str = Field(description="Name of the Sieve script to activate")
     ) -> str:
-        """Agent note: This sets a specific script as the active filter.
-        For filter-level operations (adding/removing individual rules), prefer:
-        - ``create_or_update_filter`` — create/update a single filter rule
-        - ``add_filter_to_script`` — add one rule to an existing script
-        """
+        """Sets a specific Sieve script as the active filter for processing incoming emails."""
         if not self.valves.allow_activate_sieve:
             return (
                 "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."
@@ -1104,11 +501,7 @@ class Tools:
             return f"Error activating Sieve script: {str(e)}"
 
     async def deactivate_sieve_script(self) -> str:
-        """Agent note: This deactivates the currently active script entirely.
-        For filter-level operations, use:
-        - ``remove_filter_from_script`` — remove one rule by name
-        - ``remove_all_filters_from_script`` — clear all rules keeping headers
-        """
+        """Deactivates the currently active Sieve script, stopping all server-side email filtering."""
         if not self.valves.allow_activate_sieve:
             return (
                 "Activate script operations are disabled. Enable 'allow_activate_sieve' in Valves to use this feature."

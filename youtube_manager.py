@@ -15,9 +15,12 @@ Agent instructions:
   3. finish_auth — exchange the pasted code/redirect URL and print the refresh token to store
 """
 
+import contextlib
 import json
 import os
 import re
+import shutil
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +46,7 @@ DATA_API_VERSION = "v3"
 SOURCES = ("recommended", "subscriptions", "watch_later", "search")
 REAUTH_CLASSES = ("reauth", "bot_check")
 TASTE_STARTER = "# Taste profile\n- liked channels:\n- disliked channels:\n- preferred duration:\n- topics:"
+PODCAST_MAX_LINES = 400
 
 
 class ReauthNeeded(Exception):  # noqa: N818 - plan/test contract name
@@ -359,6 +363,52 @@ def render_digest(candidates: list[Candidate], taste_md: str | None, stats: Feed
     return "\n".join(lines)
 
 
+_VTT_CUE_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.\d+\s*-->")
+
+
+def _vtt_cue_start(line: str) -> int | None:
+    match = _VTT_CUE_RE.match(line)
+    if match is None:
+        return None
+    hours, minutes, seconds = (int(part) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def parse_vtt(text: str) -> list[tuple[int, str]]:
+    """WEBVTT caption text -> (start_seconds, line) per caption line.
+
+    WEBVTT header, blank, and cue-index lines are skipped; cue times
+    (e.g. 00:00:05.120) are truncated to integer seconds.
+    """
+    segments: list[tuple[int, str]] = []
+    start: int | None = None
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        cue = _vtt_cue_start(line)
+        if cue is not None:
+            start = cue
+            continue
+        if start is not None and line and not line.isdigit():
+            segments.append((start, line))
+    return segments
+
+
+def assemble_podcast_text(title: str, channel: str, segments: list[tuple[int, str]]) -> str:
+    lines = [f"=== Podcast transcript: {title} — {channel} ==="]
+    kept = 0
+    last = ""
+    for start, text in segments:
+        if text == last:
+            continue
+        if kept >= PODCAST_MAX_LINES:
+            lines.append(f"... (truncated at {PODCAST_MAX_LINES} lines)")
+            break
+        lines.append(f"[{start // 60}:{start % 60:02d}] {text}")
+        last = text
+        kept += 1
+    return "\n".join(lines)
+
+
 def _failure_reason(err: Exception) -> str:
     if isinstance(err, ReauthNeeded):
         return "reauth"
@@ -538,6 +588,70 @@ def _token_status(valves) -> str | None:
     return None
 
 
+def _subtitle_extra(tmp: str, language: str) -> dict:
+    return {
+        "writeautomaticsub": True,
+        "writesubtitles": True,
+        "subtitleslangs": [language],
+        "skip_download": True,
+        "outtmpl": f"{tmp}/sub.%(ext)s",
+    }
+
+
+def _vtt_segments(info: dict, tmp: str, language: str) -> list[tuple[int, str]] | None:
+    """(start, text) segments from a yt-dlp subtitle result, or None when no VTT is readable."""
+    subtitles = info.get("requested_subtitles") or {}
+    entry = subtitles.get(language) or {}
+    path = entry.get("filepath")
+    if path is None:
+        matches = sorted(Path(tmp).glob("*.vtt"))
+        path = str(matches[0]) if matches else None
+    if path is None:
+        return None
+    try:
+        return parse_vtt(Path(path).read_text())
+    except OSError:
+        return None
+
+
+def _video_meta(info: dict | None, video_id: str) -> tuple[str, str]:
+    if info is None:
+        return video_id, "unknown"
+    title = info.get("title") or video_id
+    channel = info.get("uploader") or info.get("channel") or "unknown"
+    return title, channel
+
+
+def _try_primary(video_id: str, valves, language: str, tmp: str) -> tuple[dict | None, str | None, str | None]:
+    """(info, primary failure reason, REAUTH block) from yt-dlp subtitle extraction."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        info = _ytdlp_extract(url, valves, extra=_subtitle_extra(tmp, language))
+        return info, None, None
+    except Exception as err:
+        reason = _failure_reason(err)
+        if reason in REAUTH_CLASSES:
+            return None, None, _reauth_block([f"transcript for {video_id} failed: {reason}"], {reason})
+        return None, str(err) or err.__class__.__name__, None
+
+
+def _fallback_transcript(video_id: str) -> tuple[list[tuple[int, str]], str | None]:
+    """Fallback (youtube-transcript-api) segments and failure reason (None on success)."""
+    try:
+        return _fetch_transcript_fallback(video_id), None
+    except Exception as err:
+        return [], str(err) or err.__class__.__name__
+
+
+def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel: str) -> str:
+    segments, reason = _fallback_transcript(video_id)
+    if not segments and reason is None:
+        reason = "no transcript returned"
+    if segments:
+        return assemble_podcast_text(title, channel, segments)
+    return f"Error: no transcript available for {video_id}: primary: {primary_reason}; fallback: {reason}"
+
+
 class Tools:
     def __init__(self):
         self.valves = self.Valves()
@@ -706,3 +820,24 @@ class Tools:
         taste = _read_doc(store, NOTE_TASTE)
         stats = aggregate_feedback(parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or ""), merged)
         return _with_notes(render_digest(merged, taste, stats), notes)
+
+    async def transcript(self, video_id: str, language: str = "en") -> str:
+        """Podcast-format transcript: yt-dlp subtitles primary, youtube-transcript-api fallback."""
+        tmp = tempfile.mkdtemp(prefix="ytm-sub-")
+        try:
+            return self._transcript_core(video_id, language, tmp)
+        finally:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(tmp)
+
+    def _transcript_core(self, video_id: str, language: str, tmp: str) -> str:
+        info, primary_reason, block = _try_primary(video_id, self.valves, language, tmp)
+        if block is not None:
+            return block
+        title, channel = _video_meta(info, video_id)
+        segments = _vtt_segments(info, tmp, language) if info is not None else None
+        if segments:
+            return assemble_podcast_text(title, channel, segments)
+        if primary_reason is None:
+            primary_reason = "no captions found"
+        return _resolve_transcript(video_id, primary_reason, title, channel)

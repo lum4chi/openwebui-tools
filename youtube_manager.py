@@ -841,3 +841,82 @@ class Tools:
         if primary_reason is None:
             primary_reason = "no captions found"
         return _resolve_transcript(video_id, primary_reason, title, channel)
+
+    async def add_to_playlist(self, video_id: str) -> str:
+        """Idempotent Watch Later add: insert only if absent, record the tool-added item in digest-state."""
+        if self.valves.digest_playlist != "watch_later":
+            return "Error: only the watch_later playlist is managed in v1"
+        if not video_id:
+            return "Error: video_id is required"
+        try:
+            return self._add_to_playlist_core(video_id)
+        except ReauthNeeded as err:
+            return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
+        except Exception as err:
+            return f"YouTube Error: {err}"
+
+    def _add_to_playlist_core(self, video_id: str) -> str:
+        notes: list[str] = []
+        store = _state_store(None)
+        state = parse_digest_state(_read_doc(store, NOTE_STATE) or "")
+        playlist_id = self._watch_later_playlist_id()
+        if playlist_id is None:
+            return "Error: could not resolve the Watch Later playlist id"
+        if video_id in self._playlist_video_ids(playlist_id):
+            return self._present_message(video_id, state)
+        title = self._insert_into_playlist(playlist_id, video_id)
+        self._record_tool_added(store, state, video_id, title, notes)
+        return "\n".join([f"OK — added {title or video_id} to Watch Later ({video_id})", *notes])
+
+    def _watch_later_playlist_id(self) -> str | None:
+        resp = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "mine": True})
+        items = resp.get("items") or []
+        if not items:
+            return None
+        content = items[0].get("contentDetails") or {}
+        related = content.get("relatedPlaylists") or {}
+        return related.get("watchLater")
+
+    def _playlist_video_ids(self, playlist_id: str) -> list[str]:
+        video_ids: list[str] = []
+        token = ""
+        while True:
+            params: dict = {"part": "contentDetails", "playlistId": playlist_id, "maxResults": 5000}
+            if token:
+                params["pageToken"] = token
+            resp = _data_api_request(self.valves, "playlistItems.list", params)
+            video_ids.extend(self._item_video_ids(resp))
+            token = resp.get("nextPageToken") or ""
+            if not token:
+                break
+        return video_ids
+
+    @staticmethod
+    def _item_video_ids(resp: dict) -> list[str]:
+        video_ids: list[str] = []
+        for item in resp.get("items") or []:
+            video_id = (item.get("contentDetails") or {}).get("videoId")
+            if video_id:
+                video_ids.append(video_id)
+        return video_ids
+
+    def _present_message(self, video_id: str, state: dict) -> str:
+        tracked = video_id in (state.get("tool_added") or {})
+        suffix = "tracked; no change" if tracked else "not tool-managed; left untracked"
+        return f"OK — {video_id} already in Watch Later ({suffix})"
+
+    def _insert_into_playlist(self, playlist_id: str, video_id: str) -> str:
+        resource = {"snippet": {"playlistId": playlist_id, "videoId": video_id}}
+        resp = _data_api_request(self.valves, "playlistItems.insert", {"part": "snippet", "resource": resource})
+        snippet = (resp or {}).get("snippet") or {}
+        return snippet.get("title") or ""
+
+    def _record_tool_added(self, store, state: dict, video_id: str, title: str, notes: list[str]) -> None:
+        state.setdefault("tool_added", {})[video_id] = {
+            "added_at": datetime.now().date().isoformat(),
+            "title": title,
+        }
+        try:
+            store.write(NOTE_STATE, serialize_digest_state(state))
+        except Exception as err:
+            notes.append(f"state record failed: {err}")

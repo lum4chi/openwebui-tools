@@ -74,3 +74,27 @@ class FakeRequest:
     def __init__(self, headers: dict, base_url: str = "http://localhost:3000/"):
         self.headers = headers
         self.base_url = base_url
+
+
+class FakeStateStore:
+    """In-memory stand-in for a _state_store result (.read/.write by note title)."""
+
+    def __init__(self, docs: dict[str, str] | None = None, raise_on_read: bool = False):
+        self.docs = docs or {}
+        self.raise_on_read = raise_on_read
+
+    def read(self, title: str) -> str | None:
+        if self.raise_on_read:
+            raise RuntimeError("state store unreachable")
+        return self.docs.get(title)
+
+    def write(self, title: str, md: str) -> None:
+        self.docs[title] = md
+
+
+@pytest.fixture
+def fake_store(monkeypatch):
+    """Patch youtube_manager._state_store to a per-test in-memory FakeStateStore."""
+    store = FakeStateStore()
+    monkeypatch.setattr("youtube_manager._state_store", lambda request: store)
+    return store

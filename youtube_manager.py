@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -39,6 +40,9 @@ NOTE_TASTE, NOTE_FEEDBACK, NOTE_STATE = "taste-profile", "feedback-log", "digest
 GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
 DECISIONS = ("watched", "listened", "skipped")
 DATA_API_VERSION = "v3"
+SOURCES = ("recommended", "subscriptions", "watch_later", "search")
+REAUTH_CLASSES = ("reauth", "bot_check")
+TASTE_STARTER = "# Taste profile\n- liked channels:\n- disliked channels:\n- preferred duration:\n- topics:"
 
 
 class ReauthNeeded(Exception):  # noqa: N818 - plan/test contract name
@@ -75,6 +79,13 @@ class FeedbackEntry:
     title: str
     source: str
     reason: str
+
+
+@dataclass
+class FeedbackStats:
+    totals: dict[str, int]
+    skips_by_duration_band: dict[str, int]
+    channel_counts: list[tuple[str, int, int]]
 
 
 def build_consent_url(client_id: str, redirect_uri: str) -> str:
@@ -142,6 +153,227 @@ def parse_digest_state(md: str) -> dict:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def parse_sources_arg(s: str) -> list[str] | None:
+    names = [part.strip() for part in (s or "").split(",")]
+    if any(name not in SOURCES for name in names):
+        return None
+    return names
+
+
+def _published_from_ts(entry: dict) -> str | None:
+    ts = entry.get("timestamp")
+    if ts:
+        return datetime.fromtimestamp(int(ts), tz=UTC).date().isoformat()
+    date = entry.get("upload_date")
+    if isinstance(date, str) and len(date) == 8 and date.isdigit():
+        return f"{date[:4]}-{date[4:6]}-{date[6:]}"
+    return None
+
+
+def candidates_from_ytdlp(entries: list[dict], source: str) -> list[Candidate]:
+    cands: list[Candidate] = []
+    for entry in entries:
+        cands.append(
+            Candidate(
+                video_id=entry.get("id", ""),
+                title=entry.get("title") or "",
+                channel_name=entry.get("uploader") or entry.get("channel") or "",
+                channel_id=entry.get("channel_id"),
+                duration_sec=entry.get("duration"),
+                views=entry.get("view_count"),
+                published=_published_from_ts(entry),
+                description=entry.get("description"),
+                tags=entry.get("tags") or [],
+                sources=[source],
+            )
+        )
+    return cands
+
+
+def _iso_duration_to_sec(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value)
+    if not match:
+        return None
+    days, hours, minutes, secs = (int(part) if part else 0 for part in match.groups())
+    return days * 86400 + hours * 3600 + minutes * 60 + secs
+
+
+def _published_from_api(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    return value[:10]
+
+
+def candidates_from_api(items: list[dict], source: str) -> list[Candidate]:
+    cands: list[Candidate] = []
+    for item in items:
+        snippet = item.get("snippet") or {}
+        content = item.get("contentDetails") or {}
+        views = snippet.get("viewCount")
+        cands.append(
+            Candidate(
+                video_id=item.get("id", ""),
+                title=snippet.get("title") or "",
+                channel_name=snippet.get("channelTitle") or "",
+                channel_id=snippet.get("channelId"),
+                duration_sec=_iso_duration_to_sec(content.get("duration")),
+                views=int(views) if views is not None else None,
+                published=_published_from_api(snippet.get("publishedAt")),
+                description=snippet.get("description"),
+                tags=snippet.get("tags") or [],
+                sources=[source],
+            )
+        )
+    return cands
+
+
+def merge_candidates(lists: list[list[Candidate]]) -> list[Candidate]:
+    merged: dict[str, Candidate] = {}
+    for batch in lists:
+        for cand in batch:
+            existing = merged.get(cand.video_id)
+            if existing is None:
+                merged[cand.video_id] = cand
+                continue
+            new = [name for name in cand.sources if name not in existing.sources]
+            existing.sources = [*existing.sources, *new]
+    return list(merged.values())
+
+
+def _bump(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
+
+def _duration_band(sec: int) -> str:
+    if sec < 600:
+        return "<10m"
+    if sec <= 1800:
+        return "10-30m"
+    return ">30m"
+
+
+def aggregate_feedback(entries: list[FeedbackEntry], candidates: list[Candidate]) -> FeedbackStats:
+    by_id = {cand.video_id: cand for cand in candidates}
+    totals: dict[str, int] = {}
+    bands: dict[str, int] = {}
+    per_channel: dict[str, list[int]] = {}
+    for entry in entries:
+        _bump(totals, entry.decision)
+        cand = by_id.get(entry.video_id)
+        if cand is None:
+            continue
+        count = per_channel.setdefault(cand.channel_name, [0, 0])
+        count[0 if entry.decision in ("watched", "listened") else 1] += 1
+        if entry.decision == "skipped" and cand.duration_sec is not None:
+            _bump(bands, _duration_band(cand.duration_sec))
+    channels = [(name, count[0], count[1]) for name, count in sorted(per_channel.items())]
+    return FeedbackStats(totals, bands, channels)
+
+
+def _fmt_duration(sec: int | None) -> str:
+    if sec is None:
+        return "duration unknown"
+    hours, rem = divmod(sec, 3600)
+    mins, secs = divmod(rem, 60)
+    return f"{hours}:{mins:02d}:{secs:02d}" if hours else f"{mins}:{secs:02d}"
+
+
+def _fmt_views(views: int | None) -> str:
+    if views is None:
+        return "no view count"
+    if views >= 1_000_000:
+        return f"{views / 1_000_000:.1f}M views"
+    if views >= 1_000:
+        return f"{views / 1_000:.0f}K views"
+    return f"{views} views"
+
+
+def _fmt_date(published: str | None) -> str:
+    return published or "date unknown"
+
+
+def _candidate_lines(candidates: list[Candidate]) -> list[str]:
+    lines: list[str] = []
+    for idx, cand in enumerate(candidates, start=1):
+        lines.append(
+            f"[{idx}] {cand.title} - {cand.channel_name} "
+            f"({_fmt_duration(cand.duration_sec)}, {_fmt_views(cand.views)}, {_fmt_date(cand.published)})"
+        )
+    return lines
+
+
+def _candidates_section(candidates: list[Candidate]) -> list[str]:
+    lines = [f"=== Candidates ({len(candidates)}) ===", *_candidate_lines(candidates)]
+    if candidates:
+        lines.append("Candidate IDs: " + ", ".join(cand.video_id for cand in candidates))
+    else:
+        lines.append("Candidate IDs: (none)")
+    return lines
+
+
+def _taste_lines(taste_md: str | None) -> list[str]:
+    lines = ["=== Taste profile ==="]
+    if taste_md:
+        lines.append(taste_md.strip())
+        return lines
+    lines.append("No taste profile yet")
+    lines.append("Starter template:")
+    lines.append(TASTE_STARTER)
+    return lines
+
+
+def _stats_lines(stats: FeedbackStats) -> list[str]:
+    lines = ["=== Feedback stats ==="]
+    if not stats.totals:
+        lines.append("no feedback rows yet")
+        return lines
+    lines.append("totals: " + " ".join(f"{key}={n}" for key, n in sorted(stats.totals.items())))
+    if stats.skips_by_duration_band:
+        bands = ", ".join(f"{band}={n}" for band, n in sorted(stats.skips_by_duration_band.items()))
+        lines.append(f"skips by duration: {bands}")
+    if stats.channel_counts:
+        channels = " | ".join(f"{name} (watch/listen {w}, skip {s})" for name, w, s in stats.channel_counts)
+        lines.append(f"channels: {channels}")
+    return lines
+
+
+def _with_notes(payload: str, notes: list[str]) -> str:
+    if not notes:
+        return payload
+    return payload + "\n=== Source notes ===\n" + "\n".join(notes)
+
+
+def _candidates_payload(candidates: list[Candidate], notes: list[str]) -> str:
+    return _with_notes("\n".join(_candidates_section(candidates)), notes)
+
+
+def render_digest(candidates: list[Candidate], taste_md: str | None, stats: FeedbackStats) -> str:
+    lines: list[str] = ["YouTube digest", ""]
+    lines += _taste_lines(taste_md)
+    lines += _stats_lines(stats)
+    lines += _candidates_section(candidates)
+    return "\n".join(lines)
+
+
+def _failure_reason(err: Exception) -> str:
+    if isinstance(err, ReauthNeeded):
+        return "reauth"
+    if isinstance(err, QuotaError):
+        return "quota"
+    return classify_feed_error(err)
+
+
+def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
+    lines = ["REAUTH_NEEDED", *notes]
+    if "reauth" in reauth_reasons:
+        lines.append("Fix: run start_auth, open the URL, then finish_auth with the new code.")
+    if "bot_check" in reauth_reasons:
+        lines.append("Fix: update yt-dlp / re-export cookies file.")
+    return "\n".join(lines)
 
 
 def _oauth_token(valves, code: str | None = None) -> dict:
@@ -289,6 +521,13 @@ def _state_store(request):
     return _FileStore(data_dir)
 
 
+def _read_doc(store, title: str) -> str | None:
+    try:
+        return store.read(title)
+    except Exception:
+        return None
+
+
 def _token_status(valves) -> str | None:
     try:
         _oauth_token(valves)
@@ -377,3 +616,93 @@ class Tools:
             "Authorization code exchanged. Set the stored valve:\n"
             f"  Valves.google_refresh_token = {token['refresh_token']}"
         )
+
+    def _video_details(self, video_ids: list[str]) -> dict[str, dict]:
+        details: dict[str, dict] = {}
+        for start in range(0, len(video_ids), 50):
+            chunk = video_ids[start : start + 50]
+            resp = _data_api_request(
+                self.valves, "videos.list", {"part": "snippet,contentDetails", "ids": ",".join(chunk)}
+            )
+            for item in resp.get("items") or []:
+                details[item["id"]] = item
+        return details
+
+    def _fetch_watch_later(self, max_per_source: int) -> list[Candidate]:
+        channel = _data_api_request(self.valves, "channels.list", {"part": "snippet,relatedPlaylists", "mine": "true"})
+        item = (channel.get("items") or [{}])[0]
+        playlist_id = (item.get("relatedPlaylists") or {}).get("watchLaterPlaylistId")
+        if not playlist_id:
+            return []
+        resp = _data_api_request(
+            self.valves,
+            "playlistItems.list",
+            {"part": "contentDetails", "playlistId": playlist_id, "maxResults": str(max_per_source)},
+        )
+        video_ids: list[str] = []
+        for it in resp.get("items") or []:
+            vid = (it.get("contentDetails") or {}).get("videoId")
+            if vid:
+                video_ids.append(vid)
+        details = self._video_details(video_ids)
+        return candidates_from_api([details[vid] for vid in video_ids if vid in details], "watch_later")
+
+    def _fetch_source(self, source: str, max_per_source: int, search_query: str) -> list[Candidate]:
+        feed_urls = {"recommended": ":ytrec", "subscriptions": ":ytsubs"}
+        if source in feed_urls:
+            entries = _ytdlp_extract(feed_urls[source], self.valves).get("entries") or []
+            return candidates_from_ytdlp(entries, source)
+        if source == "watch_later":
+            return self._fetch_watch_later(max_per_source)
+        if not search_query:
+            return []
+        entries = _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}", self.valves).get("entries") or []
+        return candidates_from_ytdlp(entries, source)
+
+    def _collect(
+        self, parsed: list[str], max_per_source: int, search_query: str
+    ) -> tuple[list[list[Candidate]], list[str], set[str]]:
+        batches: list[list[Candidate]] = []
+        notes: list[str] = []
+        reauth_reasons: set[str] = set()
+        for source in parsed:
+            try:
+                candidates = self._fetch_source(source, max_per_source, search_query)
+            except Exception as err:
+                reason = _failure_reason(err)
+                notes.append(f"{source} failed: {reason}")
+                if reason in REAUTH_CLASSES:
+                    reauth_reasons.add(reason)
+            else:
+                batches.append(candidates[:max_per_source])
+        return batches, notes, reauth_reasons
+
+    def _gather_core(
+        self, sources: str, max_per_source: int, search_query: str
+    ) -> tuple[list[Candidate], list[str], str | None]:
+        parsed = parse_sources_arg(sources)
+        if parsed is None:
+            return [], [], f"Error: unknown source name(s) in {sources!r} - valid sources: {', '.join(SOURCES)}"
+        if search_query and "search" not in parsed:
+            parsed = [*parsed, "search"]
+        batches, notes, reauth_reasons = self._collect(parsed, max_per_source, search_query)
+        if reauth_reasons and not batches:
+            return [], [], _reauth_block(notes, reauth_reasons)
+        return merge_candidates(batches), notes, None
+
+    async def gather_candidates(
+        self, sources: str = "recommended,subscriptions", max_per_source: int = 20, search_query: str = ""
+    ) -> str:
+        merged, notes, error = self._gather_core(sources, max_per_source, search_query)
+        if error is not None:
+            return error
+        return _candidates_payload(merged, notes)
+
+    async def digest(self) -> str:
+        merged, notes, error = self._gather_core("recommended,subscriptions", 20, "")
+        if error is not None:
+            return error
+        store = _state_store(None)
+        taste = _read_doc(store, NOTE_TASTE)
+        stats = aggregate_feedback(parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or ""), merged)
+        return _with_notes(render_digest(merged, taste, stats), notes)

@@ -2,7 +2,7 @@
 
 import pytest
 
-from youtube_manager import Candidate, Tools
+from youtube_manager import NOTE_STATE, Candidate, Tools, serialize_digest_state
 
 
 @pytest.fixture
@@ -98,3 +98,65 @@ def fake_store(monkeypatch):
     store = FakeStateStore()
     monkeypatch.setattr("youtube_manager._state_store", lambda request: store)
     return store
+
+
+PLAYLIST_ID = "PL-WATCH-LATER"
+
+
+def channels_reply() -> dict:
+    """channels.list reply resolving the Watch Later playlist id."""
+    return {"items": [{"contentDetails": {"relatedPlaylists": {"watchLater": PLAYLIST_ID}}}]}
+
+
+def item_row(item_id: str, video_id: str, title: str = "") -> dict:
+    """One playlistItems.list item row (snippet + contentDetails)."""
+    return {"id": item_id, "snippet": {"title": title}, "contentDetails": {"videoId": video_id}}
+
+
+def listing_page(rows: list[dict], token: str = "") -> dict:
+    """A playlistItems.list page (optional nextPageToken)."""
+    page: dict = {"items": rows}
+    if token:
+        page["nextPageToken"] = token
+    return page
+
+
+def seed_state(store, entries: dict[str, tuple[str, str]]) -> None:
+    """Seed digest-state with tool_added entries: video_id -> (added_at, title)."""
+    tool_added = {vid: {"added_at": added, "title": title} for vid, (added, title) in entries.items()}
+    store.docs[NOTE_STATE] = serialize_digest_state({"tool_added": tool_added})
+
+
+def api_fake(
+    monkeypatch, channels: dict, pages: list[dict], deletes: list | None = None, raise_for: dict | None = None
+):
+    """Route _data_api_request by method; serve listing pages in order; record calls.
+
+    ``deletes`` optionally feeds per-call playlistItems.delete outcomes in order
+    (None = ok, an Exception instance = raise it); ``raise_for`` raises before dispatch.
+    """
+    calls: list[tuple[str, dict]] = []
+    page_index = {"n": 0}
+    delete_index = {"n": 0}
+
+    def fake(valves, method, params):
+        calls.append((method, dict(params)))
+        if raise_for is not None and method in raise_for:
+            raise raise_for[method]
+        if method == "channels.list":
+            return channels
+        if method == "playlistItems.list":
+            page = pages[page_index["n"]]
+            page_index["n"] += 1
+            return page
+        if method == "playlistItems.delete":
+            outcomes = deletes or []
+            outcome = outcomes[delete_index["n"]] if delete_index["n"] < len(outcomes) else None
+            delete_index["n"] += 1
+            if isinstance(outcome, Exception):
+                raise outcome
+            return {}
+        raise AssertionError(f"unexpected API method {method}")
+
+    monkeypatch.setattr("youtube_manager._data_api_request", fake)
+    return calls

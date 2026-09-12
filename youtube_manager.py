@@ -25,7 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -47,6 +47,7 @@ SOURCES = ("recommended", "subscriptions", "watch_later", "search")
 REAUTH_CLASSES = ("reauth", "bot_check")
 TASTE_STARTER = "# Taste profile\n- liked channels:\n- disliked channels:\n- preferred duration:\n- topics:"
 PODCAST_MAX_LINES = 400
+FEEDBACK_HEADER = "| date | video_id | decision | title | source | reason |"
 
 
 class ReauthNeeded(Exception):  # noqa: N818 - plan/test contract name
@@ -90,6 +91,14 @@ class FeedbackStats:
     totals: dict[str, int]
     skips_by_duration_band: dict[str, int]
     channel_counts: list[tuple[str, int, int]]
+
+
+@dataclass
+class PruneItem:
+    item_id: str
+    video_id: str
+    title: str
+    added_at: str
 
 
 def build_consent_url(client_id: str, redirect_uri: str) -> str:
@@ -652,6 +661,60 @@ def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel:
     return f"Error: no transcript available for {video_id}: primary: {primary_reason}; fallback: {reason}"
 
 
+def _feedback_doc(entries: list[FeedbackEntry]) -> str:
+    return "\n".join([FEEDBACK_HEADER, *(serialize_feedback_line(entry) for entry in entries)]) + "\n"
+
+
+def _feedback_reason(rows: list[FeedbackEntry], video_id: str, added_at: str) -> str | None:
+    for row in reversed(rows):
+        if row.video_id == video_id and row.date >= added_at:
+            return f"{row.decision} {row.date}"
+    return None
+
+
+def _age_reason(added_at: str, max_age_days: int, today: date) -> str | None:
+    age = (today - date.fromisoformat(added_at)).days
+    if age > max_age_days:
+        return f"older than digest_max_age_days ({age} days)"
+    return None
+
+
+def _removal_reason(
+    item: PruneItem, rank: int, rows: list[FeedbackEntry], max_items: int, max_age_days: int, today: date
+) -> str | None:
+    feedback = _feedback_reason(rows, item.video_id, item.added_at)
+    if feedback:
+        return feedback
+    if rank > max_items:
+        return f"over digest_max_items (newest {max_items} kept)"
+    return _age_reason(item.added_at, max_age_days, today)
+
+
+def _removal_plan(
+    items: list[PruneItem], rows: list[FeedbackEntry], max_items: int, max_age_days: int
+) -> list[tuple[PruneItem, str]]:
+    today = datetime.now().date()
+    ranked = sorted(items, key=lambda item: item.added_at, reverse=True)
+    planned: list[tuple[PruneItem, str]] = []
+    for rank, item in enumerate(ranked, start=1):
+        reason = _removal_reason(item, rank, rows, max_items, max_age_days, today)
+        if reason:
+            planned.append((item, reason))
+    return planned
+
+
+def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: str | None, notes: list[str]) -> str:
+    if failure is not None:
+        lines = [f"YouTube Error: {failure}", f"partial: {len(removed)} item(s) removed before failure"]
+    elif removed:
+        lines = [f"OK — pruned {len(removed)} item(s)"]
+        lines += [f"- {item.video_id} — {item.title or '?'}: {reason}" for item, reason in removed]
+    else:
+        lines = [f"OK — nothing to prune ({kept} tracked item(s) kept)"]
+    lines.extend(notes)
+    return "\n".join(lines)
+
+
 class Tools:
     def __init__(self):
         self.valves = self.Valves()
@@ -920,3 +983,113 @@ class Tools:
             store.write(NOTE_STATE, serialize_digest_state(state))
         except Exception as err:
             notes.append(f"state record failed: {err}")
+
+    async def record_feedback(self, video_id: str, decision: str, reason: str = "") -> str:
+        """Append a validated feedback row to the feedback-log document."""
+        if decision not in DECISIONS:
+            return "Error: decision must be one of: watched, listened, skipped"
+        if not video_id:
+            return "Error: video_id is required"
+        entry = FeedbackEntry(
+            date=datetime.now().date().isoformat(),
+            video_id=video_id,
+            decision=decision,
+            title="",
+            source="digest",
+            reason=reason,
+        )
+        store = _state_store(None)
+        prior = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
+        try:
+            store.write(NOTE_FEEDBACK, _feedback_doc([*prior, entry]))
+        except Exception as err:
+            return f"Error: state record failed: {err}"
+        return f"OK — recorded {decision} for {video_id}"
+
+    async def prune_playlist(self) -> str:
+        """Remove policy-stale tool-added items from the managed playlist and report the removals."""
+        if self.valves.digest_playlist != "watch_later":
+            return "Error: only the watch_later playlist is managed in v1"
+        try:
+            return self._prune_core()
+        except ReauthNeeded as err:
+            return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
+        except Exception as err:
+            return f"YouTube Error: {err}"
+
+    def _prune_core(self) -> str:
+        store = _state_store(None)
+        state = parse_digest_state(_read_doc(store, NOTE_STATE) or "")
+        tool_added = state.get("tool_added") or {}
+        if not tool_added:
+            return "OK — nothing to prune (no tracked items)"
+        rows = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
+        playlist_id = self._watch_later_playlist_id()
+        if playlist_id is None:
+            return "Error: could not resolve the Watch Later playlist id"
+        listed = self._listed_items(playlist_id, tool_added)
+        stale = len(tool_added) - len({item.video_id for item in listed})
+        plan = _removal_plan(listed, rows, self.valves.digest_max_items, self.valves.digest_max_age_days)
+        removed, failure = self._delete_planned(plan)
+        notes: list[str] = []
+        if removed or stale:
+            self._write_pruned_state(store, tool_added, listed, removed, stale, notes)
+        kept = len(tool_added) - stale - len(removed)
+        return _prune_report(removed, kept, failure, notes)
+
+    def _listed_items(self, playlist_id: str, tool_added: dict) -> list[PruneItem]:
+        items: list[PruneItem] = []
+        for raw in self._playlist_items(playlist_id):
+            video_id = (raw.get("contentDetails") or {}).get("videoId") or ""
+            entry = tool_added.get(video_id)
+            if entry is None:
+                continue
+            title = entry.get("title") or (raw.get("snippet") or {}).get("title") or ""
+            items.append(PruneItem(raw.get("id", ""), video_id, title, entry.get("added_at", "")))
+        return items
+
+    def _playlist_items(self, playlist_id: str) -> list[dict]:
+        items: list[dict] = []
+        token = ""
+        while True:
+            params: dict = {"part": "snippet,contentDetails", "playlistId": playlist_id, "maxResults": 5000}
+            if token:
+                params["pageToken"] = token
+            resp = _data_api_request(self.valves, "playlistItems.list", params)
+            items.extend(resp.get("items") or [])
+            token = resp.get("nextPageToken") or ""
+            if not token:
+                break
+        return items
+
+    def _delete_planned(self, plan: list[tuple[PruneItem, str]]) -> tuple[list[tuple[PruneItem, str]], str | None]:
+        removed: list[tuple[PruneItem, str]] = []
+        for item, reason in plan:
+            try:
+                _data_api_request(self.valves, "playlistItems.delete", {"id": item.item_id})
+            except ReauthNeeded:
+                raise
+            except Exception as err:
+                return removed, str(err) or err.__class__.__name__
+            removed.append((item, reason))
+        return removed, None
+
+    def _write_pruned_state(
+        self,
+        store,
+        tool_added: dict,
+        listed: list[PruneItem],
+        removed: list[tuple[PruneItem, str]],
+        stale: int,
+        notes: list[str],
+    ) -> None:
+        removed_ids = {item.video_id for item, _ in removed}
+        kept = {item.video_id: tool_added[item.video_id] for item in listed if item.video_id not in removed_ids}
+        try:
+            store.write(NOTE_STATE, serialize_digest_state({"tool_added": kept}))
+        except Exception as err:
+            notes.append(f"state record failed: {err}")
+        else:
+            if stale:
+                unit = "entry" if stale == 1 else "entries"
+                notes.append(f"state cleaned: {stale} stale {unit} removed")

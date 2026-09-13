@@ -86,13 +86,15 @@ class Tools:
         if not search_after and not search_before:
             return True
         try:
-            dt = parsedate_to_datetime(parsed_date)
-            return not (
-                (search_after and dt.date() < search_after.date())
-                or (search_before and dt.date() >= search_before.date())
-            )
+            try:
+                dt = datetime.fromisoformat(parsed_date)
+            except ValueError:
+                dt = parsedate_to_datetime(parsed_date)
         except (ValueError, TypeError):
             return False
+        return not (
+            (search_after and dt.date() < search_after.date()) or (search_before and dt.date() >= search_before.date())
+        )
 
     def _get_email_body(self, msg: Union["Message", "EmailMessage"], max_chars: int = 10000) -> str:
         """Extract the plain text body from an email message."""

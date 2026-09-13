@@ -14,10 +14,9 @@ class TestSearchEmailsAdditional:
     async def test_search_emails_no_results(self, tools):
         """Test search returning no matching emails.
 
-        Gherkin (pre-existing behaviour — no plan-provided T2 scenario):
-          Given an IMAP mailbox fixture that exposes the mock connection
-          When search_emails is called with a subject criteria that matches nothing
-          Then the result contains "No emails found matching criteria"
+        Given an IMAP mailbox fixture that exposes the mock connection
+        When search_emails is called with a subject criteria that matches nothing
+        Then the result contains "No emails found matching criteria"
         """
 
         def override_uid(cmd, criteria=None, *args, **kwargs):
@@ -34,11 +33,10 @@ class TestSearchEmailsAdditional:
     async def test_search_emails_after_date(self, tools):
         """Test search with after: date filter.
 
-        Gherkin — scenario T2-SEARCH-AFTER:
-          Given an IMAP mailbox fixture that exposes the mock connection
-          When search_emails is called with query "after:2025-04-01"
-          Then the outgoing IMAP search criteria are ("search", "", "SINCE 01-Apr-2025")
-          And the result contains the matching email
+        Given an IMAP mailbox fixture that exposes the mock connection
+        When search_emails is called with query "after:2025-04-01"
+        Then the outgoing IMAP search criteria are ("search", "", "SINCE 01-Apr-2025")
+        And the result contains the matching email
         """
         raw = _make_raw_email("alice@example.com", "bob@example.com", "After test", "Hi")
         emails = [(raw, "1")]
@@ -53,7 +51,6 @@ class TestSearchEmailsAdditional:
     async def test_search_emails_before_date(self, tools):
         """Test search with before: date filter.
 
-        Gherkin — scenario T2-SEARCH-BEFORE-ONLY:
           Given an IMAP mailbox fixture that exposes the mock connection
           When search_emails is called with query "before:2025-12-01"
           Then the outgoing IMAP search criteria are ("search", "", "ALL")
@@ -78,12 +75,11 @@ class TestSearchEmailsAdditional:
     async def test_search_emails_before_after_combined(self, tools):
         """Test search combining before: and after:.
 
-        Gherkin — scenario T2-SEARCH-AFTER-AND-BEFORE:
-          Given an IMAP mailbox fixture that exposes the mock connection
-          When search_emails is called with query "after:2025-01-01 before:2025-12-31"
-          Then the outgoing IMAP search criteria are
-               ("search", "", "SINCE 01-Jan-2025 BEFORE 01-Jan-2026")
-          And the result contains the matching email
+        Given an IMAP mailbox fixture that exposes the mock connection
+        When search_emails is called with query "after:2025-01-01 before:2025-12-31"
+        Then the outgoing IMAP search criteria are
+             ("search", "", "SINCE 01-Jan-2025 BEFORE 01-Jan-2026")
+        And the result contains the matching email
         """
         raw = _make_raw_email("alice@example.com", "bob@example.com", "Range test", "Hi")
         emails = [(raw, "1")]
@@ -99,10 +95,9 @@ class TestSearchEmailsAdditional:
     async def test_search_emails_combined_from_and_subject(self, tools):
         """Test search with both from: and subject:.
 
-        Gherkin (pre-existing behaviour — no plan-provided T2 scenario):
-          Given an IMAP mailbox fixture that exposes the mock connection
-          When search_emails is called with a from+subject query
-          Then the result contains the matching email and not the unmatched one
+        Given an IMAP mailbox fixture that exposes the mock connection
+        When search_emails is called with a from+subject query
+        Then the result contains the matching email and not the unmatched one
         """
         raw = _make_raw_email("alice@example.com", "bob@example.com", "Pay me", "Invoice")
         raw2 = _make_raw_email("carol@example.com", "bob@example.com", "Hello", "Invoice")
@@ -119,10 +114,9 @@ class TestSearchEmailsAdditional:
     async def test_search_emails_free_text_no_match(self, tools):
         """Test free-text search that matches no email.
 
-        Gherkin (pre-existing behaviour — no plan-provided T2 scenario):
-          Given an IMAP mailbox fixture that exposes the mock connection
-          When search_emails is called with a free-text query that matches nothing
-          Then the result contains "No emails found"
+        Given an IMAP mailbox fixture that exposes the mock connection
+        When search_emails is called with a free-text query that matches nothing
+        Then the result contains "No emails found"
         """
         raw = _make_raw_email("alice@example.com", "bob@example.com", "Hello", "World")
         emails = [(raw, "1")]
@@ -139,10 +133,9 @@ class TestIMAPSearchExceptionPaths:
     async def test_search_emails_free_text_fetch_exception(self, tools):
         """Test search_emails free-text fallback where one email fails to fetch (lines 770-771).
 
-        Gherkin (pre-existing behaviour — no plan-provided T2 scenario):
-          Given an IMAP mailbox fixture where a free-text fetch raises an exception
-          When search_emails is called with a free-text query
-          Then the result still contains "email" (exception path is handled)
+        Given an IMAP mailbox fixture where a free-text fetch raises an exception
+        When search_emails is called with a free-text query
+        Then the result still contains "email" (exception path is handled)
         """
         raw_match = _make_raw_email("a@b.com", "c@d.com", "Match Subject", "Body text")
         raw_no_match = _make_raw_email("x@y.com", "z@w.com", "No Match", "completely different content")
@@ -174,10 +167,9 @@ class TestIMAPSearchExceptionPaths:
     async def test_search_emails_fetch_parse_failure_in_uid_path(self, tools):
         """Test search_emails where UID-based fetch (non-free-text) raises exception during index access.
 
-        Gherkin (pre-existing behaviour — no plan-provided T2 scenario):
-          Given an IMAP mailbox fixture where a from: fetch returns malformed payload
-          When search_emails is called with a from: query
-          Then the result contains "No emails found matching criteria"
+        Given an IMAP mailbox fixture where a from: fetch returns malformed payload
+        When search_emails is called with a from: query
+        Then the result contains "No emails found matching criteria"
         """
         mock_server = MagicMock()
 

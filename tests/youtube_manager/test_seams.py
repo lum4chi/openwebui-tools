@@ -47,7 +47,6 @@ def _valves(**overrides):
     v.google_client_id = "client-id"
     v.google_client_secret = "client-secret"
     v.google_refresh_token = "stored-rt"
-    v.ytdlp_cookies_file = "cookies.txt"
     for key, value in overrides.items():
         setattr(v, key, value)
     return v
@@ -161,8 +160,9 @@ class TestYtdlpExtract:
     # @unit
     # Scenario: T0-15 ytdlp seam
     #   Given a YoutubeDL factory whose instance answers extract_info with an info dict
-    #   When _ytdlp_extract runs a URL with the valves seam options
+    #   When _ytdlp_extract runs a URL (no valves, no session options)
     #   Then it returns that info dict
+    #   And skip_download/quiet/no_warnings stay set in the options
     #   And an ExtractError raised by extract_info propagates unchanged (no re-wrap)
 
     def test_returns_info_dict(self):
@@ -170,11 +170,11 @@ class TestYtdlpExtract:
         with patch("yt_dlp.YoutubeDL") as ydl_cls:
             instance = ydl_cls.return_value
             instance.extract_info.return_value = info
-            result = _ytdlp_extract("https://youtu.be/vid1", _valves(), {"quiet": False})
+            result = _ytdlp_extract("https://youtu.be/vid1", {"quiet": False})
         assert result is info
-        instance.extract_info.assert_called_once()
+        instance.extract_info.assert_called_once_with("https://youtu.be/vid1", download=False)
         opts = ydl_cls.call_args[0][0]
-        assert opts["cookies"] == "cookies.txt"
+        assert "cookies" not in opts
         assert opts["quiet"] is False
         assert opts["skip_download"] is True
         assert opts["no_warnings"] is True
@@ -184,7 +184,7 @@ class TestYtdlpExtract:
         with patch("yt_dlp.YoutubeDL") as ydl_cls:
             ydl_cls.return_value.extract_info.side_effect = boom
             with pytest.raises(ExtractorError) as exc_info:
-                _ytdlp_extract("https://youtu.be/vid1", _valves(), None)
+                _ytdlp_extract("https://youtu.be/vid1", None)
         assert exc_info.value is boom
 
 

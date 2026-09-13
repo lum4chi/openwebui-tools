@@ -34,13 +34,13 @@ class _YtdlpStub:
     """Records _ytdlp_extract calls; returns info or raises; may write the VTT the way yt-dlp would."""
 
     def __init__(self, info: dict | None = None, exc: Exception | None = None, write_glob_vtt: str | None = None):
-        self.calls: list[tuple[str, object, dict]] = []
+        self.calls: list[tuple[str, dict]] = []
         self.info = info
         self.exc = exc
         self.write_glob_vtt = write_glob_vtt
 
-    def __call__(self, url, valves, extra: dict):
-        self.calls.append((url, valves, extra))
+    def __call__(self, url, extra: dict):
+        self.calls.append((url, extra))
         if self.exc is not None:
             raise self.exc
         if self.write_glob_vtt is not None:
@@ -108,9 +108,8 @@ class TestTranscript:
         result = await tools.transcript("vid123")
 
         fb.assert_not_called()
-        url, valves, extra = stub.calls[0]
+        url, extra = stub.calls[0]
         assert url == "https://www.youtube.com/watch?v=vid123"
-        assert valves is tools.valves
         assert extra["writeautomaticsub"] is True
         assert extra["writesubtitles"] is True
         assert extra["subtitleslangs"] == ["en"]
@@ -215,7 +214,7 @@ class TestTranscript:
             ),
             pytest.param(
                 Exception("Sign in to confirm you're not a bot"),
-                "Fix: update yt-dlp / re-export cookies file.",
+                "Fix: update yt-dlp and retry (bot-check on anonymous access).",
                 id="bot_check_message",
             ),
         ],

@@ -30,7 +30,7 @@ def _ytdlp_fake(monkeypatch, by_url, raise_for=None):
     """Patch _ytdlp_extract: serve entries per URL; raise for URLs in raise_for."""
     calls: list[str] = []
 
-    def fake(url, valves, extra=None):
+    def fake(url, extra=None):
         calls.append(url)
         if raise_for is not None and url in raise_for:
             raise raise_for[url]
@@ -113,17 +113,18 @@ class TestDigest:
         assert "recommended failed: bot_check" in payload
         assert not payload.startswith("REAUTH_NEEDED")  # a source succeeded
 
-    # Scenario T1-7 (all-feeds variant): reauth/quota/transient classes across every feed
+    # Scenario T1-7 (all-feeds variant): OAuth reauth/quota/transient classes across every feed
+    # (session reauth purged - decision 3: login/2FA messages classify as transient, not reauth)
     @pytest.mark.parametrize(
         ("fail_exc", "expect_prefix", "expect_note"),
         [
             (ReauthNeeded("Google credential rejected by the Data API"), "REAUTH_NEEDED", "recommended failed: reauth"),
-            (Exception("Sign in to continue"), "REAUTH_NEEDED", "recommended failed: reauth"),
+            (Exception("Sign in to continue"), "", "recommended failed: transient"),
             (Exception("Sign in to confirm you're not a bot"), "REAUTH_NEEDED", "recommended failed: bot_check"),
             (QuotaError("YouTube Data API quota exceeded"), "", "recommended failed: quota"),
             (Exception("network timeout"), "", "recommended failed: transient"),
         ],
-        ids=["reauth_exception", "message_reauth", "bot_check", "quota", "transient"],
+        ids=["reauth_exception", "login_message_transient", "bot_check", "quota", "transient"],
     )
     async def test_all_fail_reauth(self, tools, monkeypatch, fake_store, fail_exc, expect_prefix, expect_note):
         raise_for = {":ytrec": fail_exc, ":ytsubs": fail_exc}
@@ -137,7 +138,7 @@ class TestDigest:
         assert f"subscriptions failed: {reason}" in payload
         if expect_prefix == "REAUTH_NEEDED":
             if reason == "bot_check":
-                assert "Fix: update yt-dlp / re-export cookies file." in payload
+                assert "Fix: update yt-dlp and retry (bot-check on anonymous access)." in payload
             else:
                 assert "Fix: run start_auth, open the URL, then finish_auth with the new code." in payload
         else:

@@ -77,7 +77,7 @@ def _ytdlp_fake(monkeypatch, by_url):
     """Patch _ytdlp_extract to serve entries per URL; return the called-URL list."""
     calls: list[str] = []
 
-    def fake(url, valves, extra=None):
+    def fake(url, extra=None):
         calls.append(url)
         return {"entries": by_url.get(url, [])}
 

@@ -11,27 +11,16 @@ GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_tok
 
 
 def _set_case(tools, case):
-    """Reset google/session valves to the T0-2 case table."""
+    """Reset the google valves to the T0-2 case table (no session dimension after the purge)."""
     for field in GOOGLE_FIELDS:
         setattr(tools.valves, field, "")
-    tools.valves.ytdlp_cookies_file = ""
-    tools.valves.ytdlp_username = ""
-    tools.valves.ytdlp_password = ""
     case_table = {
-        "no_google": ({}, True),
-        "partial_google": ({"google_client_id": "abc.iam"}, True),
-        "no_token": ({"google_client_id": "abc.iam", "google_client_secret": "shh"}, True),
-        "no_session": (
-            {"google_client_id": "abc.iam", "google_client_secret": "shh", "google_refresh_token": "rt"},
-            False,
-        ),
-        "nothing": ({}, False),
+        "no_google": {},
+        "partial_google": {"google_client_id": "abc.iam"},
+        "no_token": {"google_client_id": "abc.iam", "google_client_secret": "shh"},
     }
-    google, session = case_table[case]
-    for field, value in google.items():
+    for field, value in case_table[case].items():
         setattr(tools.valves, field, value)
-    if session:
-        tools.valves.ytdlp_cookies_file = "cookies.txt"
 
 
 class TestCheckSetup:
@@ -39,10 +28,11 @@ class TestCheckSetup:
 
     # @unit
     # Scenario: T0-1 check_setup ready
-    #   Given the valves have a full Google credential set and a valid session (token seam returns an access token)
+    #   Given the valves have a full Google credential set and the token seam returns an access token (no session involved)
     #   When the tool runs check_setup
     #   Then the result contains "READY"
     #   And it names no missing or invalid item
+    #   And it names no session, cookies, or username requirement
     async def test_ready(self, tools):
         with patch(
             "youtube_manager._oauth_token",
@@ -53,25 +43,27 @@ class TestCheckSetup:
         assert "NOT READY" not in result
         assert "MISSING" not in result
         assert "INVALID" not in result
+        lowered = result.lower()
+        assert "session" not in lowered
+        assert "cookies" not in lowered
+        assert "username" not in lowered
 
     # @unit
     # Scenario: T0-2 check_setup missing parts
-    #   Given "session configured" = ytdlp_cookies_file OR ytdlp_username valve non-empty (valve check ONLY — no disk check at setup time; disk problems surface later as feed errors)
-    #   And the valves match one of the cases:
-    #     | case           | google fields     | session configured |
-    #     | no_google      | none             | yes                |
-    #     | partial_google | client_id only   | yes                |
-    #     | no_token       | id+secret, no token | yes             |
-    #     | no_session     | full set         | no                 |
-    #     | nothing        | none             | no                 |
+    #   Given the valves match one of the Google-set cases (no session is considered after the purge):
+    #     | case           | google fields       |
+    #     | no_google      | none                |
+    #     | partial_google | client_id only      |
+    #     | no_token       | id+secret, no token |
     #   When the tool runs check_setup
     #   Then the result contains "NOT READY"
-    #   And it lists exactly the missing items for that case
+    #   And it lists exactly the missing Google items for that case
     #   And each missing item carries a one-line setup instruction
+    #   And the result names no session, cookies, or username requirement
     @pytest.mark.parametrize(
         "case",
-        ["no_google", "partial_google", "no_token", "no_session", "nothing"],
-        ids=["no_google", "partial_google", "no_token", "no_session", "nothing"],
+        ["no_google", "partial_google", "no_token"],
+        ids=["no_google", "partial_google", "no_token"],
     )
     async def test_missing_parts(self, tools, case):
         _set_case(tools, case)
@@ -85,8 +77,6 @@ class TestCheckSetup:
             "no_google": set(GOOGLE_FIELDS),
             "partial_google": {"google_client_secret", "google_refresh_token"},
             "no_token": {"google_refresh_token"},
-            "no_session": set(),
-            "nothing": set(GOOGLE_FIELDS),
         }[case]
         lines = result.splitlines()
         for field in GOOGLE_FIELDS:
@@ -96,11 +86,10 @@ class TestCheckSetup:
                 assert " - " in line  # one-line setup instruction
             else:
                 assert field not in result, f"{field} must not be flagged in case {case}"
-        session_lines = [ln for ln in lines if "yt-dlp session" in ln]
-        if case in ("no_session", "nothing"):
-            assert session_lines and "MISSING" in session_lines[0] and " - " in session_lines[0]
-        else:
-            assert session_lines and "MISSING" not in session_lines[0]
+        lowered = result.lower()
+        assert "session" not in lowered
+        assert "cookies" not in lowered
+        assert "username" not in lowered
 
     # @unit
     # Scenario: T0-3 check_setup invalid token

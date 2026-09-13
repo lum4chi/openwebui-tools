@@ -64,7 +64,7 @@ class TestAggregates:
     #   And the same inputs always produce the same numbers (deterministic)
     async def test_payload_includes_stats(self, tools, monkeypatch, fake_store, _by_url):
         monkeypatch.setattr(
-            youtube_manager, "_ytdlp_extract", lambda url, valves, extra=None: {"entries": _by_url.get(url, [])}
+            youtube_manager, "_ytdlp_extract", lambda url, extra=None: {"entries": _by_url.get(url, [])}
         )
         fake_store.docs[NOTE_TASTE] = "PREFER-ROBOTICS-CLIPS"
         fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(ROWS)
@@ -84,7 +84,7 @@ class TestAggregates:
     # Scenario T1-6 (determinism): same inputs -> identical payload
     async def test_deterministic(self, tools, monkeypatch, fake_store, _by_url):
         monkeypatch.setattr(
-            youtube_manager, "_ytdlp_extract", lambda url, valves, extra=None: {"entries": _by_url.get(url, [])}
+            youtube_manager, "_ytdlp_extract", lambda url, extra=None: {"entries": _by_url.get(url, [])}
         )
         fake_store.docs[NOTE_TASTE] = "PREFER-ROBOTICS-CLIPS"
         fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(ROWS)

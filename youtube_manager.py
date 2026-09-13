@@ -2,7 +2,7 @@
 title: YouTube Manager
 author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
-description: Personal YouTube digest - gathers candidates from the user's own feeds via a yt-dlp session, enriches via the YouTube Data API, and tracks state in Open WebUI Notes.
+description: Personal YouTube digest - gathers candidates from the user's own feeds via anonymous yt-dlp, enriches via the YouTube Data API, and tracks state in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
 version: 1.0.0
 licence: MIT
@@ -10,7 +10,7 @@ required_open_webui_version: 0.5.0
 
 Agent instructions:
   SETUP (this slice):
-  1. check_setup — verify the Google OAuth set + yt-dlp session (live token check only when the set is complete)
+   1. check_setup — verify the Google OAuth set (live token check only when the set is complete)
   2. start_auth — print the Google consent URL for the youtube scope
   3. finish_auth — exchange the pasted code/redirect URL and print the refresh token to store
 """
@@ -129,8 +129,6 @@ def classify_feed_error(err: Exception) -> str:
     msg = str(err).lower()
     if "bot" in msg and "confirm" in msg:
         return "bot_check"
-    if "login" in msg or "log in" in msg or "sign in" in msg or "re-auth" in msg or "2fa" in msg:
-        return "reauth"
     if "quota" in msg:
         return "quota"
     return "transient"
@@ -431,7 +429,7 @@ def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
     if "reauth" in reauth_reasons:
         lines.append("Fix: run start_auth, open the URL, then finish_auth with the new code.")
     if "bot_check" in reauth_reasons:
-        lines.append("Fix: update yt-dlp / re-export cookies file.")
+        lines.append("Fix: update yt-dlp and retry (bot-check on anonymous access).")
     return "\n".join(lines)
 
 
@@ -495,30 +493,8 @@ def _data_api_request(valves, method: str, params: dict) -> dict:
         raise
 
 
-def _ytdlp_options(valves) -> dict:
-    if valves.ytdlp_cookies_file:
-        return {
-            "cookies": valves.ytdlp_cookies_file,
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
-    if valves.ytdlp_username:
-        opts = {
-            "username": valves.ytdlp_username,
-            "password": valves.ytdlp_password,
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
-        if valves.ytdlp_2fa_code:
-            opts["twofactor"] = valves.ytdlp_2fa_code
-        return opts
-    return {}
-
-
-def _ytdlp_extract(url: str, valves, extra: dict | None = None) -> dict:
-    opts = cast("Any", {**_ytdlp_options(valves), **(extra or {})})
+def _ytdlp_extract(url: str, extra: dict | None = None) -> dict:
+    opts = cast("Any", {"skip_download": True, "quiet": True, "no_warnings": True, **(extra or {})})
     ydl = yt_dlp.YoutubeDL(opts)
     return cast("dict", ydl.extract_info(url, download=False))
 
@@ -631,11 +607,11 @@ def _video_meta(info: dict | None, video_id: str) -> tuple[str, str]:
     return title, channel
 
 
-def _try_primary(video_id: str, valves, language: str, tmp: str) -> tuple[dict | None, str | None, str | None]:
+def _try_primary(video_id: str, language: str, tmp: str) -> tuple[dict | None, str | None, str | None]:
     """(info, primary failure reason, REAUTH block) from yt-dlp subtitle extraction."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        info = _ytdlp_extract(url, valves, extra=_subtitle_extra(tmp, language))
+        info = _ytdlp_extract(url, extra=_subtitle_extra(tmp, language))
         return info, None, None
     except Exception as err:
         reason = _failure_reason(err)
@@ -721,7 +697,7 @@ class Tools:
         self.citation = False
 
     class Valves(BaseModel):
-        # google oauth (sanctioned half)
+        # google oauth (the only credential set - no YouTube session)
         google_client_id: str = Field(
             default="", description="Google OAuth client ID (installed-app, Production-mode client)"
         )
@@ -729,13 +705,6 @@ class Tools:
         google_refresh_token: str = Field(
             default="", description="Stored OAuth refresh token (scope: https://www.googleapis.com/auth/youtube)"
         )
-        # yt-dlp session (personal half)
-        ytdlp_cookies_file: str = Field(
-            default="", description="Path to exported Netscape cookies.txt for youtube.com (personal feeds)"
-        )
-        ytdlp_username: str = Field(default="", description="YouTube username (alternative to cookies file)")
-        ytdlp_password: str = Field(default="", description="YouTube password (used with ytdlp_username)")
-        ytdlp_2fa_code: str = Field(default="", description="One-time 2FA code, set when YouTube asks for it")
         # digest playlist policy
         digest_playlist: str = Field(
             default="watch_later", description="Managed digest playlist (v1: watch_later only)"
@@ -756,15 +725,10 @@ class Tools:
                 continue
             google_ok = False
             lines.append(f"{name}: MISSING - set Valves.{name} (Google Cloud OAuth client)")
-        session_ok = bool(valves.ytdlp_cookies_file or valves.ytdlp_username)
-        if session_ok:
-            lines.append("yt-dlp session: configured")
-        else:
-            lines.append("yt-dlp session: MISSING - set Valves.ytdlp_cookies_file or ytdlp_username/ytdlp_password")
         token_line = _token_status(valves) if google_ok else None
         if token_line:
             lines.append(token_line)
-        ready = google_ok and session_ok and token_line is None
+        ready = google_ok and token_line is None
         lines.append("READY" if ready else "NOT READY")
         return "\n".join(lines)
 
@@ -790,8 +754,8 @@ class Tools:
             return f"Error: {err}"
         return (
             "OK\n"
-            "Authorization code exchanged. Set the stored valve:\n"
-            f"  Valves.google_refresh_token = {token['refresh_token']}"
+            "Authorization code exchanged. Store the refresh token in the valve:\n"
+            f'  Valves.google_refresh_token = "{token["refresh_token"]}"'
         )
 
     def _video_details(self, video_ids: list[str]) -> dict[str, dict]:
@@ -827,13 +791,13 @@ class Tools:
     def _fetch_source(self, source: str, max_per_source: int, search_query: str) -> list[Candidate]:
         feed_urls = {"recommended": ":ytrec", "subscriptions": ":ytsubs"}
         if source in feed_urls:
-            entries = _ytdlp_extract(feed_urls[source], self.valves).get("entries") or []
+            entries = _ytdlp_extract(feed_urls[source]).get("entries") or []
             return candidates_from_ytdlp(entries, source)
         if source == "watch_later":
             return self._fetch_watch_later(max_per_source)
         if not search_query:
             return []
-        entries = _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}", self.valves).get("entries") or []
+        entries = _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}").get("entries") or []
         return candidates_from_ytdlp(entries, source)
 
     def _collect(
@@ -894,7 +858,7 @@ class Tools:
                 shutil.rmtree(tmp)
 
     def _transcript_core(self, video_id: str, language: str, tmp: str) -> str:
-        info, primary_reason, block = _try_primary(video_id, self.valves, language, tmp)
+        info, primary_reason, block = _try_primary(video_id, language, tmp)
         if block is not None:
             return block
         title, channel = _video_meta(info, video_id)

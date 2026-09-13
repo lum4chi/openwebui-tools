@@ -7,13 +7,12 @@ from youtube_manager import NOTE_STATE, Candidate, Tools, serialize_digest_state
 
 @pytest.fixture
 def tools(tmp_path, monkeypatch):
-    """Tools with both credential sets configured; DATA_DIR pointed at a temp dir."""
+    """Tools with the Google credential set configured; DATA_DIR pointed at a temp dir."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     t = Tools()
     t.valves.google_client_id = "client-id"
     t.valves.google_client_secret = "client-secret"
     t.valves.google_refresh_token = "refresh-token"
-    t.valves.ytdlp_cookies_file = str(tmp_path / "cookies.txt")
     return t
 
 

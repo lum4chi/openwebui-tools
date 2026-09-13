@@ -228,7 +228,7 @@ class TestPOP3MailboxTool:
         assert "deleted successfully" in result
 
     @pytest.mark.asyncio
-    # [T3-CORE-DELETE-ONE] Given a POP3 mailbox with one selectable email / When the tool deletes that email with write permission enabled / Then the result reports successful deletion
+    # Given a POP3 mailbox with one selectable email / When the tool deletes that email with write permission enabled / Then the result reports successful deletion
     async def test_delete_email_success(self, tools):
         """Test deleting a specific email."""
         tools.valves.allow_delete_single = True
@@ -262,7 +262,7 @@ class TestPOP3MailboxTool:
         assert "out of range" in result.lower()
 
     @pytest.mark.asyncio
-    # [T3-CORE-DELETE-ALL] Given a POP3 mailbox with selectable emails / When the tool deletes all emails with the required write permission enabled / Then the result reports successful deletion of the mailbox contents
+    # Given a POP3 mailbox with selectable emails / When the tool deletes all emails with the required write permission enabled / Then the result reports successful deletion of the mailbox contents
     async def test_delete_all_emails_success(self, tools):
         """Test deleting all emails from mailbox."""
         tools.valves.allow_delete_all = True

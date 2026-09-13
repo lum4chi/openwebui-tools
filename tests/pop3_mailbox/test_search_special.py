@@ -20,7 +20,6 @@ class TestPOP3SearchWithFrom:
 
     @pytest.mark.asyncio
     async def test_search_emails_empty_from_filter(self, tools):
-        # T1-SEARCH-FROM-EMPTY
         # Given a POP3 mailbox with one email from bob@example.com
         # When the tool searches with a from: filter for a different address
         # Then no emails are found
@@ -36,7 +35,6 @@ class TestPOP3SearchWithBeforeAfter:
 
     @pytest.mark.asyncio
     async def test_search_emails_before_and_after_date(self, tools):
-        # T1-RED-3
         # Given two POP3 emails, one dated inside a date range and one dated outside the range
         # When the tool searches with after: and before: filters
         # Then the in-range email is returned
@@ -55,7 +53,6 @@ class TestPOP3SearchWithBeforeAfter:
 
     @pytest.mark.asyncio
     async def test_search_emails_date_range_no_match(self, tools):
-        # T1-SEARCH-RANGE-NO-MATCH
         # Given a POP3 mailbox with one email dated 2025-04-21
         # When the tool searches with an after: filter dated after the email
         # Then no emails are found
@@ -71,7 +68,6 @@ class TestPOP3SearchWithAttachments:
 
     @pytest.mark.asyncio
     async def test_search_emails_with_attachments_shows_count(self):
-        # T1-SEARCH-ATTACHMENT
         # Given a POP3 mailbox with one email carrying a single attachment
         # When the tool searches and the email matches
         # Then the result includes the attachment count

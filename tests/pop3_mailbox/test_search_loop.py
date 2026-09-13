@@ -13,7 +13,6 @@ class TestPOP3SearchInnerLoop:
 
     @pytest.mark.asyncio
     async def test_search_inner_loop_exception_continue(self):
-        # T1-LOOP-EXCEPTION-CONTINUE
         # Given a POP3 mailbox with three emails where one raises on fetch
         # When the tool searches with no criteria
         # Then the two successfully-fetched emails are returned and the failing one is skipped
@@ -51,7 +50,6 @@ class TestPOP3SearchInnerLoop:
 
     @pytest.mark.asyncio
     async def test_search_inner_loop_exception_date_parsing(self):
-        # T1-RED-4
         # Given a POP3 email with an unparseable date string
         # When the tool searches with date filters
         # Then that email is excluded from the filtered result
@@ -86,7 +84,6 @@ class TestPOP3SearchInnerLoop:
 
     @pytest.mark.asyncio
     async def test_search_early_break(self):
-        # T1-LOOP-EARLY-BREAK
         # Given a POP3 mailbox with five matching emails
         # When the tool searches with no criteria and count=2
         # Then only the two newest emails are returned and the loop breaks early
@@ -126,7 +123,6 @@ class TestPOP3SearchInnerLoop:
 
     @pytest.mark.asyncio
     async def test_search_after_exclusion(self):
-        # T1-LOOP-AFTER-EXCLUSION
         # Given two POP3 emails, one dated inside the after: range and one dated before it
         # When the tool searches with an after: filter
         # Then the in-range email is returned
@@ -164,7 +160,6 @@ class TestPOP3SearchInnerLoop:
 
     @pytest.mark.asyncio
     async def test_search_before_exclusion(self):
-        # T1-LOOP-BEFORE-EXCLUSION
         # Given two POP3 emails, one dated inside the before: range and one dated after it
         # When the tool searches with a before: filter
         # Then the in-range email is returned

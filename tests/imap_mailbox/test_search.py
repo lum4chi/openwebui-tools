@@ -44,7 +44,7 @@ class TestSearchEmailsAdditional:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="after:2025-04-01", count=10, folder="INBOX")
         assert "alice@example.com" in result
-        # Outgoing-criteria contract (T2-SEARCH-AFTER): after: -> SINCE only.
+        # Outgoing-criteria contract: after: -> SINCE only.
         mock_server.uid.assert_any_call("search", "", "SINCE 01-Apr-2025")
 
     @pytest.mark.asyncio
@@ -68,7 +68,7 @@ class TestSearchEmailsAdditional:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="before:2025-12-01", count=10, folder="INBOX")
         assert "alice@example.com" in result
-        # Outgoing-criteria contract (T2-SEARCH-BEFORE-ONLY): before-only -> ALL.
+        # Outgoing-criteria contract: before-only -> ALL.
         mock_server.uid.assert_any_call("search", "", "ALL")
 
     @pytest.mark.asyncio
@@ -87,7 +87,7 @@ class TestSearchEmailsAdditional:
         with patch("imaplib.IMAP4_SSL", return_value=mock_server):
             result = await tools.search_emails(query="after:2025-01-01 before:2025-12-31", count=10, folder="INBOX")
         assert "alice@example.com" in result
-        # Outgoing-criteria contract (T2-SEARCH-AFTER-AND-BEFORE): before bound is
+        # Outgoing-criteria contract: before bound is
         # exclusive (+1 day): 2025-12-31 -> BEFORE 01-Jan-2026.
         mock_server.uid.assert_any_call("search", "", "SINCE 01-Jan-2025 BEFORE 01-Jan-2026")
 

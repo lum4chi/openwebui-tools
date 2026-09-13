@@ -12,7 +12,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_empty_results(self, tools):
-        # T1-SEARCH-EMPTY
         # Given a POP3 mailbox containing one email from alice@example.com
         # When the tool searches with subject:nonexistent
         # Then the result reports that no emails were found
@@ -24,7 +23,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_free_text_fallback(self, tools):
-        # T1-SEARCH-FREE-TEXT
         # Given a POP3 mailbox containing one email whose body contains "invoice"
         # When the tool searches with the free-text query "invoice"
         # Then the email is returned in the result list
@@ -38,7 +36,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_combined_unquoted(self, tools):
-        # T1-SEARCH-LAST-WORD-WINS-RETAIN
         # Given a POP3 mailbox containing one email with subject "Project Invoice"
         # When the tool searches with the unquoted two-word query "Project Invoice"
         # Then the email is returned in the result list
@@ -50,7 +47,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_free_text_last_word_wins(self, tools):
-        # T1-SEARCH-LAST-WORD-WINS
         # Given a POP3 mailbox containing two emails, one whose subject matches only the
         # first query word and one whose subject matches only the last query word
         # When the tool searches with the unquoted two-word query "Project Invoice"
@@ -69,7 +65,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_after_date(self, tools):
-        # T1-RED-1
         # Given a POP3 email with a parseable date is stored in the mock mailbox
         # When the tool searches with an after: date that includes that email
         # Then the email is returned in the result list
@@ -81,7 +76,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_before_date(self, tools):
-        # T1-RED-2
         # Given a POP3 email with a parseable date is stored in the mock mailbox
         # When the tool searches with a before: date that includes that email
         # Then the email is returned in the result list
@@ -93,7 +87,6 @@ class TestPOP3SearchAdditional:
 
     @pytest.mark.asyncio
     async def test_search_quoted_criteria_no_match(self, tools):
-        # T1-SEARCH-QUOTED-CRITERIA
         # Given a POP3 mailbox containing one email from alice@example.com with subject "Hello"
         # When the tool searches with from:"alice@example.com" subject:"Hello"
         # Then no emails are found because the quoted criteria tokens are matched literally

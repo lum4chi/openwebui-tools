@@ -1,15 +1,16 @@
-"""T4 feedback logging + prune policy: record_feedback (T4-1…T4-2), prune happy paths (T4-3…T4-7)."""
+"""T4 feedback logging + prune policy: record_feedback (T4-1…T4-2), prune happy paths (T4-3…T4-7), guard/no-op (T4-8), reauth (T4-9)."""
 
 from datetime import datetime, timedelta
 
 import pytest
 
-from youtube_manager import NOTE_FEEDBACK, NOTE_STATE, parse_digest_state
+from youtube_manager import NOTE_FEEDBACK, NOTE_STATE, QuotaError, ReauthNeeded, parse_digest_state
 
-from .conftest import api_fake, channels_reply, item_row, listing_page, sample_feedback_log, seed_state
+from .conftest import DIGEST_PLAYLIST_ID, api_fake, item_row, listing_page, sample_feedback_log, seed_state
 
 HEADER = "| date | video_id | decision | title | source | reason |"
 REASON = "too long"
+PL = DIGEST_PLAYLIST_ID
 
 
 def days_ago(n: int) -> str:
@@ -95,7 +96,7 @@ class TestRecordFeedback:
 
 
 class TestPrune:
-    """prune_playlist: removal policy, report, and digest-state update (happy paths)."""
+    """prune_playlist: removal policy, report, digest-state update, guard, reauth (T4-3…T4-9)."""
 
     # @unit
     # Scenario: T4-3 feedback driven
@@ -111,16 +112,18 @@ class TestPrune:
     @pytest.mark.parametrize("layout", ["single_page", "paginated"])
     async def test_feedback_driven(self, tools, monkeypatch, fake_store, layout):
         today = datetime.now().date().isoformat()
-        seed_state(fake_store, {"vidA": (days_ago(10), "Video A"), "vidB": (days_ago(20), "Video B")})
+        seed_state(fake_store, {"vidA": (days_ago(10), "Video A"), "vidB": (days_ago(20), "Video B")}, playlist_id=PL)
         fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log([(today, "vidA", "watched", "", "digest", REASON)])
         if layout == "single_page":
-            pages = [listing_page([item_row("plA", "vidA"), item_row("plB", "vidB"), item_row("plU", "vidU")])]
+            pages = {PL: [listing_page([item_row("plA", "vidA"), item_row("plB", "vidB"), item_row("plU", "vidU")])]}
         else:
-            pages = [
-                listing_page([item_row("plA", "vidA"), item_row("plU", "vidU")], token="tok2"),
-                listing_page([item_row("plB", "vidB")]),
-            ]
-        calls = api_fake(monkeypatch, channels_reply(), pages)
+            pages = {
+                PL: [
+                    listing_page([item_row("plA", "vidA"), item_row("plU", "vidU")], token="tok2"),
+                    listing_page([item_row("plB", "vidB")]),
+                ]
+            }
+        calls = api_fake(monkeypatch, pages)
 
         result = await tools.prune_playlist()
 
@@ -150,19 +153,15 @@ class TestPrune:
             "vid4": days_ago(20),
             "vid5": days_ago(40),
         }
-        seed_state(fake_store, {vid: (at, f"Video {vid}") for vid, at in added.items()})
-        rows = [
-            item_row(f"pl{i}", vid)
-            for i, vid in enumerate(sorted(added, key=lambda v: added[v], reverse=True), start=1)
-        ]
-        calls = api_fake(monkeypatch, channels_reply(), [listing_page(rows)])
+        seed_state(fake_store, {vid: (at, f"Video {vid}") for vid, at in added.items()}, playlist_id=PL)
+        order = sorted(added, key=lambda v: added[v], reverse=True)
+        rows = [item_row(f"pl{i}", vid) for i, vid in enumerate(order, start=1)]
+        calls = api_fake(monkeypatch, {PL: [listing_page(rows)]})
 
         result = await tools.prune_playlist()
 
         cap_reason = "over digest_max_items (newest 3 kept)"
-        assert result == (
-            f"OK — pruned 2 item(s)\n- vid4 — Video vid4: {cap_reason}\n- vid5 — Video vid5: {cap_reason}"
-        )
+        assert result == f"OK — pruned 2 item(s)\n- vid4 — Video vid4: {cap_reason}\n- vid5 — Video vid5: {cap_reason}"
         assert "older than digest_max_age_days" not in result
         assert [p["id"] for m, p in calls if m == "playlistItems.delete"] == ["pl4", "pl5"]
         kept = parse_digest_state(fake_store.docs[NOTE_STATE])["tool_added"]
@@ -175,10 +174,8 @@ class TestPrune:
     #   Then only the 45-day item is deleted
     #   And the report names it with the age reason
     async def test_age_cap(self, tools, monkeypatch, fake_store):
-        seed_state(fake_store, {"vid1": (days_ago(45), "Video 1"), "vid2": (days_ago(10), "Video 2")})
-        calls = api_fake(
-            monkeypatch, channels_reply(), [listing_page([item_row("pl1", "vid1"), item_row("pl2", "vid2")])]
-        )
+        seed_state(fake_store, {"vid1": (days_ago(45), "Video 1"), "vid2": (days_ago(10), "Video 2")}, playlist_id=PL)
+        calls = api_fake(monkeypatch, {PL: [listing_page([item_row("pl1", "vid1"), item_row("pl2", "vid2")])]})
 
         result = await tools.prune_playlist()
 
@@ -196,18 +193,18 @@ class TestPrune:
     #   And the result reports nothing pruned
     async def test_user_items_never_touched(self, tools, monkeypatch, fake_store):
         today = datetime.now().date().isoformat()
-        seed_state(fake_store, {"vidA": (days_ago(5), "Video A")})
+        seed_state(fake_store, {"vidA": (days_ago(5), "Video A")}, playlist_id=PL)
         doc = fake_store.docs[NOTE_STATE]
         fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(
             [(today, "vidU1", "watched", "", "digest", ""), (today, "vidU2", "skipped", "", "digest", "")]
         )
         rows = [item_row(f"plU{i}", f"vidU{i}") for i in (1, 2, 3)] + [item_row("plA", "vidA")]
-        calls = api_fake(monkeypatch, channels_reply(), [listing_page(rows)])
+        calls = api_fake(monkeypatch, {PL: [listing_page(rows)]})
 
         result = await tools.prune_playlist()
 
         assert result == "OK — nothing to prune (1 tracked item(s) kept)"
-        assert [m for m, _ in calls] == ["channels.list", "playlistItems.list"]
+        assert [m for m, _ in calls] == ["playlistItems.list"]
         assert fake_store.docs[NOTE_STATE] == doc
 
     # @unit
@@ -219,11 +216,84 @@ class TestPrune:
     #   And the written digest-state no longer tracks C
     #   And the report notes the state cleanup
     async def test_stale_state_cleaned(self, tools, monkeypatch, fake_store):
-        seed_state(fake_store, {"vidC": (days_ago(5), "Video C"), "vidD": (days_ago(10), "Video D")})
-        calls = api_fake(monkeypatch, channels_reply(), [listing_page([item_row("plD", "vidD")])])
+        seed_state(fake_store, {"vidC": (days_ago(5), "Video C"), "vidD": (days_ago(10), "Video D")}, playlist_id=PL)
+        calls = api_fake(monkeypatch, {PL: [listing_page([item_row("plD", "vidD")])]})
 
         result = await tools.prune_playlist()
 
         assert result == "OK — nothing to prune (1 tracked item(s) kept)\nstate cleaned: 1 stale entry removed"
-        assert [m for m, _ in calls] == ["channels.list", "playlistItems.list"]
+        assert [m for m, _ in calls] == ["playlistItems.list"]
         assert set(parse_digest_state(fake_store.docs[NOTE_STATE])["tool_added"]) == {"vidD"}
+
+    # @unit
+    # Scenario: T4-8 noop and guard
+    #   Given one of the cases:
+    #     | case           | setup                                        | expected                                     |
+    #     | no_state       | digest-state absent                          | OK "nothing to prune (no tracked items)"     |
+    #     | state_raises   | digest-state read raises                     | same as no_state                             |
+    #     | no_title       | digest_playlist_title = "" (whitespace)      | Error naming "digest_playlist_title"         |
+    #     | no_pl_id       | tool_added non-empty, playlist_id empty      | Error naming digest-state and add_to_playlist |
+    #   When prune_playlist runs
+    #   Then no Data API call is made in any case and no exception propagates
+    #   And no deletion is attempted and digest-state is NOT written
+    @pytest.mark.parametrize("case", ["no_state", "state_raises", "no_title", "no_pl_id"])
+    async def test_noop_and_valve_guard(self, tools, monkeypatch, fake_store, case):
+        if case == "state_raises":
+            fake_store.raise_on_read = True
+        elif case == "no_title":
+            tools.valves.digest_playlist_title = "   "
+        elif case == "no_pl_id":
+            seed_state(fake_store, {"vidA": (days_ago(5), "Video A")}, playlist_id="")
+        original = dict(fake_store.docs)
+        calls = api_fake(monkeypatch, pages={})
+
+        result = await tools.prune_playlist()
+
+        if case in ("no_state", "state_raises"):
+            assert result == "OK — nothing to prune (no tracked items)"
+        elif case == "no_title":
+            assert result == "Error: set the digest_playlist_title valve first"
+        else:
+            assert result == "Error: no resolved playlist id in digest-state (run add_to_playlist first)"
+        assert calls == []
+        assert fake_store.docs == original
+
+    # @unit
+    # Scenario: T4-9 reauth
+    #   Given the Data API seam raises ReauthNeeded (on the item listing or a delete)
+    #   When prune_playlist runs
+    #   Then the result starts with "REAUTH_NEEDED"
+    #   And it contains the start_auth re-onboarding instruction
+    #   And no exception propagates
+    # (generic_on_listing row: completeness - the boundary generic Data API failure branch of the
+    #  Error & return contract; mirrors the T3-7 io-error rows, not part of the T4-9 table)
+    @pytest.mark.parametrize(
+        ("case", "error"),
+        [
+            ("on_item_listing", ReauthNeeded("Google credential rejected by the Data API")),
+            ("on_delete", ReauthNeeded("Google credential rejected by the Data API")),
+            ("generic_on_listing", QuotaError("YouTube Data API quota exceeded")),
+        ],
+    )
+    async def test_reauth(self, tools, monkeypatch, fake_store, case, error):
+        today = datetime.now().date().isoformat()
+        seed_state(fake_store, {"vidA": (days_ago(10), "Video A")}, playlist_id=PL)
+        fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log([(today, "vidA", "watched", "", "digest", REASON)])
+        original = fake_store.docs[NOTE_STATE]
+        method = "playlistItems.list" if "listing" in case else "playlistItems.delete"
+        calls = api_fake(monkeypatch, {PL: [listing_page([item_row("plA", "vidA")])]}, raise_for={method: error})
+
+        result = await tools.prune_playlist()
+
+        if case == "on_delete":
+            assert [m for m, _ in calls] == ["playlistItems.list", "playlistItems.delete"]
+        else:
+            assert "playlistItems.delete" not in [m for m, _ in calls]
+        assert fake_store.docs[NOTE_STATE] == original
+        if isinstance(error, ReauthNeeded):
+            assert result.startswith("REAUTH_NEEDED")
+            assert "Google credential rejected by the Data API" in result
+            assert "run start_auth" in result
+            assert "finish_auth" in result
+        else:
+            assert result == f"YouTube Error: {error}"

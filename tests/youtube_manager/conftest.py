@@ -87,9 +87,10 @@ class FakeRequest:
 class FakeStateStore:
     """In-memory stand-in for a _state_store result (.read/.write by note title)."""
 
-    def __init__(self, docs: dict[str, str] | None = None, raise_on_read: bool = False):
+    def __init__(self, docs: dict[str, str] | None = None, raise_on_read: bool = False, raise_on_write: bool = False):
         self.docs = docs or {}
         self.raise_on_read = raise_on_read
+        self.raise_on_write = raise_on_write
 
     def read(self, title: str) -> str | None:
         if self.raise_on_read:
@@ -97,6 +98,8 @@ class FakeStateStore:
         return self.docs.get(title)
 
     def write(self, title: str, md: str) -> None:
+        if self.raise_on_write:
+            raise RuntimeError("state write failed")
         self.docs[title] = md
 
 
@@ -108,12 +111,17 @@ def fake_store(monkeypatch):
     return store
 
 
-PLAYLIST_ID = "PL-WATCH-LATER"
+DIGEST_PLAYLIST_ID = "PL-DIGEST"
 
 
-def channels_reply() -> dict:
-    """channels.list reply resolving the Watch Later playlist id."""
-    return {"items": [{"contentDetails": {"relatedPlaylists": {"watchLater": PLAYLIST_ID}}}]}
+def channels_reply(watch_later_id: str) -> dict:
+    """channels.list reply resolving the Watch Later playlist id (T4-12 scenario modeling only)."""
+    return {"items": [{"contentDetails": {"relatedPlaylists": {"watchLater": watch_later_id}}}]}
+
+
+def playlist_row(playlist_id: str, title: str) -> dict:
+    """One playlists.list item row (id + snippet.title)."""
+    return {"id": playlist_id, "snippet": {"title": title}}
 
 
 def item_row(item_id: str, video_id: str, title: str = "") -> dict:
@@ -129,22 +137,41 @@ def listing_page(rows: list[dict], token: str = "") -> dict:
     return page
 
 
-def seed_state(store, entries: dict[str, tuple[str, str]]) -> None:
-    """Seed digest-state with tool_added entries: video_id -> (added_at, title)."""
-    tool_added = {vid: {"added_at": added, "title": title} for vid, (added, title) in entries.items()}
-    store.docs[NOTE_STATE] = serialize_digest_state({"tool_added": tool_added})
+def seed_state(store, entries: dict[str, tuple[str, str]], playlist_id: str | None = None) -> None:
+    """Seed digest-state: tool_added entries (video_id -> (added_at, title)) + optional cached playlist id.
+
+    ``playlist_id=None`` omits the key entirely; ``""`` leaves it present but empty.
+    """
+    state: dict = {}
+    if playlist_id is not None:
+        state["playlist_id"] = playlist_id
+    if entries:
+        state["tool_added"] = {vid: {"added_at": added, "title": title} for vid, (added, title) in entries.items()}
+    store.docs[NOTE_STATE] = serialize_digest_state(state)
 
 
 def api_fake(
-    monkeypatch, channels: dict, pages: list[dict], deletes: list | None = None, raise_for: dict | None = None
+    monkeypatch,
+    pages: dict[str, list[dict]],
+    channels: dict | None = None,
+    playlist_pages: list[dict] | None = None,
+    create_reply: dict | None = None,
+    insert_reply: dict | None = None,
+    deletes: list | None = None,
+    raise_for: dict | None = None,
 ):
-    """Route _data_api_request by method; serve listing pages in order; record calls.
+    """Route _data_api_request by method; record every call as (method, params).
 
-    ``deletes`` optionally feeds per-call playlistItems.delete outcomes in order
-    (None = ok, an Exception instance = raise it); ``raise_for`` raises before dispatch.
+    ``pages`` maps playlist id -> ordered playlistItems.list pages; ``channels`` is the
+    channels.list reply; ``playlist_pages`` serves playlists.list pages in order;
+    ``create_reply``/``insert_reply`` are the playlists.insert / playlistItems.insert
+    replies; ``deletes`` feeds per-call playlistItems.delete outcomes in order
+    (None = ok, an Exception instance = raise it); ``raise_for`` raises before dispatch
+    keyed by method name.
     """
     calls: list[tuple[str, dict]] = []
-    page_index = {"n": 0}
+    page_index: dict[str, int] = {}
+    playlist_page_index = {"n": 0}
     delete_index = {"n": 0}
 
     def fake(valves, method, params):
@@ -152,11 +179,31 @@ def api_fake(
         if raise_for is not None and method in raise_for:
             raise raise_for[method]
         if method == "channels.list":
+            if channels is None:
+                raise AssertionError("unexpected channels.list")
             return channels
         if method == "playlistItems.list":
-            page = pages[page_index["n"]]
-            page_index["n"] += 1
-            return page
+            playlist_id = params.get("playlistId")
+            page_list = pages.get(playlist_id)
+            if page_list is None:
+                raise AssertionError(f"unseeded playlist {playlist_id!r}")
+            n = page_index.get(playlist_id, 0)
+            page_index[playlist_id] = n + 1
+            return page_list[n]
+        if method == "playlists.list":
+            if not playlist_pages:
+                raise AssertionError("unexpected playlists.list")
+            n = playlist_page_index["n"]
+            playlist_page_index["n"] = n + 1
+            return playlist_pages[n]
+        if method == "playlists.insert":
+            if create_reply is None:
+                raise AssertionError("unexpected playlists.insert")
+            return create_reply
+        if method == "playlistItems.insert":
+            if insert_reply is None:
+                raise AssertionError("unexpected playlistItems.insert")
+            return insert_reply
         if method == "playlistItems.delete":
             outcomes = deletes or []
             outcome = outcomes[delete_index["n"]] if delete_index["n"] < len(outcomes) else None

@@ -782,8 +782,9 @@ class Tools:
             default="", description="Stored OAuth refresh token (scope: https://www.googleapis.com/auth/youtube)"
         )
         # digest playlist policy
-        digest_playlist: str = Field(
-            default="watch_later", description="Managed digest playlist (v1: watch_later only)"
+        digest_playlist_title: str = Field(
+            default="Open WebUI Digest",
+            description="Title of the managed custom digest playlist (resolved by exact title match; created if absent; id cached in digest-state). The default Watch Later is never touched.",
         )
         digest_max_items: int = Field(
             default=50, ge=1, description="Policy cap: keep at most the newest N tool-added items"
@@ -944,9 +945,9 @@ class Tools:
         return _resolve_transcript(video_id, primary_reason, title, channel)
 
     async def add_to_playlist(self, video_id: str) -> str:
-        """Idempotent Watch Later add: insert only if absent, record the tool-added item in digest-state."""
-        if self.valves.digest_playlist != "watch_later":
-            return "Error: only the watch_later playlist is managed in v1"
+        """Idempotent add to the custom digest playlist (resolve-or-create by title), record tool-added items in digest-state."""
+        if not self.valves.digest_playlist_title.strip():
+            return "Error: set the digest_playlist_title valve first"
         if not video_id:
             return "Error: video_id is required"
         try:
@@ -960,23 +961,46 @@ class Tools:
         notes: list[str] = []
         store = _state_store(None)
         state = parse_digest_state(_read_doc(store, NOTE_STATE) or "")
-        playlist_id = self._watch_later_playlist_id()
-        if playlist_id is None:
-            return "Error: could not resolve the Watch Later playlist id"
+        playlist_id, _created = self._resolve_digest_playlist(store, state, notes)
         if video_id in self._playlist_video_ids(playlist_id):
             return self._present_message(video_id, state)
         title = self._insert_into_playlist(playlist_id, video_id)
         self._record_tool_added(store, state, video_id, title, notes)
-        return "\n".join([f"OK — added {title or video_id} to Watch Later ({video_id})", *notes])
+        return "\n".join(
+            [f'OK — added {title or video_id} to "{self.valves.digest_playlist_title}" ({playlist_id})', *notes]
+        )
 
-    def _watch_later_playlist_id(self) -> str | None:
-        resp = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "mine": True})
-        items = resp.get("items") or []
-        if not items:
-            return None
-        content = items[0].get("contentDetails") or {}
-        related = content.get("relatedPlaylists") or {}
-        return related.get("watchLater")
+    def _resolve_digest_playlist(self, store, state: dict, notes: list[str]) -> tuple[str, bool]:
+        """Digest playlist id: cached in digest-state, else exact-title match, else create. Returns (id, created)."""
+        title = self.valves.digest_playlist_title
+        cached = state.get("playlist_id") or ""
+        if cached:
+            return cached, False
+        playlist_id = self._find_playlist_by_title(title)
+        if not playlist_id:
+            playlist_id = self._create_digest_playlist(title)
+        state["playlist_id"] = playlist_id
+        self._persist_state(store, state, notes)
+        return playlist_id, True
+
+    def _find_playlist_by_title(self, title: str) -> str | None:
+        token = ""
+        while True:
+            params: dict = {"part": "snippet", "mine": True, "maxResults": 100}
+            if token:
+                params["pageToken"] = token
+            resp = _data_api_request(self.valves, "playlists.list", params)
+            for item in resp.get("items") or []:
+                if (item.get("snippet") or {}).get("title") == title:
+                    return item.get("id") or None
+            token = resp.get("nextPageToken") or ""
+            if not token:
+                return None
+
+    def _create_digest_playlist(self, title: str) -> str:
+        resource = {"snippet": {"title": title}}
+        resp = _data_api_request(self.valves, "playlists.insert", {"part": "snippet", "resource": resource})
+        return (resp or {}).get("id") or ""
 
     def _playlist_video_ids(self, playlist_id: str) -> list[str]:
         video_ids: list[str] = []
@@ -1004,7 +1028,7 @@ class Tools:
     def _present_message(self, video_id: str, state: dict) -> str:
         tracked = video_id in (state.get("tool_added") or {})
         suffix = "tracked; no change" if tracked else "not tool-managed; left untracked"
-        return f"OK — {video_id} already in Watch Later ({suffix})"
+        return f'OK — {video_id} already in "{self.valves.digest_playlist_title}" ({suffix})'
 
     def _insert_into_playlist(self, playlist_id: str, video_id: str) -> str:
         resource = {"snippet": {"playlistId": playlist_id, "videoId": video_id}}
@@ -1017,10 +1041,17 @@ class Tools:
             "added_at": datetime.now().date().isoformat(),
             "title": title,
         }
+        self._persist_state(store, state, notes)
+
+    def _persist_state(self, store, state: dict, notes: list[str]) -> bool:
         try:
             store.write(NOTE_STATE, serialize_digest_state(state))
         except Exception as err:
-            notes.append(f"state record failed: {err}")
+            message = f"state record failed: {err}"
+            if message not in notes:
+                notes.append(message)
+            return False
+        return True
 
     async def record_feedback(self, video_id: str, decision: str, reason: str = "") -> str:
         """Append a validated feedback row to the feedback-log document."""
@@ -1045,9 +1076,9 @@ class Tools:
         return f"OK — recorded {decision} for {video_id}"
 
     async def prune_playlist(self) -> str:
-        """Remove policy-stale tool-added items from the managed playlist and report the removals."""
-        if self.valves.digest_playlist != "watch_later":
-            return "Error: only the watch_later playlist is managed in v1"
+        """Remove policy-stale tool-added items from the custom digest playlist and report the removals."""
+        if not self.valves.digest_playlist_title.strip():
+            return "Error: set the digest_playlist_title valve first"
         try:
             return self._prune_core()
         except ReauthNeeded as err:
@@ -1062,16 +1093,16 @@ class Tools:
         if not tool_added:
             return "OK — nothing to prune (no tracked items)"
         rows = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
-        playlist_id = self._watch_later_playlist_id()
-        if playlist_id is None:
-            return "Error: could not resolve the Watch Later playlist id"
+        playlist_id = state.get("playlist_id") or ""
+        if not playlist_id:
+            return "Error: no resolved playlist id in digest-state (run add_to_playlist first)"
         listed = self._listed_items(playlist_id, tool_added)
         stale = len(tool_added) - len({item.video_id for item in listed})
         plan = _removal_plan(listed, rows, self.valves.digest_max_items, self.valves.digest_max_age_days)
         removed, failure = self._delete_planned(plan)
         notes: list[str] = []
         if removed or stale:
-            self._write_pruned_state(store, tool_added, listed, removed, stale, notes)
+            self._write_pruned_state(store, state, listed, removed, stale, notes)
         kept = len(tool_added) - stale - len(removed)
         return _prune_report(removed, kept, failure, notes)
 
@@ -1115,19 +1146,15 @@ class Tools:
     def _write_pruned_state(
         self,
         store,
-        tool_added: dict,
+        state: dict,
         listed: list[PruneItem],
         removed: list[tuple[PruneItem, str]],
         stale: int,
         notes: list[str],
     ) -> None:
+        tool_added = state.get("tool_added") or {}
         removed_ids = {item.video_id for item, _ in removed}
         kept = {item.video_id: tool_added[item.video_id] for item in listed if item.video_id not in removed_ids}
-        try:
-            store.write(NOTE_STATE, serialize_digest_state({"tool_added": kept}))
-        except Exception as err:
-            notes.append(f"state record failed: {err}")
-        else:
-            if stale:
-                unit = "entry" if stale == 1 else "entries"
-                notes.append(f"state cleaned: {stale} stale {unit} removed")
+        if self._persist_state(store, {**state, "tool_added": kept}, notes) and stale:
+            unit = "entry" if stale == 1 else "entries"
+            notes.append(f"state cleaned: {stale} stale {unit} removed")

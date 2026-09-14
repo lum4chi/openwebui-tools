@@ -20,7 +20,9 @@ class TestPOP3SearchWithFrom:
 
     @pytest.mark.asyncio
     async def test_search_emails_empty_from_filter(self, tools):
-        """Test search_emails with from: filter that matches nothing."""
+        # Given a POP3 mailbox with one email from bob@example.com
+        # When the tool searches with a from: filter for a different address
+        # Then no emails are found
         raw = _make_raw_email("bob@example.com", "user@example.com", "Hello", "Hi!")
         mock_server = _make_mock_server(1, [raw])
         with patch("poplib.POP3_SSL", return_value=mock_server):
@@ -33,17 +35,27 @@ class TestPOP3SearchWithBeforeAfter:
 
     @pytest.mark.asyncio
     async def test_search_emails_before_and_after_date(self, tools):
-        """Test search_emails with both before and after date filters."""
-        raw = _make_raw_email("a@b.com", "c@d.com", "Hello", "Body")
-        mock_server = _make_mock_server(1, [raw])
+        # Given two POP3 emails, one dated inside a date range and one dated outside the range
+        # When the tool searches with after: and before: filters
+        # Then the in-range email is returned
+        # And the out-of-range email is not returned
+        in_range = _make_raw_email("a@b.com", "c@d.com", "Hello", "Body")
+        out_msg = MIMEText("BodyOut", "plain")
+        out_msg["From"] = "x@y.com"
+        out_msg["To"] = "z@w.com"
+        out_msg["Subject"] = "TooNew"
+        out_msg["Date"] = "Mon, 01 Jan 2035 10:00:00 +0000"
+        out_of_range = out_msg.as_bytes()
+        mock_server = _make_mock_server(2, [in_range, out_of_range])
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await tools.search_emails(query="after:2020-01-01 before:2030-12-31", count=5)
-        # Email from 2025-04-21 should match
-        assert "Found" in result or "1" in result
+        assert "Found 1 email(s)" in result and "Hello" in result and "TooNew" not in result
 
     @pytest.mark.asyncio
     async def test_search_emails_date_range_no_match(self, tools):
-        """Test search_emails with date range that excludes all emails."""
+        # Given a POP3 mailbox with one email dated 2025-04-21
+        # When the tool searches with an after: filter dated after the email
+        # Then no emails are found
         raw = _make_raw_email("a@b.com", "c@d.com", "Hello", "Body")
         mock_server = _make_mock_server(1, [raw])
         with patch("poplib.POP3_SSL", return_value=mock_server):
@@ -56,7 +68,9 @@ class TestPOP3SearchWithAttachments:
 
     @pytest.mark.asyncio
     async def test_search_emails_with_attachments_shows_count(self):
-        """Test that search_emails shows attachment count when emails have attachments (line 371)."""
+        # Given a POP3 mailbox with one email carrying a single attachment
+        # When the tool searches and the email matches
+        # Then the result includes the attachment count
         t = Tools()
         t.valves.username = "testuser"
         t.valves.password = "testpass"
@@ -79,5 +93,4 @@ class TestPOP3SearchWithAttachments:
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="Attached", count=5)
 
-        assert "Attachment" in result or "attachment" in result
-        assert "1" in result
+        assert "[1 attachment(s)]" in result

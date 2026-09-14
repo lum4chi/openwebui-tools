@@ -13,7 +13,9 @@ class TestPOP3SearchInnerLoop:
 
     @pytest.mark.asyncio
     async def test_search_inner_loop_exception_continue(self):
-        """Test search_emails inner loop Exception handler (lines 348-349)."""
+        # Given a POP3 mailbox with three emails where one raises on fetch
+        # When the tool searches with no criteria
+        # Then the two successfully-fetched emails are returned and the failing one is skipped
         t = Tools()
         t.valves.username = "user"
         t.valves.password = "pass"
@@ -44,11 +46,13 @@ class TestPOP3SearchInnerLoop:
 
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="", count=10)
-        assert "Found" in result or "2" in result
+        assert "Found 2 email(s)" in result and "OK3" in result and "OK1" in result and "OK2" not in result
 
     @pytest.mark.asyncio
     async def test_search_inner_loop_exception_date_parsing(self):
-        """Test search_emails date filter exception handler (lines 344-345)."""
+        # Given a POP3 email with an unparseable date string
+        # When the tool searches with date filters
+        # Then that email is excluded from the filtered result
         t = Tools()
         t.valves.username = "user"
         t.valves.password = "pass"
@@ -76,11 +80,13 @@ class TestPOP3SearchInnerLoop:
 
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="after:2020-01-01", count=10)
-        assert "found" in result.lower() or "1" in result
+        assert "Good" in result and "BadDate" not in result
 
     @pytest.mark.asyncio
     async def test_search_early_break(self):
-        """Test search_emails early break when count reached (line 321)."""
+        # Given a POP3 mailbox with five matching emails
+        # When the tool searches with no criteria and count=2
+        # Then only the two newest emails are returned and the loop breaks early
         t = Tools()
         t.valves.username = "user"
         t.valves.password = "pass"
@@ -113,11 +119,14 @@ class TestPOP3SearchInnerLoop:
 
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="", count=2)
-        assert "2" in result
+        assert "Found 2 email(s)" in result and "Match5" in result and "Match4" in result and "Match3" not in result
 
     @pytest.mark.asyncio
     async def test_search_after_exclusion(self):
-        """Test search_emails with after:date that excludes the first email (lines 340-341)."""
+        # Given two POP3 emails, one dated inside the after: range and one dated before it
+        # When the tool searches with an after: filter
+        # Then the in-range email is returned
+        # And the pre-range email is not returned
         t = Tools()
         t.valves.username = "user"
         t.valves.password = "pass"
@@ -147,11 +156,14 @@ class TestPOP3SearchInnerLoop:
 
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="after:2020-01-01", count=10)
-        assert "Good" in result or "found" in result.lower()
+        assert "Good" in result and "Old" not in result
 
     @pytest.mark.asyncio
     async def test_search_before_exclusion(self):
-        """Test search_emails with before:date that excludes the first email (lines 342-343)."""
+        # Given two POP3 emails, one dated inside the before: range and one dated after it
+        # When the tool searches with a before: filter
+        # Then the in-range email is returned
+        # And the post-range email is not returned
         t = Tools()
         t.valves.username = "user"
         t.valves.password = "pass"
@@ -179,7 +191,7 @@ class TestPOP3SearchInnerLoop:
 
         with patch("poplib.POP3_SSL", return_value=mock_server):
             result = await t.search_emails(query="before:2026-01-01", count=10)
-        assert "Good" in result or "found" in result.lower()
+        assert "Good" in result and "Future" not in result
 
 
 if __name__ == "__main__":

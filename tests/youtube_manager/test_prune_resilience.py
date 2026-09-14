@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from youtube_manager import NOTE_FEEDBACK, NOTE_STATE, parse_digest_state
+from youtube_manager import NOTE_FEEDBACK, NOTE_STATE, QuotaError, parse_digest_state
 
 from .conftest import (
     DIGEST_PLAYLIST_ID,
@@ -31,24 +31,37 @@ class TestPruneResilience:
     """prune_playlist: failure handling (T4-10, T4-11)."""
 
     # @unit
-    # Scenario: T4-10 partial failure
+    # Scenario: T4-10 partial failure + T3-1 provider-vs-local labeling
     #   Given two items qualify for removal and the first delete succeeds but the second raises
     #   When prune_playlist runs
-    #   Then the result starts with "YouTube Error:" and contains a "partial:" line naming the 1 succeeded removal
+    #   Then a local/code delete failure labels the result "Local Error:" (the exception is code, not the provider)
+    #   And a provider delete failure (QuotaError) keeps the "YouTube Error:" label
+    #   And the result contains a "partial:" line naming the 1 succeeded removal
     #   And no further delete is attempted after the failure
     #   And digest-state is updated only for the successfully removed item
-    async def test_partial_failure(self, tools, monkeypatch, fake_store):
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (RuntimeError("backend 500"), "Local Error: backend 500\npartial: 1 item(s) removed before failure"),
+            (
+                QuotaError("YouTube Data API quota exceeded"),
+                "YouTube Error: YouTube Data API quota exceeded\npartial: 1 item(s) removed before failure",
+            ),
+        ],
+        ids=["local_code_error", "provider_quota_error"],
+    )
+    async def test_partial_failure(self, tools, monkeypatch, fake_store, error, expected):
         today = datetime.now().date().isoformat()
         seed_state(fake_store, {"vidB": (days_ago(5), "Video B"), "vidA": (days_ago(10), "Video A")}, playlist_id=PL)
         fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(
             [(today, "vidA", "watched", "", "digest", REASON), (today, "vidB", "skipped", "", "digest", REASON)]
         )
         rows = [item_row("plB", "vidB"), item_row("plA", "vidA")]
-        calls = api_fake(monkeypatch, {PL: [listing_page(rows)]}, deletes=[None, RuntimeError("backend 500")])
+        calls = api_fake(monkeypatch, {PL: [listing_page(rows)]}, deletes=[None, error])
 
         result = await tools.prune_playlist()
 
-        assert result == "YouTube Error: backend 500\npartial: 1 item(s) removed before failure"
+        assert result == expected
         assert [m for m, _ in calls].count("playlistItems.delete") == 2
         assert [p["id"] for m, p in calls if m == "playlistItems.delete"] == ["plB", "plA"]
         state = parse_digest_state(fake_store.docs[NOTE_STATE])["tool_added"]

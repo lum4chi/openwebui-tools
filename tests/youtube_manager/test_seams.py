@@ -127,7 +127,9 @@ class TestDataApiRequest:
         ):
             service = MagicMock()
             build.return_value = service
-            service.playlistItems.list.return_value = api_json
+            request = MagicMock()
+            request.execute.return_value = api_json
+            service.playlistItems.list.return_value = request
             result = _data_api_request(_valves(), "playlistItems.list", {"playlistId": "PL1"})
         assert result is api_json
         token.assert_called_once()

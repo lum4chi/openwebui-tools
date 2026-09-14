@@ -72,7 +72,7 @@ def _api_fake(monkeypatch, video_ids, raise_on: str | None = None):
         if raise_on is not None and method == raise_on:
             raise ReauthNeeded("Google credential rejected by the Data API")
         if method == "channels.list":
-            return {"items": [{"id": "me", "snippet": {"relatedPlaylists": {"watchLater": "WL-1"}}}]}
+            return {"items": [{"id": "me", "contentDetails": {"relatedPlaylists": {"watchLater": "WL-1"}}}]}
         if method == "playlistItems.list":
             return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
         if method == "videos.list":

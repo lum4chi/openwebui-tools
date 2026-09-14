@@ -101,18 +101,26 @@ class TestAddToPlaylistResilience:
         assert fake_store.docs == original
 
     # @unit
-    # Scenario: T3-7 io errors
+    # Scenario: T3-7 io errors + T3-1 provider-vs-local labeling
     #   Given the Data API seam fails in one of the cases:
-    #     | case           | setup                                                        |
-    #     | quota          | QuotaError on the membership listing                          |
-    #     | create_fails   | generic HTTP failure on playlists.insert (create path)        |
-    #     | stale_cached   | generic API failure (404) on the item insert with a cached playlist_id (user deleted the playlist) |
-    #     | generic_insert | generic HTTP failure on the item insert                       |
+    #     | case           | setup                                                        | expected prefix  |
+    #     | quota          | QuotaError on the membership listing (provider)              | "YouTube Error:" |
+    #     | create_fails   | generic failure on playlists.insert (local/code)             | "Local Error:"   |
+    #     | stale_cached   | generic failure (404) on the item insert with a cached playlist_id (local/code) | "Local Error:"   |
+    #     | generic_insert | generic failure on the item insert (local/code)              | "Local Error:"   |
     #   When add_to_playlist runs
-    #   Then the result starts with "YouTube Error:" and contains the failure detail
+    #   Then the result starts with the expected prefix and contains the failure detail
     #   And no exception propagates and digest-state is NOT modified
-    @pytest.mark.parametrize("case", ["quota", "create_fails", "stale_cached", "generic_insert"])
-    async def test_io_errors(self, tools, monkeypatch, fake_store, case):
+    @pytest.mark.parametrize(
+        ("case", "expected_prefix"),
+        [
+            ("quota", "YouTube Error:"),
+            ("create_fails", "Local Error:"),
+            ("stale_cached", "Local Error:"),
+            ("generic_insert", "Local Error:"),
+        ],
+    )
+    async def test_io_errors(self, tools, monkeypatch, fake_store, case, expected_prefix):
         if case == "create_fails":
             original = dict(fake_store.docs)
             pages = {PL_NEW: [listing_page([])]}
@@ -144,7 +152,7 @@ class TestAddToPlaylistResilience:
 
         result = await tools.add_to_playlist(VIDEO_ID)
 
-        assert result.startswith("YouTube Error:")
+        assert result.startswith(expected_prefix)
         assert str(error) in result
         assert raise_method in _methods(calls)
         assert fake_store.docs == original

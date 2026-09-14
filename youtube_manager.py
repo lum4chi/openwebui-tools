@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - gathers candidates from the user's own feeds via anonymous yt-dlp, enriches via the YouTube Data API, and tracks state in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.0.0
+version: 1.0.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -133,13 +133,36 @@ def parse_code_from_url(text: str) -> str | None:
     return text
 
 
+def _http_status(err: Exception) -> int | None:
+    status = getattr(getattr(err, "resp", None), "status", None)
+    return status if isinstance(status, int) else None
+
+
+def _http_message(err: Exception) -> str:
+    return str(getattr(getattr(err, "resp", None), "reason", None) or err)
+
+
 def classify_feed_error(err: Exception) -> str:
     msg = str(err).lower()
     if "bot" in msg and "confirm" in msg:
         return "bot_check"
     if "quota" in msg:
         return "quota"
-    return "transient"
+    status = _http_status(err)
+    if status is not None:
+        if status in (401, 403):
+            return "permissions"
+        if status == 400:
+            return "client"
+        return "transient"  # 429 / 5xx / other HTTP
+    if isinstance(err, (urllib.error.URLError, ConnectionError, TimeoutError)):
+        return "transient"  # network
+    return "local"  # local/code: AttributeError, KeyError, RuntimeError, ...
+
+
+def _failure_label(err: Exception) -> str:
+    """Provider failures keep the YouTube Error label; local/code failures get a clearly-local label."""
+    return "YouTube Error" if isinstance(err, (HttpError, QuotaError)) else "Local Error"
 
 
 def serialize_feedback_line(entry: FeedbackEntry) -> str:
@@ -499,7 +522,9 @@ def assemble_podcast_text(title: str, channel: str, segments: list[tuple[int, st
 def _failure_reason(err: Exception) -> str:
     if isinstance(err, ReauthNeeded):
         return "reauth"
-    return classify_feed_error(err)
+    reason = classify_feed_error(err)
+    status = _http_status(err)
+    return f"{reason} HTTP {status}: {_http_message(err)}" if status is not None else reason
 
 
 def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
@@ -553,6 +578,24 @@ def _map_api_error(err: HttpError) -> Exception | None:
     return None
 
 
+def _resolve_api_method(service, path: str):
+    """Walk `path` on the API service, dereferencing 2.200 `__is_resource__` bound-method nodes.
+
+    In googleapiclient 2.200 a nested collection is a bound method whose `__is_resource__`
+    IS the bool `True`; calling it returns the underlying Resource. A genuinely missing
+    segment surfaces as AttributeError (a local bug, kept visible — never mislabelled).
+    `is True` (identity, NOT truthiness): a bare MagicMock's auto-attr `__is_resource__`
+    is a truthy MagicMock (not `True`) → takes the false branch → seam stays unchanged.
+    """
+    resource = service
+    for part in path.split("."):
+        attr = getattr(resource, part)
+        if getattr(attr, "__is_resource__", False) is True:
+            attr = attr()  # 2.200: nested resource is a bound method; call it to reach the Resource
+        resource = attr
+    return resource
+
+
 def _data_api_request(valves, method: str, params: dict) -> dict:
     token = _oauth_token(valves)
     service = discovery.build(
@@ -562,15 +605,14 @@ def _data_api_request(valves, method: str, params: dict) -> dict:
         cache_discovery=False,
     )
     try:
-        resource = service
-        for part in method.split("."):
-            resource = getattr(resource, part)
-        return resource(**params)
+        api_method = _resolve_api_method(service, method)
+        result = api_method(**params).execute()
     except HttpError as err:
         mapped = _map_api_error(err)
         if mapped:
             raise mapped from err
         raise
+    return json.loads(result) if isinstance(result, (bytes, str)) else result
 
 
 def _ytdlp_extract(url: str, extra: dict | None = None) -> dict:
@@ -755,9 +797,9 @@ def _removal_plan(
     return planned
 
 
-def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: str | None, notes: list[str]) -> str:
+def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: Exception | None, notes: list[str]) -> str:
     if failure is not None:
-        lines = [f"YouTube Error: {failure}", f"partial: {len(removed)} item(s) removed before failure"]
+        lines = [f"{_failure_label(failure)}: {failure}", f"partial: {len(removed)} item(s) removed before failure"]
     elif removed:
         lines = [f"OK — pruned {len(removed)} item(s)"]
         lines += [f"- {item.video_id} — {item.title or '?'}: {reason}" for item, reason in removed]
@@ -847,9 +889,9 @@ class Tools:
         return details
 
     def _fetch_watch_later(self, max_per_source: int) -> list[Candidate]:
-        channel = _data_api_request(self.valves, "channels.list", {"part": "snippet,relatedPlaylists", "mine": "true"})
+        channel = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "mine": "true"})
         item = (channel.get("items") or [{}])[0]
-        playlist_id = ((item.get("snippet") or {}).get("relatedPlaylists") or {}).get("watchLater")
+        playlist_id = ((item.get("contentDetails") or {}).get("relatedPlaylists") or {}).get("watchLater")
         if not playlist_id:
             return []
         resp = _data_api_request(
@@ -955,7 +997,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"YouTube Error: {err}"
+            return f"{_failure_label(err)}: {err}"
 
     def _add_to_playlist_core(self, video_id: str) -> str:
         notes: list[str] = []
@@ -1084,7 +1126,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"YouTube Error: {err}"
+            return f"{_failure_label(err)}: {err}"
 
     def _prune_core(self) -> str:
         store = _state_store(None)
@@ -1131,7 +1173,9 @@ class Tools:
                 break
         return items
 
-    def _delete_planned(self, plan: list[tuple[PruneItem, str]]) -> tuple[list[tuple[PruneItem, str]], str | None]:
+    def _delete_planned(
+        self, plan: list[tuple[PruneItem, str]]
+    ) -> tuple[list[tuple[PruneItem, str]], Exception | None]:
         removed: list[tuple[PruneItem, str]] = []
         for item, reason in plan:
             try:
@@ -1139,7 +1183,7 @@ class Tools:
             except ReauthNeeded:
                 raise
             except Exception as err:
-                return removed, str(err) or err.__class__.__name__
+                return removed, err
             removed.append((item, reason))
         return removed, None
 

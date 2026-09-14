@@ -56,7 +56,7 @@ def _api_fake(details, playlist_items, playlist_id="WL-1"):
         if method == "channels.list":
             channel: dict = {"id": "me"}
             if playlist_id is not None:
-                channel["snippet"] = {"relatedPlaylists": {"watchLater": playlist_id}}
+                channel["contentDetails"] = {"relatedPlaylists": {"watchLater": playlist_id}}
             return {"items": [channel]}
         if method == "playlistItems.list":
             return {"items": playlist_items}
@@ -166,7 +166,7 @@ class TestWatchLater:
             assert video_calls[0]["ids"] == ",".join(expected_ids[:50])
             assert video_calls[1]["ids"] == expected_ids[50]
         if playlist_id is None:
-            assert calls == [("channels.list", {"part": "snippet,relatedPlaylists", "mine": "true"})]
+            assert calls == [("channels.list", {"part": "contentDetails", "mine": "true"})]
         for method, params in calls:
             if method == "playlistItems.list":
                 assert params["playlistId"] == "WL-1"

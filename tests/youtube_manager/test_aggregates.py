@@ -100,6 +100,7 @@ class TestAggregates:
     #   And it reports total counts per decision
     #   And it reports skip counts per duration band for the candidates in this digest
     #   And it reports per-channel watch/listen vs skip counts
+    #   And it reports a Sources section with a per-topic `search:<topic>` count plus a `watch_later` count
     #   And the same inputs always produce the same numbers (deterministic)
     async def test_payload_includes_stats_and_sources(self, tools, monkeypatch, fake_store, _by_url):
         _seed(monkeypatch, fake_store, _by_url)

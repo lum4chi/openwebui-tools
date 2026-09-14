@@ -44,7 +44,7 @@ GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_tok
 DECISIONS = ("watched", "listened", "skipped")
 DATA_API_VERSION = "v3"
 SOURCES = ("watch_later", "search")
-REAUTH_CLASSES = ("reauth", "bot_check")
+REAUTH_CLASSES = ("reauth",)
 TASTE_STARTER = "# Taste profile\n\n## Topics\n- rust async\n- postgres\n\n## Avoid\n- cat videos"
 PODCAST_MAX_LINES = 400
 MAX_PER_SOURCE = 20
@@ -506,8 +506,6 @@ def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
     lines = ["REAUTH_NEEDED", *notes]
     if "reauth" in reauth_reasons:
         lines.append("Fix: run start_auth, open the URL, then finish_auth with the new code.")
-    if "bot_check" in reauth_reasons:
-        lines.append("Fix: update yt-dlp and retry (bot-check on anonymous access).")
     return "\n".join(lines)
 
 
@@ -689,17 +687,13 @@ def _video_meta(info: dict | None, video_id: str) -> tuple[str, str]:
     return title, channel
 
 
-def _try_primary(video_id: str, language: str, tmp: str) -> tuple[dict | None, str | None, str | None]:
-    """(info, primary failure reason, REAUTH block) from yt-dlp subtitle extraction."""
+def _try_primary(video_id: str, language: str, tmp: str) -> tuple[dict | None, str | None]:
+    """(info, primary failure reason) from yt-dlp subtitle extraction. No reauth path (decision 3): a primary failure just falls through to the fallback."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        info = _ytdlp_extract(url, extra=_subtitle_extra(tmp, language))
-        return info, None, None
+        return _ytdlp_extract(url, extra=_subtitle_extra(tmp, language)), None
     except Exception as err:
-        reason = _failure_reason(err)
-        if reason in REAUTH_CLASSES:
-            return None, None, _reauth_block([f"transcript for {video_id} failed: {reason}"], {reason})
-        return None, str(err) or err.__class__.__name__, None
+        return None, str(err) or err.__class__.__name__
 
 
 def _fallback_transcript(video_id: str) -> tuple[list[tuple[int, str]], str | None]:
@@ -940,9 +934,7 @@ class Tools:
                 shutil.rmtree(tmp)
 
     def _transcript_core(self, video_id: str, language: str, tmp: str) -> str:
-        info, primary_reason, block = _try_primary(video_id, language, tmp)
-        if block is not None:
-            return block
+        info, primary_reason = _try_primary(video_id, language, tmp)
         title, channel = _video_meta(info, video_id)
         segments = _vtt_segments(info, tmp, language) if info is not None else None
         if segments:

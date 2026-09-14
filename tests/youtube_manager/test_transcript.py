@@ -1,4 +1,4 @@
-"""T2 transcript -> podcast format: primary/fallback paths (T2-1..T2-5), VTT parse/assembly edges (T2-6)."""
+"""T2 transcript -> podcast format: primary/fallback paths (T2-1..T2-4, T2-6), VTT parse/assembly edges (T2-6)."""
 
 import re
 from pathlib import Path
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import youtube_manager
-from youtube_manager import ReauthNeeded, TranscriptUnavailable, assemble_podcast_text, parse_vtt
+from youtube_manager import TranscriptUnavailable, assemble_podcast_text, parse_vtt
 
 _HDR = "=== Podcast transcript: T — C ==="
 _SEGS_400 = [(i, f"line {i}") for i in range(1, 401)]
@@ -198,39 +198,6 @@ class TestTranscript:
         assert result == (
             f"Error: no transcript available for vid123: primary: {primary_reason}; fallback: no transcript returned"
         )
-
-    # @unit
-    # Scenario: T2-5 reauth
-    #   Given the yt-dlp seam raises an error classified as reauth
-    #   When transcript runs
-    #   Then the result starts with "REAUTH_NEEDED"
-    @pytest.mark.parametrize(
-        ("variant", "fix"),
-        [
-            pytest.param(
-                ReauthNeeded("Google credential rejected"),
-                "Fix: run start_auth, open the URL, then finish_auth with the new code.",
-                id="reauth_exception",
-            ),
-            pytest.param(
-                Exception("Sign in to confirm you're not a bot"),
-                "Fix: update yt-dlp and retry (bot-check on anonymous access).",
-                id="bot_check_message",
-            ),
-        ],
-    )
-    async def test_reauth(self, tools, monkeypatch, variant, fix):
-        stub = _YtdlpStub(exc=variant)
-        fb = MagicMock()
-        monkeypatch.setattr(youtube_manager, "_ytdlp_extract", stub)
-        monkeypatch.setattr(youtube_manager, "_fetch_transcript_fallback", fb)
-
-        result = await tools.transcript("vid123")
-
-        fb.assert_not_called()  # reauth is terminal: no fallback attempt
-        assert result.startswith("REAUTH_NEEDED")
-        assert "vid123" in result
-        assert fix in result
 
 
 class TestVtt:

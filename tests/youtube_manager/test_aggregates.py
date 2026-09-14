@@ -1,11 +1,13 @@
-"""T1 feedback aggregates in the digest payload (T1-6)."""
+"""T1 feedback aggregates in the digest payload (T1-6): stats, per-source counts, determinism."""
 
 import pytest
 
 import youtube_manager
 from youtube_manager import NOTE_FEEDBACK, NOTE_TASTE
 
-from .conftest import sample_feedback_log
+from .conftest import sample_feedback_log, sample_taste_profile
+
+TOPICS = ["rust async", "postgres"]
 
 # rec1: Ch A, 300s  -> <10m band
 # rec2: Ch B, 3600s -> >30m band
@@ -16,15 +18,15 @@ ENTRY_CHANNELS = {"rec1": "Ch A", "rec2": "Ch B", "rec3": "Ch A", "rec4": "Ch B"
 
 # rows: (date, video_id, decision, title, source, reason)
 ROWS = [
-    ("2026-09-01", "rec1", "watched", "t", "recommended", ""),
-    ("2026-09-02", "rec1", "skipped", "t", "recommended", "too long"),
-    ("2026-09-03", "rec1", "skipped", "t", "recommended", "again"),
-    ("2026-09-04", "rec2", "listened", "t", "subscriptions", ""),
-    ("2026-09-05", "rec2", "skipped", "t", "subscriptions", "boring"),
-    ("2026-09-06", "rec3", "skipped", "t", "recommended", "length"),
-    ("2026-09-07", "rec4", "skipped", "t", "recommended", "no duration"),
+    ("2026-09-01", "rec1", "watched", "t", "search:rust async", ""),
+    ("2026-09-02", "rec1", "skipped", "t", "search:rust async", "too long"),
+    ("2026-09-03", "rec1", "skipped", "t", "search:rust async", "again"),
+    ("2026-09-04", "rec2", "listened", "t", "search:postgres", ""),
+    ("2026-09-05", "rec2", "skipped", "t", "search:postgres", "boring"),
+    ("2026-09-06", "rec3", "skipped", "t", "search:postgres", "length"),
+    ("2026-09-07", "rec4", "skipped", "t", "search:rust async", "no duration"),
     # ghost: feedback row for a video not in this digest -> totals only
-    ("2026-09-08", "ghost", "skipped", "t", "search", "not in digest"),
+    ("2026-09-08", "ghost", "skipped", "t", "search:rust async", "not in digest"),
 ]
 
 
@@ -45,13 +47,50 @@ def _entry(video_id):
 @pytest.fixture
 def _by_url():
     return {
-        ":ytrec": [_entry(vid) for vid in ("rec1", "rec2")],
-        ":ytsubs": [_entry(vid) for vid in ("rec3", "rec4")],
+        "ytsearch20:rust async": [_entry(vid) for vid in ("rec1", "rec2")],
+        "ytsearch20:postgres": [_entry(vid) for vid in ("rec3", "rec4")],
     }
 
 
+def _api_fake(monkeypatch, video_ids=("wl1",)):
+    """Route _data_api_request on the watch_later path (OAuth is set in the tools fixture)."""
+    details = {
+        "wl1": {
+            "id": "wl1",
+            "snippet": {
+                "title": "Detail title wl1",
+                "channelId": "ch-wl1",
+                "channelTitle": "Detail channel wl1",
+                "description": "Detail description wl1",
+                "tags": ["wl-tag"],
+                "publishedAt": "2026-09-01T12:00:00Z",
+            },
+            "contentDetails": {"duration": "PT2M35S"},
+        }
+    }
+
+    def fake(valves, method, params):
+        if method == "channels.list":
+            return {"items": [{"id": "me", "snippet": {"relatedPlaylists": {"watchLater": "WL-1"}}}]}
+        if method == "playlistItems.list":
+            return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
+        if method == "videos.list":
+            return {"items": [details[i] for i in params["ids"].split(",")]}
+        raise AssertionError(f"unexpected API method {method}")
+
+    monkeypatch.setattr(youtube_manager, "_data_api_request", fake)
+
+
+def _seed(monkeypatch, fake_store, by_url):
+    """Seed both test doubles + the two state docs the digest reads."""
+    monkeypatch.setattr(youtube_manager, "_ytdlp_extract", lambda url, extra=None: {"entries": by_url.get(url, [])})
+    _api_fake(monkeypatch)
+    fake_store.docs[NOTE_TASTE] = sample_taste_profile(TOPICS, [])
+    fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(ROWS)
+
+
 class TestAggregates:
-    """T1-6 payload includes taste profile + deterministic feedback aggregates."""
+    """T1-6 payload includes taste profile + deterministic feedback aggregates + per-source counts."""
 
     # @unit
     # Scenario: T1-6 aggregates in payload
@@ -62,16 +101,13 @@ class TestAggregates:
     #   And it reports skip counts per duration band for the candidates in this digest
     #   And it reports per-channel watch/listen vs skip counts
     #   And the same inputs always produce the same numbers (deterministic)
-    async def test_payload_includes_stats(self, tools, monkeypatch, fake_store, _by_url):
-        monkeypatch.setattr(
-            youtube_manager, "_ytdlp_extract", lambda url, extra=None: {"entries": _by_url.get(url, [])}
-        )
-        fake_store.docs[NOTE_TASTE] = "PREFER-ROBOTICS-CLIPS"
-        fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(ROWS)
+    async def test_payload_includes_stats_and_sources(self, tools, monkeypatch, fake_store, _by_url):
+        _seed(monkeypatch, fake_store, _by_url)
 
         payload = await tools.digest()
 
-        assert "PREFER-ROBOTICS-CLIPS" in payload  # taste profile text embedded
+        assert "- rust async" in payload  # taste profile text embedded (## Topics)
+        assert "- postgres" in payload
         assert "watched=1" in payload
         assert "listened=1" in payload
         assert "skipped=6" in payload  # ghost row counts in totals...
@@ -80,16 +116,17 @@ class TestAggregates:
         assert ">30m=1" in payload  # rec4 (no duration) and ghost excluded from bands
         assert "Ch A (watch/listen 1, skip 3)" in payload  # rec1 watched + 2 skips, rec3 skip
         assert "Ch B (watch/listen 1, skip 2)" in payload  # rec2 listened + skip, rec4 skip
+        # per-source candidate counts (pre-merge, every attempted source)
+        assert "search:rust async=2" in payload
+        assert "search:postgres=2" in payload
+        assert "watch_later=1" in payload
 
     # Scenario T1-6 (determinism): same inputs -> identical payload
     async def test_deterministic(self, tools, monkeypatch, fake_store, _by_url):
-        monkeypatch.setattr(
-            youtube_manager, "_ytdlp_extract", lambda url, extra=None: {"entries": _by_url.get(url, [])}
-        )
-        fake_store.docs[NOTE_TASTE] = "PREFER-ROBOTICS-CLIPS"
-        fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(ROWS)
+        _seed(monkeypatch, fake_store, _by_url)
 
         first = await tools.digest()
         second = await tools.digest()
 
         assert first == second  # same inputs always produce the same numbers
+        assert "search:rust async=2" in first  # per-topic source counts are part of the payload

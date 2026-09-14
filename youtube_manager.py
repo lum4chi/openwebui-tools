@@ -43,10 +43,11 @@ NOTE_TASTE, NOTE_FEEDBACK, NOTE_STATE = "taste-profile", "feedback-log", "digest
 GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
 DECISIONS = ("watched", "listened", "skipped")
 DATA_API_VERSION = "v3"
-SOURCES = ("recommended", "subscriptions", "watch_later", "search")
+SOURCES = ("watch_later", "search")
 REAUTH_CLASSES = ("reauth", "bot_check")
-TASTE_STARTER = "# Taste profile\n- liked channels:\n- disliked channels:\n- preferred duration:\n- topics:"
+TASTE_STARTER = "# Taste profile\n\n## Topics\n- rust async\n- postgres\n\n## Avoid\n- cat videos"
 PODCAST_MAX_LINES = 400
+MAX_PER_SOURCE = 20
 FEEDBACK_HEADER = "| date | video_id | decision | title | source | reason |"
 
 
@@ -91,6 +92,13 @@ class FeedbackStats:
     totals: dict[str, int]
     skips_by_duration_band: dict[str, int]
     channel_counts: list[tuple[str, int, int]]
+
+
+@dataclass
+class TasteProfile:
+    topics: list[str]
+    disliked: set[str]
+    text: str
 
 
 @dataclass
@@ -255,6 +263,65 @@ def merge_candidates(lists: list[list[Candidate]]) -> list[Candidate]:
     return list(merged.values())
 
 
+def _topic_batch(topic: str, source_counts: dict[str, int], notes: list[str]) -> list[Candidate]:
+    """One digest topic search; a failure is a note (never a reauth), the count is recorded pre-merge."""
+    label = f"search:{topic}"
+    candidates: list[Candidate] = []
+    try:
+        entries = _ytdlp_extract(f"ytsearch{MAX_PER_SOURCE}:{topic}").get("entries") or []
+    except Exception as err:
+        notes.append(f"source {topic} failed: {_failure_reason(err)}")
+    else:
+        candidates = candidates_from_ytdlp(entries, label)
+    source_counts[label] = len(candidates)
+    return candidates
+
+
+def _bullets_under(md: str, heading: str) -> list[str] | None:
+    """Bullets under a heading (None when the heading is absent, [] when it has none)."""
+    bullets: list[str] = []
+    found = False
+    for line in md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if found:
+                break
+            found = stripped == heading
+            continue
+        if found and stripped.startswith("- "):
+            bullets.append(stripped[2:].strip())
+    return bullets if found else None
+
+
+def _first_bullet_list(md: str) -> list[str]:
+    lines = [line.strip() for line in md.splitlines()]
+    start = next((i for i, line in enumerate(lines) if line.startswith("- ")), len(lines))
+    stop = next((i for i in range(start, len(lines)) if not lines[i].startswith("- ")), len(lines))
+    return [lines[i][2:].strip() for i in range(start, stop)]
+
+
+def parse_taste_profile(md: str | None) -> TasteProfile:
+    text = md or ""
+    if not text.strip():
+        return TasteProfile([], set(), text)
+    topics = _bullets_under(text, "## Topics")
+    if topics is None:
+        topics = _first_bullet_list(text)
+    disliked = {bullet.lower() for bullet in _bullets_under(text, "## Avoid") or []}
+    return TasteProfile(topics, disliked, text)
+
+
+def filter_disliked(candidates: list[Candidate], disliked: set[str]) -> tuple[list[Candidate], int]:
+    kept: list[Candidate] = []
+    removed = 0
+    for cand in candidates:
+        if any(needle in cand.title.lower() for needle in disliked):
+            removed += 1
+            continue
+        kept.append(cand)
+    return kept, removed
+
+
 def _bump(counter: dict[str, int], key: str) -> None:
     counter[key] = counter.get(key, 0) + 1
 
@@ -326,14 +393,15 @@ def _candidates_section(candidates: list[Candidate]) -> list[str]:
     return lines
 
 
-def _taste_lines(taste_md: str | None) -> list[str]:
+def _taste_lines(taste: TasteProfile | None) -> list[str]:
     lines = ["=== Taste profile ==="]
-    if taste_md:
-        lines.append(taste_md.strip())
+    if taste is None or not taste.topics:
+        lines.append("No taste profile yet")
+        lines.append("Starter template:")
+        lines.append(TASTE_STARTER)
+        lines.append("Save your own profile with the save_taste_profile tool.")
         return lines
-    lines.append("No taste profile yet")
-    lines.append("Starter template:")
-    lines.append(TASTE_STARTER)
+    lines.append(taste.text.strip())
     return lines
 
 
@@ -352,6 +420,15 @@ def _stats_lines(stats: FeedbackStats) -> list[str]:
     return lines
 
 
+def _sources_lines(source_counts: dict[str, int]) -> list[str]:
+    lines = ["=== Sources ==="]
+    if not source_counts:
+        lines.append("(none)")
+        return lines
+    lines.append(", ".join(f"{name}={count}" for name, count in sorted(source_counts.items())))
+    return lines
+
+
 def _with_notes(payload: str, notes: list[str]) -> str:
     if not notes:
         return payload
@@ -362,10 +439,13 @@ def _candidates_payload(candidates: list[Candidate], notes: list[str]) -> str:
     return _with_notes("\n".join(_candidates_section(candidates)), notes)
 
 
-def render_digest(candidates: list[Candidate], taste_md: str | None, stats: FeedbackStats) -> str:
+def render_digest(
+    candidates: list[Candidate], taste: TasteProfile | None, stats: FeedbackStats, source_counts: dict[str, int]
+) -> str:
     lines: list[str] = ["YouTube digest", ""]
-    lines += _taste_lines(taste_md)
+    lines += _taste_lines(taste)
     lines += _stats_lines(stats)
+    lines += _sources_lines(source_counts)
     lines += _candidates_section(candidates)
     return "\n".join(lines)
 
@@ -419,8 +499,6 @@ def assemble_podcast_text(title: str, channel: str, segments: list[tuple[int, st
 def _failure_reason(err: Exception) -> str:
     if isinstance(err, ReauthNeeded):
         return "reauth"
-    if isinstance(err, QuotaError):
-        return "quota"
     return classify_feed_error(err)
 
 
@@ -431,6 +509,10 @@ def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
     if "bot_check" in reauth_reasons:
         lines.append("Fix: update yt-dlp and retry (bot-check on anonymous access).")
     return "\n".join(lines)
+
+
+def _oauth_set(valves) -> bool:
+    return all(getattr(valves, name) for name in GOOGLE_FIELDS)
 
 
 def _oauth_token(valves, code: str | None = None) -> dict:
@@ -772,7 +854,7 @@ class Tools:
     def _fetch_watch_later(self, max_per_source: int) -> list[Candidate]:
         channel = _data_api_request(self.valves, "channels.list", {"part": "snippet,relatedPlaylists", "mine": "true"})
         item = (channel.get("items") or [{}])[0]
-        playlist_id = (item.get("relatedPlaylists") or {}).get("watchLaterPlaylistId")
+        playlist_id = ((item.get("snippet") or {}).get("relatedPlaylists") or {}).get("watchLater")
         if not playlist_id:
             return []
         resp = _data_api_request(
@@ -788,65 +870,65 @@ class Tools:
         details = self._video_details(video_ids)
         return candidates_from_api([details[vid] for vid in video_ids if vid in details], "watch_later")
 
-    def _fetch_source(self, source: str, max_per_source: int, search_query: str) -> list[Candidate]:
-        feed_urls = {"recommended": ":ytrec", "subscriptions": ":ytsubs"}
-        if source in feed_urls:
-            entries = _ytdlp_extract(feed_urls[source]).get("entries") or []
-            return candidates_from_ytdlp(entries, source)
+    def _gather_one(self, source: str, max_per_source: int, search_query: str, notes: list[str]) -> list[Candidate]:
         if source == "watch_later":
+            if not _oauth_set(self.valves):
+                notes.append("watch_later skipped: OAuth not configured")
+                return []
             return self._fetch_watch_later(max_per_source)
-        if not search_query:
-            return []
         entries = _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}").get("entries") or []
-        return candidates_from_ytdlp(entries, source)
+        return candidates_from_ytdlp(entries, "search")
 
-    def _collect(
-        self, parsed: list[str], max_per_source: int, search_query: str
-    ) -> tuple[list[list[Candidate]], list[str], set[str]]:
-        batches: list[list[Candidate]] = []
+    async def gather_candidates(
+        self, sources: str = "search", max_per_source: int = MAX_PER_SOURCE, search_query: str = ""
+    ) -> str:
+        parsed = parse_sources_arg(sources)
+        if parsed is None:
+            return f"Error: unknown source name(s) in {sources!r} - valid sources: {', '.join(SOURCES)}"
+        if "search" in parsed and not search_query.strip():
+            return "Error: search needs search_query (e.g. search_query='rust async')"
+        notes: list[str] = []
+        batches = [self._gather_one(source, max_per_source, search_query, notes) for source in parsed]
+        return _candidates_payload(merge_candidates(batches), notes)
+
+    def _digest_sources(self, taste: TasteProfile) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
+        """Per-topic search + watch_later: (batches, pre-merge source counts, notes, reauth reasons)."""
         notes: list[str] = []
         reauth_reasons: set[str] = set()
-        for source in parsed:
+        source_counts: dict[str, int] = {}
+        batches = [_topic_batch(topic, source_counts, notes) for topic in taste.topics]
+        if _oauth_set(self.valves):
             try:
-                candidates = self._fetch_source(source, max_per_source, search_query)
+                watch_later = self._fetch_watch_later(MAX_PER_SOURCE)
             except Exception as err:
                 reason = _failure_reason(err)
-                notes.append(f"{source} failed: {reason}")
+                notes.append(f"watch_later failed: {reason}")
                 if reason in REAUTH_CLASSES:
                     reauth_reasons.add(reason)
             else:
-                batches.append(candidates[:max_per_source])
-        return batches, notes, reauth_reasons
-
-    def _gather_core(
-        self, sources: str, max_per_source: int, search_query: str
-    ) -> tuple[list[Candidate], list[str], str | None]:
-        parsed = parse_sources_arg(sources)
-        if parsed is None:
-            return [], [], f"Error: unknown source name(s) in {sources!r} - valid sources: {', '.join(SOURCES)}"
-        if search_query and "search" not in parsed:
-            parsed = [*parsed, "search"]
-        batches, notes, reauth_reasons = self._collect(parsed, max_per_source, search_query)
-        if reauth_reasons and not batches:
-            return [], [], _reauth_block(notes, reauth_reasons)
-        return merge_candidates(batches), notes, None
-
-    async def gather_candidates(
-        self, sources: str = "recommended,subscriptions", max_per_source: int = 20, search_query: str = ""
-    ) -> str:
-        merged, notes, error = self._gather_core(sources, max_per_source, search_query)
-        if error is not None:
-            return error
-        return _candidates_payload(merged, notes)
+                batches.append(watch_later)
+                source_counts["watch_later"] = len(watch_later)
+        return batches, source_counts, notes, reauth_reasons
 
     async def digest(self) -> str:
-        merged, notes, error = self._gather_core("recommended,subscriptions", 20, "")
-        if error is not None:
-            return error
         store = _state_store(None)
-        taste = _read_doc(store, NOTE_TASTE)
-        stats = aggregate_feedback(parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or ""), merged)
-        return _with_notes(render_digest(merged, taste, stats), notes)
+        taste = parse_taste_profile(_read_doc(store, NOTE_TASTE))
+        rows = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
+        batches, source_counts, notes, reauth_reasons = self._digest_sources(taste)
+        merged = merge_candidates(batches)
+        kept, _ = filter_disliked(merged, taste.disliked)
+        stats = aggregate_feedback(rows, kept)
+        payload = render_digest(kept, taste, stats, source_counts)
+        if reauth_reasons:
+            return _reauth_block(notes, reauth_reasons)
+        return _with_notes(payload, notes)
+
+    async def save_taste_profile(self, md: str) -> str:
+        try:
+            _state_store(None).write(NOTE_TASTE, md)
+        except Exception as err:
+            return f"Error: {err}"
+        return "OK"
 
     async def transcript(self, video_id: str, language: str = "en") -> str:
         """Podcast-format transcript: yt-dlp subtitles primary, youtube-transcript-api fallback."""

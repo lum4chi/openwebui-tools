@@ -1,4 +1,4 @@
-"""T1 source routing: watch_later enrichment (T1-3), search opt-in + invalid sources (T1-4)."""
+"""T1 source routing: watch_later enrichment (T1-3), search + invalid sources (T1-4), watch_later OAuth guard (T1-13)."""
 
 import pytest
 
@@ -56,7 +56,7 @@ def _api_fake(details, playlist_items, playlist_id="WL-1"):
         if method == "channels.list":
             channel: dict = {"id": "me"}
             if playlist_id is not None:
-                channel["relatedPlaylists"] = {"watchLaterPlaylistId": playlist_id}
+                channel["snippet"] = {"relatedPlaylists": {"watchLater": playlist_id}}
             return {"items": [channel]}
         if method == "playlistItems.list":
             return {"items": playlist_items}
@@ -65,12 +65,6 @@ def _api_fake(details, playlist_items, playlist_id="WL-1"):
         raise AssertionError(f"unexpected API method {method}")
 
     return fake, calls
-
-
-def _details(vids, **specials):
-    out = {vid: _detail(vid, view_count=777 if vid == "wl-b" else None) for vid in vids}
-    out.update(specials)
-    return out
 
 
 def _ytdlp_fake(monkeypatch, by_url):
@@ -89,6 +83,12 @@ def _ids_line(payload):
     return next(line for line in payload.splitlines() if line.startswith("Candidate IDs:"))
 
 
+def _clear_oauth(tools):
+    tools.valves.google_client_id = ""
+    tools.valves.google_client_secret = ""
+    tools.valves.google_refresh_token = ""
+
+
 class TestWatchLater:
     """T1-3 watch_later merges with Data API enrichment."""
 
@@ -100,10 +100,10 @@ class TestWatchLater:
     #   And their duration/views come from the batched videos enrichment
     #   And items already present from other sources are deduped, not duplicated
     @pytest.mark.parametrize(
-        ("playlist_ids", "expected_ids", "rec_overlap", "expected_video_calls", "playlist_id", "detail_overrides"),
+        ("playlist_ids", "expected_ids", "search_overlap", "expected_video_calls", "playlist_id", "detail_overrides"),
         [
             (
-                # wl-a also arrives via the recommended feed -> deduped, not duplicated;
+                # wl-a also arrives via the search source -> deduped, not duplicated;
                 # one playlist item without a videoId is skipped; wl-c detail has no
                 # duration / publishedAt / viewCount keys (missing-key branches)
                 ["wl-a", None, "wl-b", "wl-c"],
@@ -142,7 +142,7 @@ class TestWatchLater:
         monkeypatch,
         playlist_ids,
         expected_ids,
-        rec_overlap,
+        search_overlap,
         expected_video_calls,
         playlist_id,
         detail_overrides,
@@ -150,11 +150,13 @@ class TestWatchLater:
         details = {vid: _detail(vid, view_count=777 if vid == "wl-b" else None) for vid in playlist_ids if vid}
         details.update(detail_overrides)
         api_fake, calls = _api_fake(details, [_playlist_item(vid) for vid in playlist_ids], playlist_id=playlist_id)
-        ytdlp_by_url = {":ytrec": [_entry("wl-a")]} if rec_overlap else {}
+        ytdlp_by_url = {"ytsearch51:rust async": [_entry("wl-a")]} if search_overlap else {"ytsearch51:rust async": []}
         ytdlp_calls = _ytdlp_fake(monkeypatch, ytdlp_by_url)
         monkeypatch.setattr(youtube_manager, "_data_api_request", api_fake)
 
-        payload = await tools.gather_candidates(sources="recommended,watch_later", max_per_source=51)
+        payload = await tools.gather_candidates(
+            sources="search,watch_later", max_per_source=51, search_query="rust async"
+        )
 
         expected_line = "Candidate IDs: " + ", ".join(expected_ids) if expected_ids else "Candidate IDs: (none)"
         assert _ids_line(payload) == expected_line
@@ -169,11 +171,10 @@ class TestWatchLater:
             if method == "playlistItems.list":
                 assert params["playlistId"] == "WL-1"
                 assert params["maxResults"] == "51"
-        if rec_overlap:
-            # first-seen (recommended) candidate wins the dedupe; watch-later copy dropped
+        if search_overlap:
+            # first-seen (search) candidate wins the dedupe; watch-later copy dropped
             assert "Feed title wl-a" in payload
             assert "Detail title wl-a" not in payload
-            assert payload.count("wl-a") == 3  # title + channel on the candidate line + one Candidate IDs entry
             # watch-later-only item enriched via the batched videos endpoint
             assert "Detail title wl-b" in payload
             assert "Detail channel wl-b" in payload
@@ -186,61 +187,82 @@ class TestWatchLater:
             assert "Detail title wl-00" in payload
             assert "Detail title wl-50" in payload
             assert "duration unknown" in payload  # wl-25 malformed ISO-8601 duration
-        assert ytdlp_calls == [":ytrec"]
+        assert ytdlp_calls == ["ytsearch51:rust async"]
 
 
 class TestSourcesArg:
-    """T1-4 search opt-in via search_query; unknown source names rejected."""
+    """T1-4 search needs search_query; unknown/empty sources rejected. T1-13 watch_later OAuth guard."""
 
     # @unit
     # Scenario: T1-4 search and invalid sources
-    #   Given search_query "rust async" and sources "recommended"
+    #   Given sources "search" and search_query "rust async"
     #   When gather_candidates runs
-    #   Then search results appear as a candidate source
-    #   And when sources contains an unknown name (e.g. "trending")
-    #   Then the result is an Error string naming the valid source names
+    #   Then the search results appear as a candidate source
+    #   And when sources is "search" but search_query is empty
+    #   Then the result is an Error string saying search needs search_query
     #   And no I/O seam is called for the invalid request
     @pytest.mark.parametrize(
-        ("sources", "search_query", "expect_search_url"),
-        [
-            ("recommended", "rust async", True),  # search auto-included via search_query
-            ("recommended,search", "rust async", True),  # explicit search source
-            ("recommended,search", "", False),  # search listed but no query -> yields nothing
-        ],
-        ids=["auto_include", "explicit_search", "no_query_no_search"],
+        ("search_query", "expect_error"),
+        [("rust async", False), ("", True), ("   ", True)],
+        ids=["query_ok", "empty_query", "whitespace_query"],
     )
-    async def test_search_included(self, tools, monkeypatch, sources, search_query, expect_search_url):
-        ytdlp_calls = _ytdlp_fake(
-            monkeypatch,
-            {
-                ":ytrec": [_entry("rec-1")],
-                "ytsearch5:rust async": [_entry("srch-1")],
-            },
-        )
+    async def test_search_needs_query(self, tools, monkeypatch, search_query, expect_error):
+        ytdlp_calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("srch-1")]})
 
-        payload = await tools.gather_candidates(sources=sources, max_per_source=5, search_query=search_query)
+        payload = await tools.gather_candidates(sources="search", max_per_source=5, search_query=search_query)
 
-        search_urls = [url for url in ytdlp_calls if "ytsearch" in url]
-        assert bool(search_urls) is expect_search_url
-        if expect_search_url:
-            assert search_urls == ["ytsearch5:rust async"]
-            assert "srch-1" in payload  # search results appear as a candidate source
-            assert "rec-1" in payload
+        if expect_error:
+            assert payload.startswith("Error:")
+            assert "search_query" in payload
+            assert ytdlp_calls == []  # no I/O for the invalid request
         else:
-            assert "srch-1" not in payload
-            assert "rec-1" in payload
+            assert "srch-1" in payload  # search results appear as a candidate source
+            assert ytdlp_calls == ["ytsearch5:rust async"]
 
-    # Scenario T1-4 (edge): unknown source name -> error without I/O
+    # Scenario T1-4 (edge): unknown name / empty / whitespace -> error naming valid sources, no I/O
     async def test_unknown_source_error(self, tools, monkeypatch):
-        def boom(url, valves, extra=None):
+        ytdlp_calls = _ytdlp_fake(monkeypatch, {})
+        api_calls: list[str] = []
+
+        def api(valves, method, params):
+            api_calls.append(method)
             raise AssertionError("no I/O seam may be called for the invalid request")
 
-        _ytdlp_fake(monkeypatch, {})
-        monkeypatch.setattr(youtube_manager, "_data_api_request", boom)
+        monkeypatch.setattr(youtube_manager, "_data_api_request", api)
 
-        payload = await tools.gather_candidates(sources="recommended,trending")
+        for bad in ("trending", "watch_later,trending", "", "   "):
+            payload = await tools.gather_candidates(sources=bad)
+            assert payload.startswith("Error:")
+            assert "trending" in payload or bad in ("", "   ")
+            for name in SOURCES:
+                assert name in payload  # the error names the valid source names (watch_later, search)
+        assert ytdlp_calls == []
+        assert api_calls == []
 
-        assert payload.startswith("Error: ")
-        assert "trending" in payload
-        for name in SOURCES:
-            assert name in payload  # the error names the valid source names
+    # @unit
+    # Scenario: T1-13 watch_later guard
+    #   Given sources "watch_later,search" with search_query set and OAuth NOT configured
+    #   When gather_candidates runs
+    #   Then watch_later is skipped with a note (not an error)
+    #   And the search results are still returned
+    #   And no exception propagates
+    async def test_watch_later_guard(self, tools, monkeypatch):
+        _clear_oauth(tools)
+        ytdlp_calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("srch-1")]})
+        api_calls: list[str] = []
+
+        def api(valves, method, params):
+            api_calls.append(method)
+            raise AssertionError("no Data API I/O for a skipped watch_later")
+
+        monkeypatch.setattr(youtube_manager, "_data_api_request", api)
+
+        payload = await tools.gather_candidates(
+            sources="watch_later,search", max_per_source=5, search_query="rust async"
+        )
+
+        assert not payload.startswith("Error:")
+        assert "srch-1" in payload  # search results are still returned
+        assert "watch_later skipped" in payload  # skipped with a note, not an error
+        assert ytdlp_calls == ["ytsearch5:rust async"]
+        assert api_calls == []

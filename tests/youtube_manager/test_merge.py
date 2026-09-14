@@ -5,6 +5,8 @@ import pytest
 from youtube_manager import Candidate, candidates_from_ytdlp, merge_candidates
 
 SAMPLE_TAGS = ["rust", "async"]
+TOPIC_LABEL = "search:rust async"
+WL_LABEL = "watch_later"
 
 
 def ytdlp_entry(video_id, **overrides):
@@ -33,43 +35,43 @@ class TestMerge:
 
     # @unit
     # Scenario: T1-2 dedupe merge
-    #   Given the same video id appears in both the recommended and subscription feeds
+    #   Given the same video id appears in both a topic search and watch_later
     #   When candidates are merged
     #   Then exactly one candidate remains for that id
-    #   And its sources list contains both "recommended" and "subscriptions"
+    #   And its sources list contains the topic's "search:<topic>" label and "watch_later"
     #   And first-seen order across sources is preserved
     @pytest.mark.parametrize(
         ("lists", "expected_ids", "expected_sources"),
         [
-            # same id in both feeds -> one candidate, union sources, first-seen order
+            # same id in the topic search and watch_later -> one candidate, union sources, first-seen order
             (
                 [
-                    [Candidate("a", "A", "ch", None, None, None, None, None, [], ["recommended"])],
+                    [Candidate("a", "A", "ch", None, None, None, None, None, [], [TOPIC_LABEL])],
                     [
-                        Candidate("a", "A", "ch", None, None, None, None, None, [], ["subscriptions"]),
-                        Candidate("b", "B", "ch", None, None, None, None, None, [], ["subscriptions"]),
+                        Candidate("a", "A", "ch", None, None, None, None, None, [], [WL_LABEL]),
+                        Candidate("b", "B", "ch", None, None, None, None, None, [], [WL_LABEL]),
                     ],
                 ],
                 ["a", "b"],
-                {"a": ["recommended", "subscriptions"], "b": ["subscriptions"]},
+                {"a": [TOPIC_LABEL, WL_LABEL], "b": [WL_LABEL]},
             ),
             # no overlap -> every candidate kept, order = first-seen across sources
             (
                 [
-                    [Candidate("a", "A", "ch", None, None, None, None, None, [], ["recommended"])],
-                    [Candidate("b", "B", "ch", None, None, None, None, None, [], ["subscriptions"])],
+                    [Candidate("a", "A", "ch", None, None, None, None, None, [], [TOPIC_LABEL])],
+                    [Candidate("b", "B", "ch", None, None, None, None, None, [], [WL_LABEL])],
                 ],
                 ["a", "b"],
-                {"a": ["recommended"], "b": ["subscriptions"]},
+                {"a": [TOPIC_LABEL], "b": [WL_LABEL]},
             ),
-            # duplicate source names across feeds are not repeated in the union
+            # duplicate source labels across feeds are not repeated in the union
             (
                 [
-                    [Candidate("a", "A", "ch", None, None, None, None, None, [], ["recommended"])],
-                    [Candidate("a", "A", "ch", None, None, None, None, None, [], ["recommended"])],
+                    [Candidate("a", "A", "ch", None, None, None, None, None, [], [TOPIC_LABEL])],
+                    [Candidate("a", "A", "ch", None, None, None, None, None, [], [TOPIC_LABEL])],
                 ],
                 ["a"],
-                {"a": ["recommended"]},
+                {"a": [TOPIC_LABEL]},
             ),
         ],
         ids=["overlap_union", "no_overlap", "same_source_not_duplicated"],
@@ -139,7 +141,7 @@ class TestMerge:
         ids=["full_mapping", "upload_date", "missing_optional_fields"],
     )
     def test_enrichment_mapping(self, entry, expect):
-        (cand,) = candidates_from_ytdlp([entry], "recommended")
+        (cand,) = candidates_from_ytdlp([entry], "search")
         for field, value in expect.items():
             assert getattr(cand, field) == value
-        assert cand.sources == ["recommended"]
+        assert cand.sources == ["search"]

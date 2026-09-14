@@ -61,10 +61,19 @@ def sample_candidates(n: int) -> list[Candidate]:
             published=f"2026-09-{(i % 28) + 1:02d}",
             description="",
             tags=[],
-            sources=["recommended"],
+            sources=["search"],
         )
         for i in range(n)
     ]
+
+
+def sample_taste_profile(topics: list[str], avoid: list[str]) -> str:
+    """Build a taste-profile markdown document (## Topics / ## Avoid bullet lists)."""
+    lines = ["# Taste profile", "", "## Topics"]
+    lines += [f"- {t}" for t in topics]
+    lines += ["", "## Avoid"]
+    lines += [f"- {a}" for a in avoid]
+    return "\n".join(lines) + "\n"
 
 
 class FakeRequest:

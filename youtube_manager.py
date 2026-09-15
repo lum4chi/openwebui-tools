@@ -1040,8 +1040,8 @@ class Tools:
                 return None
 
     def _create_digest_playlist(self, title: str) -> str:
-        resource = {"snippet": {"title": title}}
-        resp = _data_api_request(self.valves, "playlists.insert", {"part": "snippet", "resource": resource})
+        body = {"snippet": {"title": title}}
+        resp = _data_api_request(self.valves, "playlists.insert", {"part": "snippet", "body": body})
         return (resp or {}).get("id") or ""
 
     def _playlist_video_ids(self, playlist_id: str) -> list[str]:
@@ -1073,8 +1073,8 @@ class Tools:
         return f'OK — {video_id} already in "{self.valves.digest_playlist_title}" ({suffix})'
 
     def _insert_into_playlist(self, playlist_id: str, video_id: str) -> str:
-        resource = {"snippet": {"playlistId": playlist_id, "videoId": video_id}}
-        resp = _data_api_request(self.valves, "playlistItems.insert", {"part": "snippet", "resource": resource})
+        body = {"snippet": {"playlistId": playlist_id, "videoId": video_id}}
+        resp = _data_api_request(self.valves, "playlistItems.insert", {"part": "snippet", "body": body})
         snippet = (resp or {}).get("snippet") or {}
         return snippet.get("title") or ""
 

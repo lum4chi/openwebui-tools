@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - gathers candidates from the user's own feeds via anonymous yt-dlp, enriches via the YouTube Data API, and tracks state in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.0.1
+version: 1.0.2
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -1073,7 +1073,7 @@ class Tools:
         return f'OK — {video_id} already in "{self.valves.digest_playlist_title}" ({suffix})'
 
     def _insert_into_playlist(self, playlist_id: str, video_id: str) -> str:
-        body = {"snippet": {"playlistId": playlist_id, "videoId": video_id}}
+        body = {"snippet": {"playlistId": playlist_id, "resourceId": {"videoId": video_id}}}
         resp = _data_api_request(self.valves, "playlistItems.insert", {"part": "snippet", "body": body})
         snippet = (resp or {}).get("snippet") or {}
         return snippet.get("title") or ""

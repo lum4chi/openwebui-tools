@@ -2,9 +2,9 @@
 title: YouTube Manager
 author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
-description: Personal YouTube digest - gathers candidates from the user's own feeds via anonymous yt-dlp, enriches via the YouTube Data API, and tracks state in Open WebUI Notes.
+description: Personal YouTube digest - gathers candidates from the user's watch later, subscribed channels, and search via anonymous yt-dlp and the YouTube Data API, and tracks state in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.0.2
+version: 1.1.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -44,7 +45,7 @@ NOTE_TASTE, NOTE_FEEDBACK, NOTE_STATE = "taste-profile", "feedback-log", "digest
 GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
 DECISIONS = ("watched", "listened", "skipped")
 DATA_API_VERSION = "v3"
-SOURCES = ("watch_later", "search")
+SOURCES = ("watch_later", "search", "subscriptions")
 REAUTH_CLASSES = ("reauth",)
 TASTE_STARTER = "# Taste profile\n\n## Topics\n- rust async\n- postgres\n\n## Avoid\n- cat videos"
 PODCAST_MAX_LINES = 400
@@ -627,6 +628,20 @@ def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
     return "\n".join(lines)
 
 
+def _fetch_gated(
+    source: str, fetch: Callable[[], list[Candidate]], notes: list[str], reauth_reasons: set[str]
+) -> list[Candidate] | None:
+    """Fetch one OAuth-gated source; isolate failures as notes + reauth reasons (None = failed)."""
+    try:
+        return fetch()
+    except Exception as err:
+        reason = _failure_reason(err)
+        notes.append(f"{source} failed: {reason}")
+        if reason in REAUTH_CLASSES:
+            reauth_reasons.add(reason)
+        return None
+
+
 def _oauth_set(valves) -> bool:
     return all(getattr(valves, name) for name in GOOGLE_FIELDS)
 
@@ -1048,12 +1063,22 @@ class Tools:
                 notes.append("watch_later skipped: OAuth not configured")
                 return []
             return self._fetch_watch_later(max_per_source)
+        if source == "subscriptions":
+            if not _oauth_set(self.valves):
+                notes.append("subscriptions skipped: OAuth not configured")
+                return []
+            return self._fetch_subscriptions(max_per_source, notes)
         entries = _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}").get("entries") or []
         return candidates_from_ytdlp(entries, "search")
 
     async def gather_candidates(
         self, sources: str = "search", max_per_source: int = MAX_PER_SOURCE, search_query: str = ""
     ) -> str:
+        """Gather candidate videos from the given sources (comma-separated: watch_later, subscriptions, search).
+
+        search_query is required only for the search source. watch_later and subscriptions use the
+        existing Google OAuth valves and are skipped with a note when OAuth is not configured.
+        """
         parsed = parse_sources_arg(sources)
         if parsed is None:
             return f"Error: unknown source name(s) in {sources!r} - valid sources: {', '.join(SOURCES)}"
@@ -1064,22 +1089,21 @@ class Tools:
         return _candidates_payload(merge_candidates(batches), notes)
 
     def _digest_sources(self, taste: TasteProfile) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
-        """Per-topic search + watch_later: (batches, pre-merge source counts, notes, reauth reasons)."""
+        """Per-topic search + watch_later + subscriptions: (batches, pre-merge source counts, notes, reauth reasons)."""
         notes: list[str] = []
         reauth_reasons: set[str] = set()
         source_counts: dict[str, int] = {}
         batches = [_topic_batch(topic, source_counts, notes) for topic in taste.topics]
         if _oauth_set(self.valves):
-            try:
-                watch_later = self._fetch_watch_later(MAX_PER_SOURCE)
-            except Exception as err:
-                reason = _failure_reason(err)
-                notes.append(f"watch_later failed: {reason}")
-                if reason in REAUTH_CLASSES:
-                    reauth_reasons.add(reason)
-            else:
-                batches.append(watch_later)
-                source_counts["watch_later"] = len(watch_later)
+            gated = (
+                ("watch_later", lambda: self._fetch_watch_later(MAX_PER_SOURCE)),
+                ("subscriptions", lambda: self._fetch_subscriptions(MAX_PER_SOURCE, notes)),
+            )
+            for source, fetch in gated:
+                candidates = _fetch_gated(source, fetch, notes, reauth_reasons)
+                if candidates is not None:
+                    batches.append(candidates)
+                    source_counts[source] = len(candidates)
         return batches, source_counts, notes, reauth_reasons
 
     async def digest(self) -> str:

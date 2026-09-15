@@ -24,6 +24,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -48,6 +49,8 @@ REAUTH_CLASSES = ("reauth",)
 TASTE_STARTER = "# Taste profile\n\n## Topics\n- rust async\n- postgres\n\n## Avoid\n- cat videos"
 PODCAST_MAX_LINES = 400
 MAX_PER_SOURCE = 20
+SUBSCRIPTION_CHANNEL_CAP = 25
+RSS_TIMEOUT = 10.0
 FEEDBACK_HEADER = "| date | video_id | decision | title | source | reason |"
 
 
@@ -267,6 +270,96 @@ def candidates_from_api(items: list[dict], source: str) -> list[Candidate]:
                 published=_published_from_api(snippet.get("publishedAt")),
                 description=snippet.get("description"),
                 tags=snippet.get("tags") or [],
+                sources=[source],
+            )
+        )
+    return cands
+
+
+def _rss_url(channel_id: str) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+
+def _fetch_rss(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=RSS_TIMEOUT) as resp:
+        return resp.read()
+
+
+def _rss_local(elem: ET.Element) -> str:
+    return elem.tag.rsplit("}", 1)[-1]
+
+
+def _rss_find(elem: ET.Element, name: str) -> ET.Element | None:
+    for child in elem.iter():
+        if child is not elem and _rss_local(child) == name:
+            return child
+    return None
+
+
+def _rss_text(elem: ET.Element, name: str) -> str | None:
+    found = _rss_find(elem, name)
+    if found is None or not found.text:
+        return None
+    return found.text
+
+
+def _rss_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _rss_attr(elem: ET.Element | None, name: str) -> str | None:
+    return elem.get(name) if elem is not None else None
+
+
+def _rss_entry(elem: ET.Element) -> dict | None:
+    video_id = _rss_text(elem, "videoId")
+    if video_id is None:
+        atom_id = _rss_text(elem, "id")
+        video_id = atom_id.removeprefix("yt:video:") if atom_id and atom_id.startswith("yt:video:") else None
+    if video_id is None:
+        return None
+    return {
+        "video_id": video_id,
+        "title": _rss_text(elem, "title"),
+        "channel_name": _rss_text(elem, "name"),
+        "channel_id": _rss_text(elem, "channelId") or "",
+        "published": _published_from_api(_rss_text(elem, "published")),
+        "duration_sec": _rss_int(_rss_attr(_rss_find(elem, "content"), "duration")),
+        "views": _rss_int(_rss_attr(_rss_find(elem, "statistics"), "views")),
+        "description": _rss_text(elem, "description"),
+    }
+
+
+def _parse_rss(raw: bytes) -> list[dict]:
+    entries: list[dict] = []
+    for elem in ET.fromstring(raw).iter():
+        if _rss_local(elem) != "entry":
+            continue
+        entry = _rss_entry(elem)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def candidates_from_rss(entries: list[dict], source: str) -> list[Candidate]:
+    cands: list[Candidate] = []
+    for entry in entries:
+        cands.append(
+            Candidate(
+                video_id=entry["video_id"],
+                title=entry["title"] or "",
+                channel_name=entry["channel_name"] or "",
+                channel_id=entry["channel_id"],
+                duration_sec=entry["duration_sec"],
+                views=entry["views"],
+                published=entry["published"],
+                description=entry["description"],
+                tags=[],
                 sources=[source],
             )
         )
@@ -906,6 +999,48 @@ class Tools:
                 video_ids.append(vid)
         details = self._video_details(video_ids)
         return candidates_from_api([details[vid] for vid in video_ids if vid in details], "watch_later")
+
+    def _list_subscription_channels(self) -> list[dict]:
+        channels: list[dict] = []
+        page_token: str | None = None
+        while len(channels) < SUBSCRIPTION_CHANNEL_CAP:
+            params: dict[str, object] = {"part": "snippet", "mine": "true", "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = _data_api_request(self.valves, "subscriptions.list", params)
+            channels.extend(resp.get("items") or [])
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        channels.sort(key=lambda item: ((item.get("snippet") or {}).get("publishedAt")) or "", reverse=True)
+        return channels[:SUBSCRIPTION_CHANNEL_CAP]
+
+    def _fetch_subscriptions(self, max_per_source: int, notes: list[str]) -> list[Candidate]:
+        try:
+            channels = self._list_subscription_channels()
+        except HttpError as err:
+            if _http_status(err) != 404:
+                raise
+            notes.append(f"subscriptions list failed: {_failure_reason(err)}")
+            return []
+        entries: list[dict] = []
+        for channel in channels:
+            self._collect_channel(channel, entries, notes)
+        entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
+        return candidates_from_rss(entries[:max_per_source], "subscriptions")
+
+    def _collect_channel(self, channel: dict, entries: list[dict], notes: list[str]) -> None:
+        snippet = channel.get("snippet") or {}
+        channel_id = snippet.get("channelId") or ""
+        name = snippet.get("channelTitle") or channel_id
+        try:
+            parsed = _parse_rss(_fetch_rss(_rss_url(channel_id)))
+        except Exception as err:  # per-channel isolation: one bad RSS feed must not sink the rest
+            notes.append(f"subscriptions channel {name} failed: {_failure_reason(err)}")
+            return
+        for entry in parsed:
+            entry["channel_id"] = channel_id
+            entries.append(entry)
 
     def _gather_one(self, source: str, max_per_source: int, search_query: str, notes: list[str]) -> list[Candidate]:
         if source == "watch_later":

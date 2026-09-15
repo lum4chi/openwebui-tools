@@ -139,7 +139,9 @@ class TestDefaultPlaylistsNeverTouched:
             for needle in (W, "w1", "w2", "plW1", "plW2"):
                 assert needle not in blob
             if method == "playlistItems.insert":
-                assert params["body"] == {"snippet": {"playlistId": PL, "resourceId": {"videoId": NEW_VID}}}
+                assert params["body"] == {
+                    "snippet": {"playlistId": PL, "resourceId": {"kind": "youtube#video", "videoId": NEW_VID}}
+                }
         if case == "add":
             assert methods == ["playlistItems.list", "playlistItems.insert"]
             assert "playlistItems.delete" not in methods

@@ -1232,7 +1232,7 @@ class Tools:
         return f'OK — {video_id} already in "{self.valves.digest_playlist_title}" ({suffix})'
 
     def _insert_into_playlist(self, playlist_id: str, video_id: str) -> str:
-        body = {"snippet": {"playlistId": playlist_id, "resourceId": {"videoId": video_id}}}
+        body = {"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
         resp = _data_api_request(self.valves, "playlistItems.insert", {"part": "snippet", "body": body})
         snippet = (resp or {}).get("snippet") or {}
         return snippet.get("title") or ""

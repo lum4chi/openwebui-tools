@@ -66,7 +66,9 @@ class TestAddToPlaylist:
         create_params = next(params for method, params in calls if method == "playlists.insert")
         assert create_params == {"part": "snippet", "body": {"snippet": {"title": valve}}}
         insert_params = next(params for method, params in calls if method == "playlistItems.insert")
-        assert insert_params["body"] == {"snippet": {"playlistId": PL_NEW, "resourceId": {"videoId": VIDEO_ID}}}
+        assert insert_params["body"] == {
+            "snippet": {"playlistId": PL_NEW, "resourceId": {"kind": "youtube#video", "videoId": VIDEO_ID}}
+        }
         state = parse_digest_state(fake_store.docs[NOTE_STATE])
         assert state["playlist_id"] == PL_NEW
         assert state["tool_added"][VIDEO_ID] == {
@@ -174,7 +176,9 @@ class TestAddToPlaylist:
         assert result == f'OK — added {TITLE_FROM_API} to "{valve}" ({PL_LISTED})'
         assert "playlists.insert" not in _methods(calls)
         insert_params = next(params for method, params in calls if method == "playlistItems.insert")
-        assert insert_params["body"] == {"snippet": {"playlistId": PL_LISTED, "resourceId": {"videoId": VIDEO_ID}}}
+        assert insert_params["body"] == {
+            "snippet": {"playlistId": PL_LISTED, "resourceId": {"kind": "youtube#video", "videoId": VIDEO_ID}}
+        }
         if layout == "paginated":
             list_params = [params for method, params in calls if method == "playlists.list"]
             assert list_params[1] == {"part": "snippet", "mine": True, "maxResults": 100, "pageToken": "tok2"}

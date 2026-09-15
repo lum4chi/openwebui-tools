@@ -96,7 +96,10 @@ class TestResolveOrCreate:
         ) in calls
         assert (
             "playlistItems.insert",
-            {"part": "snippet", "body": {"snippet": {"playlistId": "PL-NEW", "resourceId": {"videoId": "v1"}}}},
+            {
+                "part": "snippet",
+                "body": {"snippet": {"playlistId": "PL-NEW", "resourceId": {"kind": "youtube#video", "videoId": "v1"}}},
+            },
         ) in calls  # both inserts were reached (leaf called -> .execute() answered)
 
     # @unit
@@ -123,7 +126,9 @@ class TestResolveOrCreate:
         assert not any(method == "playlists.insert" for method, _ in calls)  # no duplicate playlist
         inserts = [params for method, params in calls if method == "playlistItems.insert"]
         assert len(inserts) == 1  # the video is added exactly once
-        assert inserts[0]["body"] == {"snippet": {"playlistId": "PL-1", "resourceId": {"videoId": "v1"}}}
+        assert inserts[0]["body"] == {
+            "snippet": {"playlistId": "PL-1", "resourceId": {"kind": "youtube#video", "videoId": "v1"}}
+        }
 
 
 class TestResourceKwargLock:
@@ -141,7 +146,10 @@ class TestResourceKwargLock:
         ("collection", "body"),
         [
             ("playlists", {"snippet": {"title": "Open WebUI Digest"}}),
-            ("playlistItems", {"snippet": {"playlistId": "PL-NEW", "resourceId": {"videoId": "v1"}}}),
+            (
+                "playlistItems",
+                {"snippet": {"playlistId": "PL-NEW", "resourceId": {"kind": "youtube#video", "videoId": "v1"}}},
+            ),
         ],
     )
     def test_insert_rejects_resource_kwarg(self, collection, body):

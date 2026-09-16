@@ -502,7 +502,7 @@ def _stats_lines(stats: FeedbackStats) -> list[str]:
     if not stats.totals:
         lines.append("no feedback rows yet")
         return lines
-    lines.append("totals: " + " ".join(f"{key}={n}" for key, n in sorted(stats.totals.items())))
+    lines.append("cumulative (all recorded): " + " ".join(f"{key}={n}" for key, n in sorted(stats.totals.items())))
     if stats.skips_by_duration_band:
         bands = ", ".join(f"{band}={n}" for band, n in sorted(stats.skips_by_duration_band.items()))
         lines.append(f"skips by duration: {bands}")

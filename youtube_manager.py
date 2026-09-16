@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.2.1
+version: 1.2.2
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -643,7 +643,12 @@ def _oauth_token(valves, code: str | None = None) -> dict:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as err:
         if err.code in (400, 401):
-            raise ReauthNeeded("Google rejected the grant - stored credential is stale") from err
+            msg = (
+                "Google rejected the authorization code - no stored credential was involved; the pasted code was invalid or already used"
+                if code
+                else "Google rejected the grant - stored credential is stale"
+            )
+            raise ReauthNeeded(msg) from err
         raise
 
 
@@ -1251,7 +1256,10 @@ class Tools:
         return True
 
     async def record_feedback(self, video_id: str, decision: str, reason: str = "") -> str:
-        """Append a validated feedback row to the feedback-log document."""
+        """Append a validated feedback row to the feedback-log document.
+
+        decision must be one of: watched, listened, skipped.
+        """
         if decision not in DECISIONS:
             return "Error: decision must be one of: watched, listened, skipped"
         if not video_id:

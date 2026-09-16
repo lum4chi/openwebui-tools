@@ -98,6 +98,33 @@ class TestOauthToken:
         with patch("urllib.request.urlopen", side_effect=err), pytest.raises(ReauthNeeded):
             _oauth_token(_valves(), code=None)
 
+    # @unit
+    # Scenario: T1-3 oauth reject message branches on code presence
+    #   Given the real _oauth_token function (unpatched)
+    #   And a mocked urllib.request.urlopen that raises HTTPError(code=400)
+    #   When _oauth_token is called with code="some-auth-code" (code present)
+    #   Then the raised ReauthNeeded message contains "authorization code"
+    #   And the raised ReauthNeeded message does NOT contain "stale"
+    #   # And when _oauth_token is called with code=None (code absent)
+    #   # Then the raised ReauthNeeded message equals "Google rejected the grant - stored credential is stale"
+    @pytest.mark.parametrize(
+        "code",
+        ["some-auth-code", None],
+        ids=["code_present", "code_absent"],
+    )
+    def test_reauth_message_branches_on_code_presence(self, code):
+        err = urllib.error.HTTPError(
+            "https://oauth2.googleapis.com/token", 400, "err", Message(), io.BytesIO(b'{"error":"invalid_grant"}')
+        )
+        with patch("urllib.request.urlopen", side_effect=err), pytest.raises(ReauthNeeded) as exc_info:
+            _oauth_token(_valves(), code=code)
+        msg = str(exc_info.value)
+        if code:
+            assert "authorization code" in msg
+            assert "stale" not in msg
+        else:
+            assert msg == "Google rejected the grant - stored credential is stale"
+
     def test_other_http_error_propagates(self):
         err = urllib.error.HTTPError(
             "https://oauth2.googleapis.com/token", 500, "boom", Message(), io.BytesIO(b"server error")

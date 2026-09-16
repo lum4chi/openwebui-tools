@@ -77,6 +77,22 @@ class TestAuth:
         assert "new-refresh" in result
         assert "google_refresh_token" in result
 
+    # @unit
+    # Scenario: T1-2 finish_auth reauth pass-through
+    #   Given a Tools() with OAuth valves set (google_client_id, google_client_secret)
+    #   And a mocked _oauth_token that raises ReauthNeeded (simulating 400/401 reject)
+    #   When finish_auth(code="some-auth-code") is called
+    #   Then the returned string starts with "REAUTH_NEEDED"
+    #   And the returned string contains "Fix:"
+    async def test_finish_auth_reauth_pass_through(self):
+        t = Tools()
+        t.valves.google_client_id = "client-id"
+        t.valves.google_client_secret = "client-secret"
+        with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("simulated")):
+            result = await t.finish_auth("some-auth-code")
+        assert result.startswith("REAUTH_NEEDED")
+        assert "Fix:" in result
+
     # T0-5 (edge): finish_auth without a code errors without calling the token seam
     async def test_finish_auth_without_code(self, tools):
         with patch("youtube_manager._oauth_token"):

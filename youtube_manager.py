@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.1.0
+version: 1.2.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -679,7 +679,7 @@ def _resolve_api_method(service, path: str):
     return resource
 
 
-def _data_api_request(valves, method: str, params: dict) -> dict:
+def _data_api_execute(valves, method: str, params: dict) -> bytes:
     token = _oauth_token(valves)
     service = discovery.build(
         "youtube",
@@ -695,7 +695,25 @@ def _data_api_request(valves, method: str, params: dict) -> dict:
         if mapped:
             raise mapped from err
         raise
-    return json.loads(result) if isinstance(result, (bytes, str)) else result
+    return result
+
+
+def _decode_api_response(raw: bytes | str) -> dict:
+    if not isinstance(raw, (bytes, str)):
+        return raw  # already-parsed payload (e.g. mock dict) — pass through untouched
+    text = raw.decode() if isinstance(raw, bytes) else raw
+    if not text.strip():
+        raise ValueError("YouTube API returned an empty or non-JSON response (transient); retry the operation.")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as err:
+        raise ValueError(
+            "YouTube API returned an empty or non-JSON response (transient); retry the operation."
+        ) from err
+
+
+def _data_api_request(valves, method: str, params: dict) -> dict:
+    return _decode_api_response(_data_api_execute(valves, method, params))
 
 
 def _ytdlp_extract(url: str, extra: dict | None = None) -> dict:

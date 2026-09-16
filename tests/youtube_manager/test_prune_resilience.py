@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from youtube_manager import NOTE_FEEDBACK, NOTE_STATE, QuotaError, parse_digest_state
+from youtube_manager import NOTE_FEEDBACK, NOTE_STATE, QuotaError, _decode_api_response, parse_digest_state
 
 from .conftest import (
     DIGEST_PLAYLIST_ID,
@@ -148,3 +148,65 @@ class TestDefaultPlaylistsNeverTouched:
         else:
             assert [p["id"] for m, p in calls if m == "playlistItems.delete"] == ["plA"]
             assert "playlistItems.insert" not in methods
+
+
+class TestPruneApiDecodeGuard:
+    """B3: prune_playlist guards a transient empty/non-JSON Data API response behind a clean retryable error."""
+
+    # @unit
+    # Scenario: T2-1 no prior state -> clean early return
+    #   Given no prior digest-state (no tracked items)
+    #   When prune_playlist runs
+    #   Then it returns "OK — nothing to prune (no tracked items)"
+    #   And no Data API call is made
+    async def test_no_prior_state_clean_early_return(self, tools, monkeypatch, fake_store):
+        def boom(valves, method, params):
+            raise AssertionError("no Data API call expected in the empty-state early return")
+
+        monkeypatch.setattr("youtube_manager._data_api_execute", boom)
+
+        result = await tools.prune_playlist()
+
+        assert result == "OK — nothing to prune (no tracked items)"
+
+    # @unit
+    # Scenario: T2-2 transient empty Data API response -> clean retryable error
+    #   Given prior state with one tracked item and a resolved playlist id
+    #   And the Data API transport returns a transient empty/blank body
+    #   When prune_playlist runs
+    #   Then it returns "Local Error: YouTube API returned an empty or non-JSON response (transient); retry the operation."
+    #   And the message does NOT surface the raw "Expecting value" JSON decode detail
+    async def test_transient_empty_api_clean_error(self, tools, monkeypatch, fake_store):
+        seed_state(fake_store, {VID_A: (days_ago(10), "Video A")}, playlist_id=PL)
+        monkeypatch.setattr("youtube_manager._data_api_execute", lambda valves, method, params: b"")
+
+        result = await tools.prune_playlist()
+
+        assert (
+            result
+            == "Local Error: YouTube API returned an empty or non-JSON response (transient); retry the operation."
+        )
+        assert "Expecting value" not in result
+
+    # @unit
+    # Scenario: T2-3 _decode_api_response guard (direct unit)
+    #   Given a raw Data API payload
+    #   When _decode_api_response runs
+    #   Then empty bytes, whitespace bytes, and non-JSON bytes raise ValueError("empty or non-JSON ...")
+    #   And valid JSON bytes parse to the expected dict
+    @pytest.mark.parametrize(
+        ("raw", "expect"),
+        [
+            (b"", ValueError),
+            (b"   \n\t  ", ValueError),
+            (b"not json at all", ValueError),
+            (b'{"a": 1}', {"a": 1}),
+        ],
+        ids=["empty", "whitespace", "non_json", "valid_json"],
+    )
+    def test_decode_api_response_guard(self, raw, expect):
+        if expect is ValueError:
+            with pytest.raises(ValueError, match="empty or non-JSON"):
+                _decode_api_response(raw)
+        else:
+            assert _decode_api_response(raw) == expect

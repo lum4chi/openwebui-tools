@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.2.0
+version: 1.2.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -1097,6 +1097,9 @@ class Tools:
                 if candidates is not None:
                     batches.append(candidates)
                     source_counts[source] = len(candidates)
+        else:
+            notes.append("watch_later skipped: OAuth not configured")
+            notes.append("subscriptions skipped: OAuth not configured")
         return batches, source_counts, notes, reauth_reasons
 
     async def digest(self) -> str:

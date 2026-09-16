@@ -53,7 +53,7 @@ def _by_url():
 
 
 def _api_fake(monkeypatch, video_ids=("wl1",)):
-    """Route _data_api_request on the watch_later path (OAuth is set in the tools fixture)."""
+    """Route _data_api_request on the watch_later + subscriptions paths (OAuth is set in the tools fixture)."""
     details = {
         "wl1": {
             "id": "wl1",
@@ -66,7 +66,49 @@ def _api_fake(monkeypatch, video_ids=("wl1",)):
                 "publishedAt": "2026-09-01T12:00:00Z",
             },
             "contentDetails": {"duration": "PT2M35S"},
-        }
+        },
+        "rec1": {
+            "id": "rec1",
+            "snippet": {
+                "title": "rec1 title",
+                "channelId": "ch-rec",
+                "channelTitle": "Ch A",
+                "publishedAt": "2026-09-10T00:00:00Z",
+                "viewCount": "5000",
+            },
+            "contentDetails": {"duration": "PT5M"},
+        },
+        "rec2": {
+            "id": "rec2",
+            "snippet": {
+                "title": "rec2 title",
+                "channelId": "ch-rec",
+                "channelTitle": "Ch B",
+                "publishedAt": "2026-09-09T00:00:00Z",
+                "viewCount": "1200000",
+            },
+            "contentDetails": {"duration": "PT1H"},
+        },
+        "rec3": {
+            "id": "rec3",
+            "snippet": {
+                "title": "rec3 title",
+                "channelId": "ch-rec",
+                "channelTitle": "Ch A",
+                "publishedAt": "2026-09-08T00:00:00Z",
+            },
+            "contentDetails": {"duration": "PT15M"},
+        },
+        # rec4 has no contentDetails -> duration_sec None -> excluded from band counts
+        "rec4": {
+            "id": "rec4",
+            "snippet": {
+                "title": "rec4 title",
+                "channelId": "ch-rec",
+                "channelTitle": "Ch B",
+                "publishedAt": "2026-09-07T00:00:00Z",
+            },
+        },
     }
 
     def fake(valves, method, params):
@@ -76,15 +118,17 @@ def _api_fake(monkeypatch, video_ids=("wl1",)):
             return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
         if method == "videos.list":
             return {"items": [details[i] for i in params["ids"].split(",")]}
+        if method == "subscriptions.list":
+            return {"items": []}  # no channels -> source attempted, yields 0 candidates
         raise AssertionError(f"unexpected API method {method}")
 
     monkeypatch.setattr(youtube_manager, "_data_api_request", fake)
 
 
-def _seed(monkeypatch, fake_store, by_url):
+def _seed(monkeypatch, fake_store, by_url, video_ids=("wl1",)):
     """Seed both test doubles + the two state docs the digest reads."""
     monkeypatch.setattr(youtube_manager, "_ytdlp_extract", lambda url, extra=None: {"entries": by_url.get(url, [])})
-    _api_fake(monkeypatch)
+    _api_fake(monkeypatch, video_ids)
     fake_store.docs[NOTE_TASTE] = sample_taste_profile(TOPICS, [])
     fake_store.docs[NOTE_FEEDBACK] = sample_feedback_log(ROWS)
 
@@ -98,9 +142,8 @@ class TestAggregates:
     #   When digest runs
     #   Then the payload embeds the taste profile text
     #   And it reports total counts per decision
-    #   And it reports skip counts per duration band for the candidates in this digest
-    #   And it reports per-channel watch/listen vs skip counts
-    #   And it reports a Sources section with a per-topic `search:<topic>` count plus a `watch_later` count
+    #   And it reports no band/channel rows when no log row references a candidate in this digest
+    #   And it reports a Sources section with `watch_later` and `subscriptions` counts (no `search:<topic>` entries)
     #   And the same inputs always produce the same numbers (deterministic)
     async def test_payload_includes_stats_and_sources(self, tools, monkeypatch, fake_store, _by_url):
         _seed(monkeypatch, fake_store, _by_url)
@@ -111,16 +154,44 @@ class TestAggregates:
         assert "- postgres" in payload
         assert "watched=1" in payload
         assert "listened=1" in payload
-        assert "skipped=6" in payload  # ghost row counts in totals...
-        assert "<10m=2" in payload  # ...but only digest candidates count per band
-        assert "10-30m=1" in payload
-        assert ">30m=1" in payload  # rec4 (no duration) and ghost excluded from bands
-        assert "Ch A (watch/listen 1, skip 3)" in payload  # rec1 watched + 2 skips, rec3 skip
-        assert "Ch B (watch/listen 1, skip 2)" in payload  # rec2 listened + skip, rec4 skip
+        assert "skipped=6" in payload  # ghost row counts in totals
+        # no band/channel rows: none of the log rows references a candidate in this digest
+        assert "skips by duration" not in payload
+        assert "channels:" not in payload
         # per-source candidate counts (pre-merge, every attempted source)
-        assert "search:rust async=2" in payload
-        assert "search:postgres=2" in payload
         assert "watch_later=1" in payload
+        assert "subscriptions=0" in payload
+        assert "search:" not in payload  # model-driven digest: no per-topic search fan-out
+
+    # @unit
+    # Scenario: (AC-1 fallout — no dedicated BDD id) feedback stats when log rows intersect digest candidates
+    #   Given a taste-profile document exists and the feedback-log has watched/listened/skipped rows
+    #   And the digest candidates (watch_later) include the videos referenced by the log
+    #   When digest runs
+    #   Then it reports skip counts per duration band for the candidates in this digest
+    #   And it reports per-channel watch/listen vs skip counts
+    #   And it renders candidate views in human units (K / M)
+    async def test_band_and_channel_stats_when_candidates_intersect_log(self, tools, monkeypatch, fake_store, _by_url):
+        _seed(monkeypatch, fake_store, _by_url, video_ids=("wl1", "rec1", "rec2", "rec3", "rec4"))
+
+        payload = await tools.digest()
+
+        # bands: only skipped rows whose video is a candidate in this digest, by duration
+        assert "<10m=2" in payload  # rec1 skipped x2, 300s
+        assert "10-30m=1" in payload  # rec3 skipped x1, 900s
+        assert ">30m=1" in payload  # rec2 skipped x1, 3600s; rec4 (no duration) excluded
+        # channels: all rows for candidate videos, watched/listened vs skipped
+        assert "Ch A (watch/listen 1, skip 3)" in payload  # rec1 watched 1 + 2 skips, rec3 skip 1
+        assert "Ch B (watch/listen 1, skip 2)" in payload  # rec2 listened 1 + skip, rec4 skip
+        assert "watched=1" in payload
+        assert "listened=1" in payload
+        assert "skipped=6" in payload  # totals span every log row incl. the ghost
+        # candidate views rendered in human units
+        assert "5K views" in payload  # rec1 viewCount 5000
+        assert "1.2M views" in payload  # rec2 viewCount 1200000
+        # sources: model-driven digest, watch_later carries the whole candidate set
+        assert "watch_later=5" in payload
+        assert "search:" not in payload
 
     # Scenario T1-6 (determinism): same inputs -> identical payload
     async def test_deterministic(self, tools, monkeypatch, fake_store, _by_url):
@@ -130,4 +201,3 @@ class TestAggregates:
         second = await tools.digest()
 
         assert first == second  # same inputs always produce the same numbers
-        assert "search:rust async=2" in first  # per-topic source counts are part of the payload

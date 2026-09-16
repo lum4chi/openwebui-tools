@@ -16,33 +16,32 @@ class TestTaste:
 
     # @unit
     # Scenario: T1-10 parse taste profile
-    #   Given a taste-profile doc with a "## Topics" bullet list and a "## Avoid" bullet list
+    #   Given a taste-profile doc with a "## Avoid" bullet list
     #   When parse_taste_profile is called
-    #   Then topics is the Topics bullets in order
-    #   And disliked is the lowercased Avoid bullets
+    #   Then disliked is the lowercased Avoid bullets
     #   And text is the raw markdown
-    #   And when the input is None or empty
-    #   Then it returns an empty profile (no topics, no disliked)
-    #   And when there is no "## Topics" heading it falls back to the first bullet list in the doc
+    #   And no per-topic field is parsed (the raw text reaches the LLM verbatim instead)
+    #   And when the input is None or empty it returns an empty profile (no disliked)
     @pytest.mark.parametrize(
-        ("md", "expect_topics", "expect_disliked"),
+        ("md", "expect_disliked"),
         [
-            (DOC, ["rust async", "postgres"], {"cat videos", "clickbait"}),
+            (DOC, {"cat videos", "clickbait"}),
             # None / empty -> empty profile
-            (None, [], set()),
-            ("", [], set()),
-            ("   \n  ", [], set()),
-            # no "## Topics" heading -> first bullet list in the doc
-            ("- rust\n- postgres\n", ["rust", "postgres"], set()),
-            # "## Topics" heading present but empty -> falls back to first bullet list (none before first ##)
-            ("## Topics\n\n## Avoid\n- cat\n", [], {"cat"}),
+            (None, set()),
+            ("", set()),
+            ("   \n  ", set()),
+            # doc with no heading -> only the raw text is asserted
+            ("- rust\n- postgres\n", set()),
+            # "## Avoid" heading present -> disliked parsed; no per-topic field
+            ("## Topics\n\n## Avoid\n- cat\n", {"cat"}),
+            # second heading after the target section -> collection stops (break)
+            ("## Avoid\n- cat\n\n## Topics\n- x\n", {"cat"}),
         ],
-        ids=["topics_and_avoid", "none", "empty", "whitespace", "fallback_first_list", "empty_topics_heading"],
+        ids=["topics_and_avoid", "none", "empty", "whitespace", "no_heading", "avoid_heading", "heading_after_target"],
     )
-    def test_parse_profile(self, md, expect_topics, expect_disliked):
+    def test_parse_profile(self, md, expect_disliked):
         profile = parse_taste_profile(md)
 
-        assert profile.topics == expect_topics
         assert profile.disliked == expect_disliked
         assert profile.text == (md or "")
 

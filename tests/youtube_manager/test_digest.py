@@ -1,4 +1,4 @@
-"""T1 digest payload: taste-driven candidates (T1-1), failure handling (T1-7), id list (T1-8), first-run guidance (T1-9)."""
+"""T1 digest payload: raw profile verbatim (T1-1), watch_later reauth (T1-7), id list (T1-8), first-run guidance (T1-9)."""
 
 import youtube_manager
 from youtube_manager import NOTE_TASTE, ReauthNeeded
@@ -87,94 +87,69 @@ class TestDigest:
     """digest() payload assembly."""
 
     # @unit
-    # Scenario: T1-1 taste-driven digest
-    #   Given a taste-profile doc with topics ["rust async", "postgres"] and the search seam returns entries per topic
-    #   When the tool runs digest
-    #   Then each topic's video ids appear in the candidates section
-    #   And the payload contains the title, channel, duration, views and published date for each candidate
-    #   And the Sources section reports a count per topic (a `search:<topic>` bucket per topic) plus a `watch_later` bucket
-    async def test_taste_driven_candidates(self, tools, monkeypatch, fake_store):
-        fake_store.docs[NOTE_TASTE] = sample_taste_profile(TOPICS, [])
-        ytdlp_calls = _ytdlp_fake(
-            monkeypatch,
-            {
-                "ytsearch20:rust async": [
-                    _entry("rust1", duration=3661, view_count=2_500_000),
-                    _entry("rust2", view_count=15_200),
-                ],
-                "ytsearch20:postgres": [_entry("pg1"), _entry("pg2")],
-            },
+    # Scenario: T1-1 raw profile verbatim in the digest prompt
+    #   Given a taste-profile note containing a multi-section markdown profile (Topics + Context + Avoid)
+    #   When digest() is run with OAuth unset (watch_later/subscriptions skipped, search removed)
+    #   Then the raw profile text is present verbatim in the digest payload prompt
+    #   And no parsed topic string is re-emitted as a candidate source label
+    async def test_raw_profile_verbatim(self, tools, monkeypatch, fake_store):
+        profile = (
+            "# Taste profile\n"
+            "\n"
+            "## Topics\n"
+            "- rust async\n"
+            "- postgres\n"
+            "\n"
+            "## Context\n"
+            "- I only watch deep dives\n"
+            "\n"
+            "## Avoid\n"
+            "- cat videos"
         )
-        _api_fake(monkeypatch, ["wl1"])
+        fake_store.docs[NOTE_TASTE] = profile
+        _clear_oauth(tools)  # watch_later/subscriptions skipped; search removed from the digest
+        _api_fake(monkeypatch, [])  # inert: OAuth unset, no Data API calls
+        ytdlp_calls = _ytdlp_fake(monkeypatch, {})  # no search seam is called
 
         payload = await tools.digest()
 
-        for video_id in ("rust1", "rust2", "pg1", "pg2"):
-            assert f"Title {video_id}" in payload
-            assert f"Channel {video_id}" in payload
-            assert video_id in payload
-        assert "Detail title wl1" in payload  # watch-later candidate enriched via the Data API
-        assert "wl1" in payload
-        assert "=== Candidates (5) ===" in payload
-        assert "1:01:01" in payload  # 3661s duration
-        assert "2.5M views" in payload  # 2_500_000 views
-        assert "15K views" in payload  # 15_200 views
-        assert "12:34" in payload  # 754s duration
-        assert "980 views" in payload
-        assert "2026-09-10" in payload  # published date (20260910 upload_date)
-        # Sources section: a search:<topic> bucket per topic plus a watch_later bucket
-        assert "search:rust async=2" in payload
-        assert "search:postgres=2" in payload
-        assert "watch_later=1" in payload
-        assert ytdlp_calls == ["ytsearch20:rust async", "ytsearch20:postgres"]
+        assert profile in payload  # the raw profile text is present verbatim in the prompt
+        assert "search:" not in payload  # no parsed topic string is re-emitted as a candidate source label
+        assert "=== Candidates (0) ===" in payload  # watch_later/subscriptions skipped, search removed
+        assert ytdlp_calls == []  # no ytsearch runs
 
     # @unit
-    # Scenario: T1-8 candidate id list
-    #   Given N distinct candidates
+    # Scenario: T1-2 no per-topic search fan-out
+    #   Given the same profile with bullet topics ("rust async", "postgres")
+    #   When digest() is run
+    #   Then no candidate source is labeled "search:<topic>"
+    #   And no ytsearch20:<profile-topic> call is captured in the ytdlp recorder
+    async def test_no_topic_search_fanout(self, tools, monkeypatch, fake_store):
+        _clear_oauth(tools)
+        fake_store.docs[NOTE_TASTE] = sample_taste_profile(["rust async", "postgres"], [])
+        ytdlp_calls = _ytdlp_fake(monkeypatch, {})  # no search seam; nothing to serve
+        _api_fake(monkeypatch, [])  # inert: OAuth unset, no Data API calls
+
+        payload = await tools.digest()
+
+        assert "search:" not in payload  # no candidate source is labeled "search:<topic>"
+        assert ytdlp_calls == []  # no ytsearch20:<profile-topic> call is captured
+
+    # @unit
+    # Scenario: T1-8 candidate id list (post-B1: watch_later/subscriptions only, no search)
+    #   Given OAuth unset so watch_later/subscriptions are skipped and per-topic search is removed
     #   When digest renders the payload
-    #   Then a "Candidate IDs:" line lists exactly the N video ids
+    #   Then a "Candidate IDs:" line is empty — no candidates
     async def test_candidate_id_list(self, tools, monkeypatch, fake_store):
-        _clear_oauth(tools)  # watch_later off -> candidates come from the topic searches only
+        _clear_oauth(tools)  # watch_later/subscriptions skipped; search removed
         fake_store.docs[NOTE_TASTE] = sample_taste_profile(TOPICS, [])
         _api_fake(monkeypatch, [])  # inert: OAuth cleared, no API calls expected
-        _ytdlp_fake(
-            monkeypatch,
-            {
-                "ytsearch20:rust async": [_entry("r1"), _entry("r2")],
-                "ytsearch20:postgres": [_entry("p1")],
-            },
-        )
+        _ytdlp_fake(monkeypatch, {})  # no search seam; nothing to serve
 
         payload = await tools.digest()
 
         ids_line = next(line for line in payload.splitlines() if line.startswith("Candidate IDs:"))
-        assert ids_line == "Candidate IDs: r1, r2, p1"
-
-    # @unit
-    # Scenario: T1-7 failure handling
-    #   Given the "rust async" topic search fails with a bot-check message but the "postgres" topic succeeds
-    #   When digest runs
-    #   Then candidates from the postgres topic are still returned
-    #   And the payload contains a "source rust async failed: bot_check" note
-    #   And the result is NOT a REAUTH_NEEDED string
-    #   And when watch_later (OAuth set) raises an OAuth invalid_grant
-    #   Then the result starts with "REAUTH_NEEDED"
-    #   And no exception propagates
-    async def test_partial_failure_note(self, tools, monkeypatch, fake_store):
-        _clear_oauth(tools)
-        fake_store.docs[NOTE_TASTE] = sample_taste_profile(TOPICS, [])
-        _api_fake(monkeypatch, [])  # inert: OAuth cleared, no API calls expected
-        _ytdlp_fake(
-            monkeypatch,
-            {"ytsearch20:postgres": [_entry("pg1")]},
-            raise_for={"ytsearch20:rust async": Exception("Sign in to confirm you're not a bot")},
-        )
-
-        payload = await tools.digest()  # no exception propagates
-
-        assert "pg1" in payload  # candidates from the postgres topic are still returned
-        assert "source rust async failed: bot_check" in payload
-        assert not payload.startswith("REAUTH_NEEDED")  # an anonymous search failure never reauths
+        assert ids_line == "Candidate IDs: (none)"
 
     # Scenario T1-7 (watch_later variant): OAuth invalid_grant on the watch_later source
     async def test_watch_later_reauth(self, tools, monkeypatch, fake_store):

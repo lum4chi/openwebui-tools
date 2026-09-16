@@ -2,7 +2,7 @@
 title: YouTube Manager
 author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
-description: Personal YouTube digest - gathers candidates from the user's watch later, subscribed channels, and search via anonymous yt-dlp and the YouTube Data API, and tracks state in Open WebUI Notes.
+description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
 version: 1.1.0
 licence: MIT
@@ -100,7 +100,6 @@ class FeedbackStats:
 
 @dataclass
 class TasteProfile:
-    topics: list[str]
     disliked: set[str]
     text: str
 
@@ -380,20 +379,6 @@ def merge_candidates(lists: list[list[Candidate]]) -> list[Candidate]:
     return list(merged.values())
 
 
-def _topic_batch(topic: str, source_counts: dict[str, int], notes: list[str]) -> list[Candidate]:
-    """One digest topic search; a failure is a note (never a reauth), the count is recorded pre-merge."""
-    label = f"search:{topic}"
-    candidates: list[Candidate] = []
-    try:
-        entries = _ytdlp_extract(f"ytsearch{MAX_PER_SOURCE}:{topic}").get("entries") or []
-    except Exception as err:
-        notes.append(f"source {topic} failed: {_failure_reason(err)}")
-    else:
-        candidates = candidates_from_ytdlp(entries, label)
-    source_counts[label] = len(candidates)
-    return candidates
-
-
 def _bullets_under(md: str, heading: str) -> list[str] | None:
     """Bullets under a heading (None when the heading is absent, [] when it has none)."""
     bullets: list[str] = []
@@ -410,22 +395,12 @@ def _bullets_under(md: str, heading: str) -> list[str] | None:
     return bullets if found else None
 
 
-def _first_bullet_list(md: str) -> list[str]:
-    lines = [line.strip() for line in md.splitlines()]
-    start = next((i for i, line in enumerate(lines) if line.startswith("- ")), len(lines))
-    stop = next((i for i in range(start, len(lines)) if not lines[i].startswith("- ")), len(lines))
-    return [lines[i][2:].strip() for i in range(start, stop)]
-
-
 def parse_taste_profile(md: str | None) -> TasteProfile:
     text = md or ""
     if not text.strip():
-        return TasteProfile([], set(), text)
-    topics = _bullets_under(text, "## Topics")
-    if topics is None:
-        topics = _first_bullet_list(text)
+        return TasteProfile(set(), text)
     disliked = {bullet.lower() for bullet in _bullets_under(text, "## Avoid") or []}
-    return TasteProfile(topics, disliked, text)
+    return TasteProfile(disliked, text)
 
 
 def filter_disliked(candidates: list[Candidate], disliked: set[str]) -> tuple[list[Candidate], int]:
@@ -512,7 +487,7 @@ def _candidates_section(candidates: list[Candidate]) -> list[str]:
 
 def _taste_lines(taste: TasteProfile | None) -> list[str]:
     lines = ["=== Taste profile ==="]
-    if taste is None or not taste.topics:
+    if taste is None or not taste.text.strip():
         lines.append("No taste profile yet")
         lines.append("Starter template:")
         lines.append(TASTE_STARTER)
@@ -1089,11 +1064,11 @@ class Tools:
         return _candidates_payload(merge_candidates(batches), notes)
 
     def _digest_sources(self, taste: TasteProfile) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
-        """Per-topic search + watch_later + subscriptions: (batches, pre-merge source counts, notes, reauth reasons)."""
+        """Watch_later + subscriptions: (batches, pre-merge source counts, notes, reauth reasons)."""
         notes: list[str] = []
         reauth_reasons: set[str] = set()
         source_counts: dict[str, int] = {}
-        batches = [_topic_batch(topic, source_counts, notes) for topic in taste.topics]
+        batches: list[list[Candidate]] = []
         if _oauth_set(self.valves):
             gated = (
                 ("watch_later", lambda: self._fetch_watch_later(MAX_PER_SOURCE)),

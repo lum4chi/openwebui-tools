@@ -963,6 +963,18 @@ def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: Exce
     return "\n".join(lines)
 
 
+def _note_watch_later(notes: list[str] | None, reason: str) -> None:
+    """Append a ``watch_later skipped (<reason>)`` note (None-safe for the digest path)."""
+    if notes is not None:
+        notes.append(f"watch_later skipped ({reason})")
+
+
+def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], resolved: list[dict]) -> None:
+    """Note when the playlist listed items but none resolved in the videos.list details."""
+    if video_ids and not resolved:
+        _note_watch_later(notes, "details unavailable")
+
+
 class Tools:
     def __init__(self):
         self.valves = self.Valves()
@@ -1042,11 +1054,12 @@ class Tools:
                 details[item["id"]] = item
         return details
 
-    def _fetch_watch_later(self, max_per_source: int) -> list[Candidate]:
+    def _fetch_watch_later(self, max_per_source: int, notes: list[str] | None = None) -> list[Candidate]:
         channel = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "mine": "true"})
         item = (channel.get("items") or [{}])[0]
         playlist_id = ((item.get("contentDetails") or {}).get("relatedPlaylists") or {}).get("watchLater")
         if not playlist_id:
+            _note_watch_later(notes, "no playlist resolved")
             return []
         resp = _data_api_request(
             self.valves,
@@ -1059,7 +1072,9 @@ class Tools:
             if vid:
                 video_ids.append(vid)
         details = self._video_details(video_ids)
-        return candidates_from_api([details[vid] for vid in video_ids if vid in details], "watch_later")
+        resolved = [details[vid] for vid in video_ids if vid in details]
+        _note_details_unavailable(notes, video_ids, resolved)
+        return candidates_from_api(resolved, "watch_later")
 
     def _list_subscription_channels(self) -> list[dict]:
         channels: list[dict] = []
@@ -1112,7 +1127,7 @@ class Tools:
             if not _oauth_set(self.valves):
                 notes.append("watch_later skipped: OAuth not configured")
                 return []
-            return self._fetch_watch_later(max_per_source)
+            return self._fetch_watch_later(max_per_source, notes)
         if source == "subscriptions":
             if not _oauth_set(self.valves):
                 notes.append("subscriptions skipped: OAuth not configured")

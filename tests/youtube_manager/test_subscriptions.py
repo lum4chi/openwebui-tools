@@ -238,7 +238,7 @@ class TestFetchSubscriptions:
     # Given 3 subscribed channels and channel #2's RSS raising urllib.error.URLError
     # When _fetch_subscriptions(20, notes) runs
     # Then candidates from channels #1 and #3 are returned and channel #2's are absent
-    # And notes contains exactly one entry starting "subscriptions channel <name2> failed: "
+    # And the single note is the deduped "1 channel(s) failed: transient" line (per-channel isolation preserved)
     def test_per_channel_failure_isolated(self, tools, monkeypatch):
         channels = [_channel(i) for i in range(3)]
         _stub_api(monkeypatch, lambda params: {"items": channels})
@@ -254,7 +254,7 @@ class TestFetchSubscriptions:
 
         assert [c.video_id for c in cands] == ["V0", "V2"]
         assert len(notes) == 1
-        assert notes[0].startswith("subscriptions channel Chan 1 failed: ")
+        assert notes[0] == "1 channel(s) failed: transient"
 
     # T1-5 · workflow · provenance: research #5 + research doc A1 (subscriptionNotFound pitfall)
     # Given _data_api_request raises a raw HttpError with status 404 for subscriptions.list

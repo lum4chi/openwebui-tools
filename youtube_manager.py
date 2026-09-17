@@ -151,6 +151,8 @@ def classify_feed_error(err: Exception) -> str:
         return "bot_check"
     if "quota" in msg:
         return "quota"
+    if isinstance(err, urllib.error.HTTPError):
+        return f"HTTP {err.code}: {err.reason}"
     status = _http_status(err)
     if status is not None:
         if status in (401, 403):
@@ -1037,23 +1039,27 @@ class Tools:
             notes.append(f"subscriptions list failed: {_failure_reason(err)}")
             return []
         entries: list[dict] = []
+        failures: dict[str, int] = {}
         for channel in channels:
-            self._collect_channel(channel, entries, notes)
+            reason = self._collect_channel(channel, entries)
+            if reason is not None:
+                failures[reason] = failures.get(reason, 0) + 1
+        for reason, count in failures.items():
+            notes.append(f"{count} channel(s) failed: {reason}")
         entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
         return candidates_from_rss(entries[:max_per_source], "subscriptions")
 
-    def _collect_channel(self, channel: dict, entries: list[dict], notes: list[str]) -> None:
+    def _collect_channel(self, channel: dict, entries: list[dict]) -> str | None:
         snippet = channel.get("snippet") or {}
         channel_id = snippet.get("channelId") or ""
-        name = snippet.get("channelTitle") or channel_id
         try:
             parsed = _parse_rss(_fetch_rss(_rss_url(channel_id)))
         except Exception as err:  # per-channel isolation: one bad RSS feed must not sink the rest
-            notes.append(f"subscriptions channel {name} failed: {_failure_reason(err)}")
-            return
+            return _failure_reason(err)
         for entry in parsed:
             entry["channel_id"] = channel_id
             entries.append(entry)
+        return None
 
     def _gather_one(self, source: str, max_per_source: int, search_query: str, notes: list[str]) -> list[Candidate]:
         if source == "watch_later":

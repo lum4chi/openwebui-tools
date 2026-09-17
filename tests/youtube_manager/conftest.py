@@ -213,5 +213,5 @@ def api_fake(
             return {}
         raise AssertionError(f"unexpected API method {method}")
 
-    monkeypatch.setattr("youtube_manager._data_api_request", fake)
+    monkeypatch.setattr("youtube_manager._data_api_execute", fake)
     return calls

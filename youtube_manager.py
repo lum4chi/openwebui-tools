@@ -719,6 +719,52 @@ def _decode_api_response(raw: bytes | str) -> dict:
         ) from err
 
 
+def _as_text(raw: bytes | str) -> str:
+    """Decode a raw Data API body to text (bytes -> utf-8; str passthrough)."""
+    return raw.decode() if isinstance(raw, bytes) else raw
+
+
+def _parse_delete_response(raw: bytes | str) -> dict:
+    """Lenient parse of a playlistItems.delete body: empty/invalid -> {} (treated as applied).
+
+    Unlike the strict read-path ``_decode_api_response`` (which raises on an empty or
+    non-JSON body), a delete is fire-and-forget: a 200 with no body, or a body that is
+    not JSON, still means the item was removed server-side.
+    """
+    if not isinstance(raw, (bytes, str)):
+        return raw  # already-parsed payload (e.g. mock dict) — pass through untouched
+    text = _as_text(raw)
+    if not text.strip():
+        return {}  # 200-no-content: the normal success shape
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}  # invalid body: still applied
+
+
+def _is_silent_delete(text: str) -> bool:
+    """True when a delete body needs no note: empty (200-no-content) or valid JSON."""
+    if not text.strip():
+        return True
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _note_non_json_delete(raw: bytes | str, notes: list[str] | None) -> None:
+    """Append one deduped note when a delete body is non-empty but not valid JSON."""
+    if not isinstance(raw, (bytes, str)) or notes is None:
+        return
+    text = _as_text(raw)
+    if _is_silent_delete(text):
+        return
+    msg = "note: non-JSON delete response body (treated as applied): " + text[:80]
+    if msg not in notes:
+        notes.append(msg)
+
+
 def _data_api_request(valves, method: str, params: dict) -> dict:
     return _decode_api_response(_data_api_execute(valves, method, params))
 
@@ -1310,8 +1356,8 @@ class Tools:
         listed = self._listed_items(playlist_id, tool_added)
         stale = len(tool_added) - len({item.video_id for item in listed})
         plan = _removal_plan(listed, rows, self.valves.digest_max_items, self.valves.digest_max_age_days)
-        removed, failure = self._delete_planned(plan)
         notes: list[str] = []
+        removed, failure = self._delete_planned(plan, notes)
         if removed or stale:
             self._write_pruned_state(store, state, listed, removed, stale, notes)
         kept = len(tool_added) - stale - len(removed)
@@ -1343,12 +1389,14 @@ class Tools:
         return items
 
     def _delete_planned(
-        self, plan: list[tuple[PruneItem, str]]
+        self, plan: list[tuple[PruneItem, str]], notes: list[str] | None = None
     ) -> tuple[list[tuple[PruneItem, str]], Exception | None]:
         removed: list[tuple[PruneItem, str]] = []
         for item, reason in plan:
             try:
-                _data_api_request(self.valves, "playlistItems.delete", {"id": item.item_id})
+                raw = _data_api_execute(self.valves, "playlistItems.delete", {"id": item.item_id})
+                _parse_delete_response(raw)
+                _note_non_json_delete(raw, notes)
             except ReauthNeeded:
                 raise
             except Exception as err:

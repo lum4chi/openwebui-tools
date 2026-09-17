@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.2.2
+version: 1.2.3
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -29,14 +29,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import yt_dlp
 from google.oauth2.credentials import Credentials
 from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient import discovery
 from googleapiclient.errors import HttpError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import dataclasses as pydantic_dataclasses
 
 SCOPE = "https://www.googleapis.com/auth/youtube"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -81,14 +82,18 @@ class Candidate:
     sources: list[str]
 
 
-@dataclass
+@pydantic_dataclasses.dataclass
 class FeedbackEntry:
     date: str
     video_id: str
-    decision: str
+    decision: Literal["watched", "listened", "skipped"]
     title: str
     source: str
     reason: str
+
+    @classmethod
+    def model_json_schema(cls) -> dict[str, Any]:
+        return TypeAdapter(cls).json_schema()
 
 
 @dataclass
@@ -183,7 +188,8 @@ def parse_feedback_log(md: str) -> list[FeedbackEntry]:
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if len(cells) != 6 or cells[2] not in DECISIONS:
             continue
-        entries.append(FeedbackEntry(*cells))
+        decision = cast(Literal["watched", "listened", "skipped"], cells[2])
+        entries.append(FeedbackEntry(cells[0], cells[1], decision, cells[3], cells[4], cells[5]))
     return entries
 
 

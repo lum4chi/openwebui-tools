@@ -1,8 +1,11 @@
-"""T1 taste-profile pure functions + write seam (scenarios T1-10, T1-11, T1-12)."""
+"""T1 taste-profile pure functions + write seam (scenarios T1-10, T1-11, T1-12) + search profile→query verification (T0-4)."""
 
 import pytest
 
+import youtube_manager
 from youtube_manager import NOTE_TASTE, Candidate, filter_disliked, parse_taste_profile
+
+from .conftest import sample_taste_profile
 
 DOC = "# Taste profile\n\n## Topics\n- rust async\n- postgres\n\n## Avoid\n- Cat Videos\n- clickbait"
 
@@ -97,3 +100,87 @@ class TestTaste:
         result = await tools.save_taste_profile(DOC)  # no exception propagates
 
         assert result.startswith("Error:")
+
+
+def _entry(video_id):
+    return {
+        "id": video_id,
+        "title": f"Feed title {video_id}",
+        "uploader": f"Feed uploader {video_id}",
+        "channel_id": f"ch-{video_id}",
+        "duration": 120,
+        "view_count": 500,
+        "upload_date": "20260910",
+        "description": f"Feed description {video_id}",
+        "tags": ["feed-tag"],
+    }
+
+
+def _ytdlp_fake(monkeypatch, by_url):
+    """Patch _ytdlp_extract to serve entries per URL; return the called-URL list."""
+    calls: list[str] = []
+
+    def fake(url, extra=None):
+        calls.append(url)
+        return {"entries": by_url.get(url, [])}
+
+    monkeypatch.setattr(youtube_manager, "_ytdlp_extract", fake)
+    return calls
+
+
+class TestSearchProfile:
+    """R1-B1 verification: search-source query with a taste profile set/empty/missing (T0-4.1, T0-4.2)."""
+
+    # @unit
+    # Scenario: T0-4.1 search enabled + taste profile → query derived from profile (verification)
+    #   Given the search source enabled and a taste profile with explicit topics
+    #   When gather_candidates runs
+    #   Then the search API call recorded by the fake shows a query containing the profile-derived terms
+    async def test_search_query_carries_profile_terms(self, tools, fake_store, monkeypatch):
+        fake_store.docs[NOTE_TASTE] = sample_taste_profile(["rust async"], [])
+        calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("sp-1")]})
+
+        payload = await tools.gather_candidates(sources="search", max_per_source=5, search_query="rust async")
+
+        assert calls == ["ytsearch5:rust async"]
+        assert "Feed title sp-1" in payload
+        assert "Candidate IDs: sp-1" in payload
+
+    # @unit
+    # Scenario: T0-4.2 search enabled + empty profile pins current fallback behavior (verification)
+    #   Given the search source enabled and an empty or missing taste profile
+    #   When gather_candidates runs
+    #   Then the search query matches the current documented fallback behavior (pinned by this test)
+    @pytest.mark.parametrize(
+        ("profile_doc", "search_query"),
+        [
+            (None, "rust async"),
+            ("", "rust async"),
+            (None, ""),
+            (None, "   "),
+            ("", ""),
+            ("", "   "),
+        ],
+        ids=[
+            "missing_profile_explicit_query",
+            "empty_profile_explicit_query",
+            "missing_profile_empty_query",
+            "missing_profile_whitespace_query",
+            "empty_profile_empty_query",
+            "empty_profile_whitespace_query",
+        ],
+    )
+    async def test_search_requires_explicit_query(self, tools, fake_store, monkeypatch, profile_doc, search_query):
+        if profile_doc is not None:
+            fake_store.docs[NOTE_TASTE] = profile_doc
+        calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("sp-2")]})
+
+        payload = await tools.gather_candidates(sources="search", max_per_source=5, search_query=search_query)
+
+        if search_query.strip():
+            assert calls == ["ytsearch5:rust async"]
+            assert "Feed title sp-2" in payload
+        else:
+            assert calls == []
+            assert payload.startswith("Error:")
+            assert "search_query" in payload

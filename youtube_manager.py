@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.2.3
+version: 1.3.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -1006,6 +1006,10 @@ class Tools:
         digest_max_age_days: int = Field(
             default=30, ge=1, description="Policy cap: drop tool-added items older than D days"
         )
+        # source notes verbosity
+        verbose: bool = Field(
+            default=False, description="Include raw HTTP error detail in source notes (off by default)"
+        )
 
     async def check_setup(self) -> str:
         valves = self.valves
@@ -1094,7 +1098,8 @@ class Tools:
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
-        channels.sort(key=lambda item: ((item.get("snippet") or {}).get("publishedAt")) or "", reverse=True)
+        channels.sort(key=lambda item: (item.get("snippet") or {}).get("channelId") or "")
+        channels.sort(key=lambda item: (item.get("snippet") or {}).get("publishedAt") or "", reverse=True)
         return channels[:SUBSCRIPTION_CHANNEL_CAP]
 
     def _fetch_subscriptions(self, max_per_source: int, notes: list[str]) -> list[Candidate]:
@@ -1107,14 +1112,22 @@ class Tools:
             return []
         entries: list[dict] = []
         failures: dict[str, int] = {}
+        ok = 0
         for channel in channels:
             reason = self._collect_channel(channel, entries)
-            if reason is not None:
+            if reason is None:
+                ok += 1
+            else:
                 failures[reason] = failures.get(reason, 0) + 1
-        for reason, count in failures.items():
-            notes.append(f"{count} channel(s) failed: {reason}")
+        self._note_subscription_results(notes, ok, failures)
         entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
         return candidates_from_rss(entries[:max_per_source], "subscriptions")
+
+    def _note_subscription_results(self, notes: list[str], ok: int, failures: dict[str, int]) -> None:
+        notes.append(f"subscriptions: {ok} ok, {sum(failures.values())} failed")
+        if self.valves.verbose:
+            for reason, count in failures.items():
+                notes.append(f"{count} channel(s) failed: {reason}")
 
     def _collect_channel(self, channel: dict, entries: list[dict]) -> str | None:
         snippet = channel.get("snippet") or {}

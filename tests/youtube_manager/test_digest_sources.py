@@ -92,6 +92,7 @@ class TestDigestErrorSurface:
     #   When digest() runs
     #   Then the payload's source notes contain "HTTP 404" (the real status), not a bare "transient"
     async def test_digest_surfaces_real_http_status(self, tools, monkeypatch):
+        tools.valves.verbose = True
         _stub_api(monkeypatch, [_channel(0)])
         _stub_urlopen(monkeypatch, {_rss_url("UC0000"): _http_error(404, "Not Found")})
 

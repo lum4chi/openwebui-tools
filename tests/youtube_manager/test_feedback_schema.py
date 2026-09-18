@@ -84,11 +84,11 @@ class TestFeedbackEntryDecisionEnum:
         assert [e.decision for e in entries] == ["watched", "listened", "skipped"]
 
     # @unit
-    # Scenario: T0-5.6 version bumped to 1.2.3
-    #   Given the tool top docstring
-    #   When it is parsed
-    #   Then version == "1.2.3"
-    def test_version_bumped_to_1_2_3(self):
+    # Scenario: T3-1.V1 tool version is bumped
+    #   Given the source module metadata
+    #   When the tool version is read
+    #   Then the version is "1.3.0"
+    def test_version_bumped_to_1_3_0(self):
         doc = youtube_manager.__doc__ or ""
         version = next(line.split(":", 1)[1].strip() for line in doc.splitlines() if line.startswith("version:"))
-        assert version == "1.2.3"
+        assert version == "1.3.0"

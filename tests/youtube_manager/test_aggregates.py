@@ -152,9 +152,9 @@ class TestAggregates:
 
         assert "- rust async" in payload  # taste profile text embedded (## Topics)
         assert "- postgres" in payload
-        assert "watched=1" in payload
-        assert "listened=1" in payload
-        assert "skipped=6" in payload  # ghost row counts in totals
+        assert "feedback (latest wins): skipped=5" in payload  # latest-wins: 5 of 8 rows survive, all skipped
+        assert "watched=" not in payload
+        assert "listened=" not in payload
         # no band/channel rows: none of the log rows references a candidate in this digest
         assert "skips by duration" not in payload
         assert "channels:" not in payload
@@ -176,16 +176,13 @@ class TestAggregates:
 
         payload = await tools.digest()
 
-        # bands: only skipped rows whose video is a candidate in this digest, by duration
-        assert "<10m=2" in payload  # rec1 skipped x2, 300s
+        # bands: only latest-wins skipped rows whose video is a candidate in this digest, by duration
+        assert "<10m=1" in payload  # rec1 skipped (latest row), 300s
         assert "10-30m=1" in payload  # rec3 skipped x1, 900s
-        assert ">30m=1" in payload  # rec2 skipped x1, 3600s; rec4 (no duration) excluded
-        # channels: all rows for candidate videos, watched/listened vs skipped
-        assert "Ch A (watch/listen 1, skip 3)" in payload  # rec1 watched 1 + 2 skips, rec3 skip 1
-        assert "Ch B (watch/listen 1, skip 2)" in payload  # rec2 listened 1 + skip, rec4 skip
-        assert "watched=1" in payload
-        assert "listened=1" in payload
-        assert "skipped=6" in payload  # totals span every log row incl. the ghost
+        assert ">30m=1" in payload  # rec2 skipped (latest row), 3600s; rec4 (no duration) excluded
+        # channels: latest-wins rows for candidate videos, watched/listened vs skipped
+        assert "channels: Ch A (watch/listen 0, skip 2) | Ch B (watch/listen 0, skip 2)" in payload
+        assert "feedback (latest wins): skipped=5" in payload  # totals span every latest-wins row incl. the ghost
         # candidate views rendered in human units
         assert "5K views" in payload  # rec1 viewCount 5000
         assert "1.2M views" in payload  # rec2 viewCount 1200000

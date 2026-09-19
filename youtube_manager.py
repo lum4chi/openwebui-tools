@@ -477,12 +477,22 @@ def _duration_band(sec: int) -> str:
     return ">30m"
 
 
+def _latest_wins(entries: list[FeedbackEntry]) -> list[FeedbackEntry]:
+    """Keep the newest-dated row per video_id; on a date tie, the later input row wins."""
+    latest: dict[str, FeedbackEntry] = {}
+    for entry in entries:
+        prev = latest.get(entry.video_id)
+        if prev is None or entry.date >= prev.date:
+            latest[entry.video_id] = entry
+    return list(latest.values())
+
+
 def aggregate_feedback(entries: list[FeedbackEntry], candidates: list[Candidate]) -> FeedbackStats:
     by_id = {cand.video_id: cand for cand in candidates}
     totals: dict[str, int] = {}
     bands: dict[str, int] = {}
     per_channel: dict[str, list[int]] = {}
-    for entry in entries:
+    for entry in _latest_wins(entries):
         _bump(totals, entry.decision)
         cand = by_id.get(entry.video_id)
         if cand is None:
@@ -553,7 +563,7 @@ def _stats_lines(stats: FeedbackStats) -> list[str]:
     if not stats.totals:
         lines.append("no feedback rows yet")
         return lines
-    lines.append("cumulative (all recorded): " + " ".join(f"{key}={n}" for key, n in sorted(stats.totals.items())))
+    lines.append("feedback (latest wins): " + " ".join(f"{key}={n}" for key, n in sorted(stats.totals.items()) if n))
     if stats.skips_by_duration_band:
         bands = ", ".join(f"{band}={n}" for band, n in sorted(stats.skips_by_duration_band.items()))
         lines.append(f"skips by duration: {bands}")

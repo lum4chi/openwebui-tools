@@ -1,4 +1,4 @@
-"""T0 setup checks: check_setup readiness reporting (scenarios T0-1…T0-3)."""
+"""T0 setup checks: check_setup readiness reporting (scenarios T0-1…T0-3) + B3 per-source readiness."""
 
 from unittest.mock import patch
 from urllib.error import URLError
@@ -39,7 +39,11 @@ class TestCheckSetup:
             return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
         ):
             result = await tools.check_setup()
-        assert "READY" in result
+        lines = result.splitlines()
+        assert lines[0] == "search: ok"
+        assert lines[1] == "subscriptions: ok"
+        assert lines[2] == "watch_later: ok (playlist not checked)"
+        assert lines[-1] == "READY"
         assert "NOT READY" not in result
         assert "MISSING" not in result
         assert "INVALID" not in result
@@ -72,20 +76,11 @@ class TestCheckSetup:
             side_effect=AssertionError("live token check must not run with an incomplete set"),
         ):
             result = await tools.check_setup()
-        assert "NOT READY" in result
-        missing_google = {
-            "no_google": set(GOOGLE_FIELDS),
-            "partial_google": {"google_client_secret", "google_refresh_token"},
-            "no_token": {"google_refresh_token"},
-        }[case]
         lines = result.splitlines()
-        for field in GOOGLE_FIELDS:
-            if field in missing_google:
-                line = next(ln for ln in lines if field in ln)
-                assert "MISSING" in line
-                assert " - " in line  # one-line setup instruction
-            else:
-                assert field not in result, f"{field} must not be flagged in case {case}"
+        assert lines[0] == "search: ok"
+        assert lines[1] == "subscriptions: MISSING - OAuth fields incomplete"
+        assert lines[2] == "watch_later: MISSING - OAuth fields incomplete"
+        assert lines[-1] == "NOT READY"
         lowered = result.lower()
         assert "session" not in lowered
         assert "cookies" not in lowered
@@ -110,8 +105,97 @@ class TestCheckSetup:
     async def test_invalid_token(self, tools, exc, expect):
         with patch("youtube_manager._oauth_token", side_effect=exc):
             result = await tools.check_setup()
-        assert expect in result
-        assert "NOT READY" in result
+        lines = result.splitlines()
+        assert lines[0] == "search: ok"
         if expect == "INVALID":
-            assert "stale" in result
-            assert "start_auth" in result
+            state = "INVALID - stored refresh token is stale; run start_auth then finish_auth"
+        else:
+            state = "CHECK FAILED - token endpoint unreachable"
+        assert lines[1] == f"subscriptions: {state}"
+        assert lines[2] == f"watch_later: {state}"
+        assert lines[-1] == "NOT READY"
+
+
+class TestCheckSetupPerSource:
+    """B3 per-source OAuth readiness lines in check_setup (locked order, single shared token check)."""
+
+    # @workflow [AC-3]
+    # Scenario: B3 per-source check_setup is ready
+    #   Given a Tools instance with complete OAuth fields and a valid refresh token
+    #   When check_setup is called
+    #   Then the first line is exactly "search: ok"
+    #   And the second line is exactly "subscriptions: ok"
+    #   And the third line is exactly "watch_later: ok (playlist not checked)"
+    #   And the last line is exactly "READY"
+    async def test_check_setup_per_source_ready(self, tools):
+        with patch(
+            "youtube_manager._oauth_token",
+            return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+        ):
+            result = await tools.check_setup()
+        assert result.splitlines() == [
+            "search: ok",
+            "subscriptions: ok",
+            "watch_later: ok (playlist not checked)",
+            "READY",
+        ]
+
+    # @workflow [AC-3]
+    # Scenario: B3 per-source check_setup reports incomplete OAuth fields
+    #   Given a Tools instance with at least one OAuth field missing
+    #   When check_setup is called
+    #   Then the second line is exactly "subscriptions: MISSING - OAuth fields incomplete"
+    #   And the third line is exactly "watch_later: MISSING - OAuth fields incomplete"
+    #   And the last line is exactly "NOT READY"
+    @pytest.mark.parametrize(
+        "case",
+        ["no_google", "partial_google", "no_token"],
+        ids=["no_google", "partial_google", "no_token"],
+    )
+    async def test_check_setup_oauth_missing_per_source(self, tools, case):
+        _set_case(tools, case)
+        with patch(
+            "youtube_manager._oauth_token",
+            side_effect=AssertionError("live token check must not run with an incomplete set"),
+        ):
+            result = await tools.check_setup()
+        assert result.splitlines() == [
+            "search: ok",
+            "subscriptions: MISSING - OAuth fields incomplete",
+            "watch_later: MISSING - OAuth fields incomplete",
+            "NOT READY",
+        ]
+
+    # @workflow [AC-3]
+    # Scenario: B3 per-source check_setup reports stale token
+    #   Given a Tools instance with complete OAuth fields whose refresh token is rejected
+    #   When check_setup is called
+    #   Then the second line is exactly "subscriptions: INVALID - stored refresh token is stale; run start_auth then finish_auth"
+    #   And the third line is exactly "watch_later: INVALID - stored refresh token is stale; run start_auth then finish_auth"
+    #   And the last line is exactly "NOT READY"
+    async def test_check_setup_invalid_token_per_source(self, tools):
+        with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("invalid_grant")):
+            result = await tools.check_setup()
+        assert result.splitlines() == [
+            "search: ok",
+            "subscriptions: INVALID - stored refresh token is stale; run start_auth then finish_auth",
+            "watch_later: INVALID - stored refresh token is stale; run start_auth then finish_auth",
+            "NOT READY",
+        ]
+
+    # @workflow [AC-3]
+    # Scenario: B3 per-source check_setup reports unreachable token endpoint
+    #   Given a Tools instance with complete OAuth fields whose token endpoint is unreachable
+    #   When check_setup is called
+    #   Then the second line is exactly "subscriptions: CHECK FAILED - token endpoint unreachable"
+    #   And the third line is exactly "watch_later: CHECK FAILED - token endpoint unreachable"
+    #   And the last line is exactly "NOT READY"
+    async def test_check_setup_check_failed_per_source(self, tools):
+        with patch("youtube_manager._oauth_token", side_effect=URLError("connection refused")):
+            result = await tools.check_setup()
+        assert result.splitlines() == [
+            "search: ok",
+            "subscriptions: CHECK FAILED - token endpoint unreachable",
+            "watch_later: CHECK FAILED - token endpoint unreachable",
+            "NOT READY",
+        ]

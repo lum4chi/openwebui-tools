@@ -892,9 +892,9 @@ def _token_status(valves) -> str | None:
     try:
         _oauth_token(valves)
     except ReauthNeeded:
-        return "google token: INVALID - stored refresh token is stale; run start_auth then finish_auth"
+        return "INVALID - stored refresh token is stale; run start_auth then finish_auth"
     except Exception:
-        return "google token: CHECK FAILED - token endpoint unreachable"
+        return "CHECK FAILED - token endpoint unreachable"
     return None
 
 
@@ -1069,20 +1069,21 @@ class Tools:
         )
 
     async def check_setup(self) -> str:
-        valves = self.valves
-        lines: list[str] = []
-        google_ok = True
-        for name in GOOGLE_FIELDS:
-            if getattr(valves, name):
-                continue
-            google_ok = False
-            lines.append(f"{name}: MISSING - set Valves.{name} (Google Cloud OAuth client)")
-        token_line = _token_status(valves) if google_ok else None
-        if token_line:
-            lines.append(token_line)
-        ready = google_ok and token_line is None
-        lines.append("READY" if ready else "NOT READY")
-        return "\n".join(lines)
+        oauth_ok = _oauth_set(self.valves)
+        token_status = _token_status(self.valves) if oauth_ok else None
+        if oauth_ok and token_status is None:
+            subscriptions = "subscriptions: ok"
+            watch_later = "watch_later: ok (playlist not checked)"
+            overall = "READY"
+        elif oauth_ok:
+            subscriptions = f"subscriptions: {token_status}"
+            watch_later = f"watch_later: {token_status}"
+            overall = "NOT READY"
+        else:
+            subscriptions = "subscriptions: MISSING - OAuth fields incomplete"
+            watch_later = "watch_later: MISSING - OAuth fields incomplete"
+            overall = "NOT READY"
+        return "\n".join(["search: ok", subscriptions, watch_later, overall])
 
     async def start_auth(self) -> str:
         client_id = self.valves.google_client_id

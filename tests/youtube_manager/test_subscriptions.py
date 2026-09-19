@@ -222,7 +222,7 @@ class TestFetchSubscriptions:
 
         cands = tools._fetch_subscriptions(20, notes)
 
-        assert notes == ["subscriptions: 25 ok, 0 failed"]
+        assert notes == ["subscriptions: 25 ok, 0 failed, 20 candidates"]
         assert [params["maxResults"] for _, params in calls] == [50, 50]
         assert "pageToken" not in calls[0][1]
         assert calls[1][1]["pageToken"] == "p2"
@@ -238,7 +238,7 @@ class TestFetchSubscriptions:
     # Given 3 subscribed channels and channel #2's RSS raising urllib.error.URLError
     # When _fetch_subscriptions(20, notes) runs
     # Then candidates from channels #1 and #3 are returned and channel #2's are absent
-    # And Valves.verbose is True, so the note is the summary "subscriptions: 2 ok, 1 failed" plus the deduped "1 channel(s) failed: transient" line
+    # And Valves.verbose is True, so the note is the summary "subscriptions: 2 ok, 1 failed, 2 candidates" plus the deduped "1 channel(s) failed: transient" line
     def test_per_channel_failure_isolated(self, tools, monkeypatch):
         channels = [_channel(i) for i in range(3)]
         _stub_api(monkeypatch, lambda params: {"items": channels})
@@ -254,7 +254,7 @@ class TestFetchSubscriptions:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert [c.video_id for c in cands] == ["V0", "V2"]
-        assert notes == ["subscriptions: 2 ok, 1 failed", "1 channel(s) failed: transient"]
+        assert notes == ["subscriptions: 2 ok, 1 failed, 2 candidates", "1 channel(s) failed: transient"]
 
     # T1-5 · workflow · provenance: research #5 + research doc A1 (subscriptionNotFound pitfall)
     # Given _data_api_request raises a raw HttpError with status 404 for subscriptions.list

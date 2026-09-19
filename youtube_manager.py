@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.3.0
+version: 1.4.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -981,6 +981,17 @@ def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], res
         _note_watch_later(notes, "details unavailable")
 
 
+def _subscription_headline(ok: int, failed: int, entries: list[dict], candidate_count: int) -> str:
+    """Headline for the subscriptions digest note, computed after the capped candidate count is known."""
+    if ok == 0:
+        return f"subscriptions: {ok} ok, {failed} failed"
+    if candidate_count > 0:
+        return f"subscriptions: {ok} ok, {failed} failed, {candidate_count} candidates"
+    if entries:
+        return f"subscriptions: {ok} ok, {failed} failed, 0 candidates (capped entries produced no candidates)"
+    return f"subscriptions: {ok} ok, {failed} failed, 0 candidates (feeds returned no usable entries)"
+
+
 class Tools:
     def __init__(self):
         self.valves = self.Valves()
@@ -1119,12 +1130,16 @@ class Tools:
                 ok += 1
             else:
                 failures[reason] = failures.get(reason, 0) + 1
-        self._note_subscription_results(notes, ok, failures)
         entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
-        return candidates_from_rss(entries[:max_per_source], "subscriptions")
+        capped_entries = entries[:max_per_source]
+        candidate_count = len(candidates_from_rss(capped_entries, "subscriptions"))
+        self._note_subscription_results(notes, ok, failures, entries, candidate_count)
+        return candidates_from_rss(capped_entries, "subscriptions")
 
-    def _note_subscription_results(self, notes: list[str], ok: int, failures: dict[str, int]) -> None:
-        notes.append(f"subscriptions: {ok} ok, {sum(failures.values())} failed")
+    def _note_subscription_results(
+        self, notes: list[str], ok: int, failures: dict[str, int], entries: list[dict], candidate_count: int
+    ) -> None:
+        notes.append(_subscription_headline(ok, sum(failures.values()), entries, candidate_count))
         if self.valves.verbose:
             for reason, count in failures.items():
                 notes.append(f"{count} channel(s) failed: {reason}")

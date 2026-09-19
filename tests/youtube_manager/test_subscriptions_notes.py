@@ -104,7 +104,7 @@ class TestSubscriptionNotes:
     #   And 2 channel RSS feeds succeed
     #   And 1 channel RSS feed fails with HTTP 404
     #   When gather_candidates runs the subscriptions source
-    #   Then the default subscriptions note is exactly "subscriptions: 2 ok, 1 failed"
+    #   Then the default subscriptions note is exactly "subscriptions: 2 ok, 1 failed, 2 candidates"
     def test_ok_and_failed_counts_reported(self, tools, monkeypatch):
         channels = [_channel(i) for i in range(3)]
         _stub_api(monkeypatch, channels)
@@ -121,7 +121,7 @@ class TestSubscriptionNotes:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert len(cands) == 2
-        assert notes == ["subscriptions: 2 ok, 1 failed"]
+        assert notes == ["subscriptions: 2 ok, 1 failed, 2 candidates"]
 
     # T3-1.A2 · unit · provenance: Bug #1 (2) "make the count deterministic (set-based)"
     #   Given OAuth is configured
@@ -178,7 +178,7 @@ class TestSubscriptionNotes:
         tools._fetch_subscriptions(20, notes_b)
 
         assert notes_a == notes_b  # byte-identical headline
-        assert notes_a[0] == "subscriptions: 2 ok, 1 failed"
+        assert notes_a[0] == "subscriptions: 2 ok, 1 failed, 2 candidates"
 
     # T3-1.B1 · workflow · provenance: UX-1 (friendly wrapper; raw detail hidden by default)
     #   Given OAuth is configured

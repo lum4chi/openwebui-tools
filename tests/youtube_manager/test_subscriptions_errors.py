@@ -239,4 +239,4 @@ class TestSubscriptionsErrorSurface:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert [c.video_id for c in cands] == ["V0", "V1"]
-        assert notes == ["subscriptions: 2 ok, 0 failed"]
+        assert notes == ["subscriptions: 2 ok, 0 failed, 2 candidates"]

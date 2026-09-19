@@ -53,11 +53,11 @@ def _clear_oauth(tools):
 
 class TestWatchLaterNotes:
     # @unit
-    # Scenario: T0-3.1 no resolved playlist id → skip note
+    # Scenario: Q4 Watch Later skip note uses colon format when playlist unresolved
     #   Given an authenticated watch_later source whose playlist id cannot be resolved
     #   When gather_candidates runs with watch_later
-    #   Then 0 candidates are returned
-    #   And the output contains "watch_later skipped (no playlist resolved)"
+    #   Then the output contains "watch_later skipped: Watch Later playlist not found"
+    #   And the output does not contain "watch_later skipped ("
     async def test_no_playlist_resolved_emits_note(self, tools, monkeypatch):
         _wl_api_fake(monkeypatch, watch_later_id=None, playlist_items=[], video_details={})
 
@@ -65,14 +65,15 @@ class TestWatchLaterNotes:
 
         assert "=== Candidates (0) ===" in payload
         assert "Candidate IDs: (none)" in payload
-        assert "watch_later skipped (no playlist resolved)" in payload
+        assert "watch_later skipped: Watch Later playlist not found" in payload
+        assert "watch_later skipped (" not in payload
 
     # @unit
-    # Scenario: T0-3.2 items without details → skip note
+    # Scenario: Q4 Watch Later skip note uses colon format when details unavailable
     #   Given a watch_later playlist whose items are absent from the videos.list details response
     #   When gather_candidates runs with watch_later
-    #   Then 0 candidates are returned
-    #   And the output contains "watch_later skipped (details unavailable)"
+    #   Then the output contains "watch_later skipped: details unavailable"
+    #   And the output does not contain "watch_later skipped ("
     async def test_items_without_details_emits_note(self, tools, monkeypatch):
         _wl_api_fake(
             monkeypatch,
@@ -85,7 +86,8 @@ class TestWatchLaterNotes:
 
         assert "=== Candidates (0) ===" in payload
         assert "Candidate IDs: (none)" in payload
-        assert "watch_later skipped (details unavailable)" in payload
+        assert "watch_later skipped: details unavailable" in payload
+        assert "watch_later skipped (" not in payload
 
     # @unit
     # Scenario: T0-3.3 happy path: available watch_later → no note (regression)

@@ -1026,9 +1026,9 @@ def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: Exce
 
 
 def _note_watch_later(notes: list[str] | None, reason: str) -> None:
-    """Append a ``watch_later skipped (<reason>)`` note (None-safe for the digest path)."""
+    """Append a ``watch_later skipped: {reason}`` note (None-safe for the digest path)."""
     if notes is not None:
-        notes.append(f"watch_later skipped ({reason})")
+        notes.append(f"watch_later skipped: {reason}")
 
 
 def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], resolved: list[dict]) -> None:
@@ -1137,7 +1137,7 @@ class Tools:
         item = (channel.get("items") or [{}])[0]
         playlist_id = ((item.get("contentDetails") or {}).get("relatedPlaylists") or {}).get("watchLater")
         if not playlist_id:
-            _note_watch_later(notes, "no playlist resolved")
+            _note_watch_later(notes, "Watch Later playlist not found")
             return []
         resp = _data_api_request(
             self.valves,

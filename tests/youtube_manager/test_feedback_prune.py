@@ -50,7 +50,7 @@ class TestRecordFeedback:
         result = await tools.record_feedback("vid010", "watched", reason=REASON)
 
         if case == "write_raises":
-            assert result == "Error: state record failed: notes backend down"
+            assert result == "Error: state record failed: unexpected error"
             assert NOTE_FEEDBACK not in fake_store.docs
             return
         assert result == "OK — recorded watched for vid010"
@@ -296,4 +296,4 @@ class TestPrune:
             assert "run start_auth" in result
             assert "finish_auth" in result
         else:
-            assert result == f"YouTube Error: {error}"
+            assert result == "YouTube Error: quota reached"

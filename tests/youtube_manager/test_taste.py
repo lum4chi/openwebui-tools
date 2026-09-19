@@ -99,7 +99,7 @@ class TestTaste:
 
         result = await tools.save_taste_profile(DOC)  # no exception propagates
 
-        assert result.startswith("Error:")
+        assert result == "Error: unexpected error"
 
 
 def _entry(video_id):

@@ -38,6 +38,7 @@ from googleapiclient import discovery
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel, Field, TypeAdapter
 from pydantic import dataclasses as pydantic_dataclasses
+from yt_dlp.utils import DownloadError, ExtractorError
 
 SCOPE = "https://www.googleapis.com/auth/youtube"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -141,7 +142,7 @@ def parse_code_from_url(text: str) -> str | None:
     return text
 
 
-def _http_status(err: Exception) -> int | None:
+def _http_status(err: BaseException) -> int | None:
     status = getattr(getattr(err, "resp", None), "status", None)
     return status if isinstance(status, int) else None
 
@@ -173,6 +174,48 @@ def classify_feed_error(err: Exception) -> str:
 def _failure_label(err: Exception) -> str:
     """Provider failures keep the YouTube Error label; local/code failures get a clearly-local label."""
     return "YouTube Error" if isinstance(err, (HttpError, QuotaError)) else "Local Error"
+
+
+def _clean_http_error(exc: BaseException) -> str:
+    status = _http_status(exc)
+    if status == 404:
+        return "not found - the resource no longer exists"
+    if status == 429:
+        return "rate limited - retry later"
+    if status is not None and 500 <= status < 600:
+        return "service unavailable - retry later"
+    return "unexpected error"
+
+
+def _clean_exception(exc: BaseException) -> str:
+    if isinstance(exc, ReauthNeeded):
+        return "reauthentication required"
+    if isinstance(exc, QuotaError):
+        return "quota reached"
+    if isinstance(exc, HttpError):
+        return _clean_http_error(exc)
+    if isinstance(exc, (urllib.error.URLError, TimeoutError)):
+        return "network error"
+    if isinstance(exc, ValueError):
+        return "invalid API response"
+    if isinstance(exc, (ExtractorError, DownloadError)):
+        return "transcript extraction failed"
+    if isinstance(exc, TranscriptUnavailable):
+        return "fallback dependency not installed"
+    return "unexpected error"
+
+
+def _error_return(exc: BaseException, verbose: bool = False) -> str:
+    reason = _clean_exception(exc)
+    if verbose:
+        return f"Error: {reason} (detail: {exc!r})"
+    return f"Error: {reason}"
+
+
+def _note_error(notes: list[str], exc: BaseException, verbose: bool = False) -> None:
+    message = f"state record failed: {_clean_exception(exc)}"
+    if message not in notes:
+        notes.append(message)
 
 
 def serialize_feedback_line(entry: FeedbackEntry) -> str:
@@ -895,7 +938,7 @@ def _try_primary(video_id: str, language: str, tmp: str) -> tuple[dict | None, s
     try:
         return _ytdlp_extract(url, extra=_subtitle_extra(tmp, language)), None
     except Exception as err:
-        return None, str(err) or err.__class__.__name__
+        return None, _clean_exception(err)
 
 
 def _fallback_transcript(video_id: str) -> tuple[list[tuple[int, str]], str | None]:
@@ -903,7 +946,7 @@ def _fallback_transcript(video_id: str) -> tuple[list[tuple[int, str]], str | No
     try:
         return _fetch_transcript_fallback(video_id), None
     except Exception as err:
-        return [], str(err) or err.__class__.__name__
+        return [], _clean_exception(err)
 
 
 def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel: str) -> str:
@@ -959,7 +1002,10 @@ def _removal_plan(
 
 def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: Exception | None, notes: list[str]) -> str:
     if failure is not None:
-        lines = [f"{_failure_label(failure)}: {failure}", f"partial: {len(removed)} item(s) removed before failure"]
+        lines = [
+            f"{_failure_label(failure)}: {_clean_exception(failure)}",
+            f"partial: {len(removed)} item(s) removed before failure",
+        ]
     elif removed:
         lines = [f"OK — pruned {len(removed)} item(s)"]
         lines += [f"- {item.video_id} — {item.title or '?'}: {reason}" for item, reason in removed]
@@ -1057,7 +1103,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"Error: {err}"
+            return _error_return(err, self.valves.verbose)
         return (
             "OK\n"
             "Authorization code exchanged. Store the refresh token in the valve:\n"
@@ -1225,7 +1271,7 @@ class Tools:
         try:
             _state_store(None).write(NOTE_TASTE, md)
         except Exception as err:
-            return f"Error: {err}"
+            return _error_return(err, self.valves.verbose)
         return "OK"
 
     async def transcript(self, video_id: str, language: str = "en") -> str:
@@ -1258,7 +1304,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"{_failure_label(err)}: {err}"
+            return f"{_failure_label(err)}: {_clean_exception(err)}"
 
     def _add_to_playlist_core(self, video_id: str) -> str:
         notes: list[str] = []
@@ -1350,9 +1396,7 @@ class Tools:
         try:
             store.write(NOTE_STATE, serialize_digest_state(state))
         except Exception as err:
-            message = f"state record failed: {err}"
-            if message not in notes:
-                notes.append(message)
+            _note_error(notes, err)
             return False
         return True
 
@@ -1378,7 +1422,7 @@ class Tools:
         try:
             store.write(NOTE_FEEDBACK, _feedback_doc([*prior, entry]))
         except Exception as err:
-            return f"Error: state record failed: {err}"
+            return f"Error: state record failed: {_clean_exception(err)}"
         return f"OK — recorded {decision} for {video_id}"
 
     async def prune_playlist(self) -> str:
@@ -1390,7 +1434,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"{_failure_label(err)}: {err}"
+            return f"{_failure_label(err)}: {_clean_exception(err)}"
 
     def _prune_core(self) -> str:
         store = _state_store(None)

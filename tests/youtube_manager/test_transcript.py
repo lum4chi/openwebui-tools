@@ -1,10 +1,12 @@
 """T2 transcript -> podcast format: primary/fallback paths (T2-1..T2-4, T2-6), VTT parse/assembly edges (T2-6)."""
 
 import re
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from yt_dlp.utils import DownloadError, ExtractorError
 
 import youtube_manager
 from youtube_manager import TranscriptUnavailable, assemble_podcast_text, parse_vtt
@@ -179,7 +181,7 @@ class TestTranscript:
         [
             pytest.param("info", "no captions found", id="info_without_subtitles"),
             pytest.param("missing_file", "no captions found", id="vtt_file_missing"),
-            pytest.param("raised", "no subtitles found", id="primary_raised"),
+            pytest.param("raised", "unexpected error", id="primary_raised"),
         ],
     )
     async def test_no_transcript_message(self, tools, monkeypatch, tmp_path, variant, primary_reason):
@@ -198,6 +200,36 @@ class TestTranscript:
         assert result == (
             f"Error: no transcript available for vid123: primary: {primary_reason}; fallback: no transcript returned"
         )
+
+    # @workflow [AC-2]
+    # Scenario: B4 transcript failure reports clean primary and fallback reasons / extraction reasons
+    #   Given a video id "abc" whose primary transcript raises URLError (or ExtractorError)
+    #   And the fallback raises TimeoutError (or DownloadError)
+    #   When transcript resolution is attempted
+    #   Then the return is exactly "Error: no transcript available for abc: primary: <clean>; fallback: <clean>"
+    @pytest.mark.parametrize(
+        ("primary_exc", "fallback_exc", "expected"),
+        [
+            (
+                urllib.error.URLError("dns down"),
+                TimeoutError("slow"),
+                "Error: no transcript available for abc: primary: network error; fallback: network error",
+            ),
+            (
+                ExtractorError("bot check"),
+                DownloadError("download failed"),
+                "Error: no transcript available for abc: primary: transcript extraction failed; fallback: transcript extraction failed",
+            ),
+        ],
+        ids=["network_reasons", "extraction_reasons"],
+    )
+    async def test_b4_clean_primary_fallback_reasons(self, tools, monkeypatch, primary_exc, fallback_exc, expected):
+        monkeypatch.setattr(youtube_manager, "_ytdlp_extract", MagicMock(side_effect=primary_exc))
+        monkeypatch.setattr(youtube_manager, "_fetch_transcript_fallback", MagicMock(side_effect=fallback_exc))
+
+        result = await tools.transcript("abc")
+
+        assert result == expected
 
 
 class TestVtt:

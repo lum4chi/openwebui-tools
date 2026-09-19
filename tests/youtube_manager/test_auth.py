@@ -1,16 +1,22 @@
 """T0 auth flow: consent URL, finish_auth exchange, reauth surfacing (scenarios T0-4…T0-6)."""
 
-from unittest.mock import patch
+import json
+from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from googleapiclient.errors import HttpError
+from yt_dlp.utils import DownloadError, ExtractorError
 
 from youtube_manager import (
     LOOPBACK_REDIRECT,
     SCOPE,
+    QuotaError,
     ReauthNeeded,
     Tools,
+    TranscriptUnavailable,
+    _error_return,
     build_consent_url,
     parse_code_from_url,
 )
@@ -124,17 +130,58 @@ class TestAuth:
     #   And it contains the start_auth re-onboarding instruction
     #   And no exception propagates
     @pytest.mark.parametrize(
-        ("boom", "prefix"),
+        ("boom", "expected"),
         [
             (ReauthNeeded("invalid_grant"), "REAUTH_NEEDED"),
-            (URLError("network down"), "Error:"),
+            (URLError("network down"), "Error: network error"),
         ],
         ids=["invalid_grant", "network_error"],
     )
-    async def test_reauth_on_invalid_grant(self, tools, boom, prefix):
+    async def test_reauth_on_invalid_grant(self, tools, boom, expected):
         with patch("youtube_manager._oauth_token", side_effect=boom):
             result = await tools.finish_auth("sometoken")
-        assert result.startswith(prefix)
-        if prefix == "REAUTH_NEEDED":
+        if expected == "REAUTH_NEEDED":
+            assert result.startswith("REAUTH_NEEDED")
             assert "start_auth" in result
             assert "finish_auth" in result
+        else:
+            assert result == expected
+
+
+def _http_error(status: int) -> HttpError:
+    return HttpError(MagicMock(status=status, reason=str(status)), b"")
+
+
+class TestCleanedErrorMapping:
+    """B2: _error_return cleaned operator-facing reason mapping (non-verbose)."""
+
+    # @unit [AC-2]
+    # Scenario: B2 cleaned reason mapping
+    #   Given an exception of each mapped kind
+    #   When a generic error return is built without verbose
+    #   Then the return is exactly "Error: <cleaned reason>" for that kind
+    #   (reauthentication required / quota reached / not found - the resource no longer exists /
+    #    rate limited - retry later / service unavailable - retry later / network error /
+    #    invalid API response / transcript extraction failed / fallback dependency not installed /
+    #    unexpected error)
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (ReauthNeeded("credential rejected"), "Error: reauthentication required"),
+            (QuotaError("quota exceeded"), "Error: quota reached"),
+            (_http_error(404), "Error: not found - the resource no longer exists"),
+            (_http_error(429), "Error: rate limited - retry later"),
+            (_http_error(503), "Error: service unavailable - retry later"),
+            (_http_error(400), "Error: unexpected error"),
+            (URLError("dns down"), "Error: network error"),
+            (TimeoutError("slow"), "Error: network error"),
+            (ValueError("bad"), "Error: invalid API response"),
+            (json.JSONDecodeError("bad", "doc", 0), "Error: invalid API response"),
+            (ExtractorError("bot check"), "Error: transcript extraction failed"),
+            (DownloadError("download failed"), "Error: transcript extraction failed"),
+            (TranscriptUnavailable("no dep"), "Error: fallback dependency not installed"),
+            (RuntimeError("mystery"), "Error: unexpected error"),
+        ],
+    )
+    def test_cleaned_error_reason_mapping(self, exc, expected):
+        assert _error_return(exc) == expected

@@ -42,10 +42,10 @@ class TestPruneResilience:
     @pytest.mark.parametrize(
         ("error", "expected"),
         [
-            (RuntimeError("backend 500"), "Local Error: backend 500\npartial: 1 item(s) removed before failure"),
+            (RuntimeError("backend 500"), "Local Error: unexpected error\npartial: 1 item(s) removed before failure"),
             (
                 QuotaError("YouTube Data API quota exceeded"),
-                "YouTube Error: YouTube Data API quota exceeded\npartial: 1 item(s) removed before failure",
+                "YouTube Error: quota reached\npartial: 1 item(s) removed before failure",
             ),
         ],
         ids=["local_code_error", "provider_quota_error"],
@@ -90,8 +90,7 @@ class TestPruneResilience:
         result = await tools.prune_playlist()
 
         assert (
-            result
-            == f"OK — pruned 1 item(s)\n- vidA — Video A: watched {today}\nstate record failed: state write failed"
+            result == f"OK — pruned 1 item(s)\n- vidA — Video A: watched {today}\nstate record failed: unexpected error"
         )
         assert fake_store.docs[NOTE_STATE] == original
 
@@ -174,7 +173,7 @@ class TestPruneApiDecodeGuard:
     #   Given prior state with one tracked item and a resolved playlist id
     #   And the Data API transport returns a transient empty/blank body
     #   When prune_playlist runs
-    #   Then it returns "Local Error: YouTube API returned an empty or non-JSON response (transient); retry the operation."
+    #   Then it returns "Local Error: invalid API response"
     #   And the message does NOT surface the raw "Expecting value" JSON decode detail
     async def test_transient_empty_api_clean_error(self, tools, monkeypatch, fake_store):
         seed_state(fake_store, {VID_A: (days_ago(10), "Video A")}, playlist_id=PL)
@@ -182,10 +181,7 @@ class TestPruneApiDecodeGuard:
 
         result = await tools.prune_playlist()
 
-        assert (
-            result
-            == "Local Error: YouTube API returned an empty or non-JSON response (transient); retry the operation."
-        )
+        assert result == "Local Error: invalid API response"
         assert "Expecting value" not in result
 
     # @unit

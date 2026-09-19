@@ -19,6 +19,7 @@ from youtube_manager import (
     Tools,
     TranscriptUnavailable,
     _data_api_request,
+    _error_return,
     _fetch_transcript_fallback,
     _notes_http,
     _oauth_token,
@@ -277,3 +278,16 @@ class TestTranscriptFallback:
         with pytest.raises(TranscriptUnavailable) as exc_info:
             _fetch_transcript_fallback("vid1")
         assert str(exc_info.value) == "fallback dependency not installed"
+
+
+# @workflow [AC-2]
+# Scenario: B2 verbose mode exposes detail without changing clean reason
+#   Given a ReauthNeeded exception and verbose enabled
+#   When a generic error return is built
+#   Then it starts with "Error: reauthentication required (detail: "
+#   And it ends with ")"
+def test_verbose_error_detail():
+    err = ReauthNeeded("Google credential rejected")
+    result = _error_return(err, verbose=True)
+    assert result.startswith("Error: reauthentication required (detail: ")
+    assert result.endswith(f"{err!r})")

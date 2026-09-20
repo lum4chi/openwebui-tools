@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.4.0
+version: 1.5.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -12,7 +12,7 @@ Agent instructions:
   SETUP (this slice):
    1. check_setup — verify the Google OAuth set (live token check only when the set is complete)
   2. start_auth — print the Google consent URL for the youtube scope
-  3. finish_auth — exchange the pasted code/redirect URL and print the refresh token to store
+   3. finish_auth — exchange the pasted code/redirect URL and store the refresh token via the Open WebUI valve update
 """
 
 import contextlib
@@ -144,6 +144,8 @@ def parse_code_from_url(text: str) -> str | None:
 
 def _http_status(err: BaseException) -> int | None:
     status = getattr(getattr(err, "resp", None), "status", None)
+    if status is None:
+        status = getattr(err, "code", None)
     return status if isinstance(status, int) else None
 
 
@@ -193,6 +195,8 @@ def _clean_exception(exc: BaseException) -> str:
     if isinstance(exc, QuotaError):
         return "quota reached"
     if isinstance(exc, HttpError):
+        return _clean_http_error(exc)
+    if isinstance(exc, urllib.error.HTTPError):
         return _clean_http_error(exc)
     if isinstance(exc, (urllib.error.URLError, TimeoutError)):
         return "network error"
@@ -653,6 +657,8 @@ def _failure_reason(err: Exception) -> str:
     if isinstance(err, ReauthNeeded):
         return "reauth"
     reason = classify_feed_error(err)
+    if isinstance(err, urllib.error.HTTPError):
+        return reason
     status = _http_status(err)
     return f"{reason} HTTP {status}: {_http_message(err)}" if status is not None else reason
 
@@ -1105,21 +1111,30 @@ class Tools:
             f"{url}"
         )
 
-    async def finish_auth(self, code_or_url: str) -> str:
+    async def finish_auth(self, code_or_url: str, __id__: str | None = None, __request__: Any | None = None) -> str:
         code = parse_code_from_url(code_or_url)
         if not code:
             return "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
+        auth = __request__.headers.get("authorization") if __request__ is not None else None
+        if not __id__ or __request__ is None or not auth:
+            return "Error: valve update unavailable: missing internal request context"
         try:
             token = _oauth_token(self.valves, code=code)
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
             return _error_return(err, self.valves.verbose)
-        return (
-            "OK\n"
-            "Authorization code exchanged. Store the refresh token in the valve:\n"
-            f'  Valves.google_refresh_token = "{token["refresh_token"]}"'
-        )
+        url = f"{str(__request__.base_url).rstrip('/')}/api/v1/tools/id/{__id__}/valves/update"
+        try:
+            _notes_http("POST", url, str(auth), {"google_refresh_token": token["refresh_token"]})
+        except Exception as err:
+            return (
+                f"Error: valve update failed: {_clean_exception(err)}. "
+                "The authorization code was exchanged, but the new refresh token was not stored. "
+                "Run start_auth and finish_auth again."
+            )
+        self.valves.google_refresh_token = token["refresh_token"]
+        return "OK - credential stored; check_setup should now show ok"
 
     def _video_details(self, video_ids: list[str]) -> dict[str, dict]:
         details: dict[str, dict] = {}

@@ -259,11 +259,12 @@ class TestTranscriptFallback:
     # Scenario: T0-17 fallback seam
     #   Given the youtube-transcript-api module that returns caption segments for a video
     #   When _fetch_transcript_fallback runs
-    #   Then it returns the segments as (start_seconds, text) tuples
+    #   Then it returns (segments, language_code) where segments are (start_seconds, text) tuples
     #   And when the dependency import fails it raises TranscriptUnavailable("fallback dependency not installed")
 
     def test_returns_segment_tuples(self, monkeypatch):
         fetched = MagicMock()
+        fetched.language_code = "de"
         fetched.to_raw_data.return_value = [
             {"text": "hello", "start": 0.5, "duration": 1.0},
             {"text": "world", "start": 2.0, "duration": 1.0},
@@ -271,7 +272,7 @@ class TestTranscriptFallback:
         module = MagicMock()
         module.YouTubeTranscriptApi.return_value.fetch.return_value = fetched
         monkeypatch.setitem(sys.modules, "youtube_transcript_api", module)
-        assert _fetch_transcript_fallback("vid1") == [(0, "hello"), (2, "world")]
+        assert _fetch_transcript_fallback("vid1") == ([(0, "hello"), (2, "world")], "de")
 
     def test_missing_dependency(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "youtube_transcript_api", None)

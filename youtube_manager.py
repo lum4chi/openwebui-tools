@@ -835,13 +835,14 @@ def _ytdlp_extract(url: str, extra: dict | None = None) -> dict:
     return cast("dict", ydl.extract_info(url, download=False))
 
 
-def _fetch_transcript_fallback(video_id: str) -> list[tuple[int, str]]:
+def _fetch_transcript_fallback(video_id: str) -> tuple[list[tuple[int, str]], str | None]:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError as err:
         raise TranscriptUnavailable("fallback dependency not installed") from err
     fetched = YouTubeTranscriptApi().fetch(video_id)
-    return [(int(segment["start"]), segment["text"]) for segment in fetched.to_raw_data()]
+    segments = [(int(segment["start"]), segment["text"]) for segment in fetched.to_raw_data()]
+    return segments, getattr(fetched, "language_code", None)
 
 
 def _notes_http(method: str, url: str, auth: str, payload: dict | None = None) -> dict:
@@ -952,20 +953,38 @@ def _try_primary(video_id: str, language: str, tmp: str) -> tuple[dict | None, s
         return None, _clean_exception(err)
 
 
-def _fallback_transcript(video_id: str) -> tuple[list[tuple[int, str]], str | None]:
-    """Fallback (youtube-transcript-api) segments and failure reason (None on success)."""
+def _fallback_transcript(video_id: str) -> tuple[list[tuple[int, str]], str | None, str | None]:
+    """Fallback segments, failure reason (None on success), and language code (None when unavailable)."""
     try:
-        return _fetch_transcript_fallback(video_id), None
+        segments, language_code = _fetch_transcript_fallback(video_id)
+        return segments, None, language_code
     except Exception as err:
-        return [], _clean_exception(err)
+        return [], _clean_exception(err), None
 
 
-def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel: str) -> str:
-    segments, reason = _fallback_transcript(video_id)
+def _primary_actual_language(info: dict | None, language: str) -> str:
+    subtitles = (info or {}).get("requested_subtitles") or {}
+    if (subtitles.get(language) or {}).get("filepath"):
+        return language
+    return next(iter(subtitles), None) or "unknown"
+
+
+def _transcript_with_notice(text: str, language: str, used: str) -> str:
+    if used == language:
+        return text
+    return f"Notice: transcript language fallback: requested {language}, used {used}\n{text}"
+
+
+def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel: str, language: str) -> str:
+    segments, reason, language_code = _fallback_transcript(video_id)
     if not segments and reason is None:
         reason = "no transcript returned"
     if segments:
-        return assemble_podcast_text(title, channel, segments)
+        return _transcript_with_notice(
+            assemble_podcast_text(title, channel, segments),
+            language,
+            language_code or "unknown",
+        )
     return f"Error: no transcript available for {video_id}: primary: {primary_reason}; fallback: {reason}"
 
 
@@ -1309,10 +1328,14 @@ class Tools:
         title, channel = _video_meta(info, video_id)
         segments = _vtt_segments(info, tmp, language) if info is not None else None
         if segments:
-            return assemble_podcast_text(title, channel, segments)
+            return _transcript_with_notice(
+                assemble_podcast_text(title, channel, segments),
+                language,
+                _primary_actual_language(info, language),
+            )
         if primary_reason is None:
             primary_reason = "no captions found"
-        return _resolve_transcript(video_id, primary_reason, title, channel)
+        return _resolve_transcript(video_id, primary_reason, title, channel, language)
 
     async def add_to_playlist(self, video_id: str) -> str:
         """Idempotent add to the custom digest playlist (resolve-or-create by title), record tool-added items in digest-state."""

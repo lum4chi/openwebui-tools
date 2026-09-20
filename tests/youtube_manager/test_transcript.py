@@ -91,6 +91,7 @@ class TestTranscript:
     #   When transcript runs
     #   Then the fallback transcript seam is NOT called
     #   And the segments come from the yt-dlp result
+    #   And the requested-language path has no notice while the glob path gets a "used unknown" notice
     @pytest.mark.parametrize("variant", ["filepath", "glob"], ids=["filepath", "glob"])
     async def test_primary_path(self, tools, monkeypatch, tmp_path, variant):
         segments = [(5, "auto caption line")]
@@ -119,7 +120,11 @@ class TestTranscript:
         assert extra["outtmpl"].endswith("/sub.%(ext)s")
         assert not Path(extra["outtmpl"]).parent.exists()  # per-call tmp removed after parsing
         lines = result.splitlines()
-        assert lines[0] == "=== Podcast transcript: P Title — P Channel ==="
+        if variant == "filepath":
+            assert lines[0] == "=== Podcast transcript: P Title — P Channel ==="
+        else:
+            assert lines[0] == "Notice: transcript language fallback: requested en, used unknown"
+            assert lines[1] == "=== Podcast transcript: P Title — P Channel ==="
         assert "[0:05] auto caption line" in lines
 
     # @unit
@@ -140,7 +145,7 @@ class TestTranscript:
             stub = _YtdlpStub(info={"title": "F Title", "uploader": "F Channel"})
         else:
             stub = _YtdlpStub(exc=Exception("no captions found"))
-        fb = MagicMock(return_value=[(5, "fb one"), (60, "fb two")])
+        fb = MagicMock(return_value=([(5, "fb one"), (60, "fb two")], "en"))
         monkeypatch.setattr(youtube_manager, "_ytdlp_extract", stub)
         monkeypatch.setattr(youtube_manager, "_fetch_transcript_fallback", fb)
 
@@ -191,7 +196,7 @@ class TestTranscript:
             stub = _YtdlpStub(info={"requested_subtitles": {"en": {"filepath": str(tmp_path / "gone.vtt")}}})
         else:
             stub = _YtdlpStub(exc=Exception("no subtitles found"))
-        fb = MagicMock(return_value=[])
+        fb = MagicMock(return_value=([], None))
         monkeypatch.setattr(youtube_manager, "_ytdlp_extract", stub)
         monkeypatch.setattr(youtube_manager, "_fetch_transcript_fallback", fb)
 

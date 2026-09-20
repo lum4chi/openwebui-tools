@@ -296,4 +296,4 @@ class TestPrune:
             assert "run start_auth" in result
             assert "finish_auth" in result
         else:
-            assert result == "YouTube Error: quota reached"
+            assert result == "Error: quota reached"

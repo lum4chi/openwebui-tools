@@ -114,7 +114,7 @@ class TestPruneDeleteResilience:
         error = RuntimeError("playlistItems.delete: 400 invalid request")
         _delete_api_fake(monkeypatch, items, error)
         result = await tools.prune_playlist()
-        assert result.startswith("Local Error:")
+        assert result.startswith("Error:")
         assert "unexpected error" in result
         assert "partial: 0 item(s) removed before failure" in result
         assert len(_kept(fake_store)) == 3

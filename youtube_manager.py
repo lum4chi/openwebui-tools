@@ -173,11 +173,6 @@ def classify_feed_error(err: Exception) -> str:
     return "local"  # local/code: AttributeError, KeyError, RuntimeError, ...
 
 
-def _failure_label(err: Exception) -> str:
-    """Provider failures keep the YouTube Error label; local/code failures get a clearly-local label."""
-    return "YouTube Error" if isinstance(err, (HttpError, QuotaError)) else "Local Error"
-
-
 def _clean_http_error(exc: BaseException) -> str:
     status = _http_status(exc)
     if status == 404:
@@ -1019,7 +1014,7 @@ def _removal_plan(
 def _prune_report(removed: list[tuple[PruneItem, str]], kept: int, failure: Exception | None, notes: list[str]) -> str:
     if failure is not None:
         lines = [
-            f"{_failure_label(failure)}: {_clean_exception(failure)}",
+            f"Error: {_clean_exception(failure)}",
             f"partial: {len(removed)} item(s) removed before failure",
         ]
     elif removed:
@@ -1330,7 +1325,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"{_failure_label(err)}: {_clean_exception(err)}"
+            return f"Error: {_clean_exception(err)}"
 
     def _add_to_playlist_core(self, video_id: str) -> str:
         notes: list[str] = []
@@ -1460,7 +1455,7 @@ class Tools:
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
-            return f"{_failure_label(err)}: {_clean_exception(err)}"
+            return f"Error: {_clean_exception(err)}"
 
     def _prune_core(self) -> str:
         store = _state_store(None)

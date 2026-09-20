@@ -100,24 +100,26 @@ class TestAddToPlaylistResilience:
         assert calls == []
         assert fake_store.docs == original
 
-    # @unit
-    # Scenario: T3-7 io errors + T3-1 provider-vs-local labeling (B2 cleaned reasons)
+    # @unit [AC-B2]
+    # Scenario: T7-2 add_to_playlist non-reauth failures use canonical Error format
+    #   Given add_to_playlist fails with QuotaError or a generic local exception
+    #   When add_to_playlist runs
+    #   Then the result is exactly "Error: {clean_reason}"
+    #   And the result does not start with "Local Error:" or "YouTube Error:"
     #   Given the Data API seam fails in one of the cases:
     #     | case           | setup                                                        | expected result                       |
-    #     | quota          | QuotaError on the membership listing (provider)              | "YouTube Error: quota reached"        |
-    #     | create_fails   | generic failure on playlists.insert (local/code)             | "Local Error: unexpected error"       |
-    #     | stale_cached   | generic failure (404) on the item insert with a cached playlist_id (local/code) | "Local Error: unexpected error"       |
-    #     | generic_insert | generic failure on the item insert (local/code)              | "Local Error: unexpected error"       |
-    #   When add_to_playlist runs
-    #   Then the result is exactly the cleaned-reason line (stable label prefix + cleaned reason)
+    #     | quota          | QuotaError on the membership listing (provider)              | "Error: quota reached"                |
+    #     | create_fails   | generic failure on playlists.insert (local/code)             | "Error: unexpected error"             |
+    #     | stale_cached   | generic failure (404) on the item insert with a cached playlist_id (local/code) | "Error: unexpected error"             |
+    #     | generic_insert | generic failure on the item insert (local/code)              | "Error: unexpected error"             |
     #   And no exception propagates and digest-state is NOT modified
     @pytest.mark.parametrize(
         ("case", "expected_result"),
         [
-            ("quota", "YouTube Error: quota reached"),
-            ("create_fails", "Local Error: unexpected error"),
-            ("stale_cached", "Local Error: unexpected error"),
-            ("generic_insert", "Local Error: unexpected error"),
+            ("quota", "Error: quota reached"),
+            ("create_fails", "Error: unexpected error"),
+            ("stale_cached", "Error: unexpected error"),
+            ("generic_insert", "Error: unexpected error"),
         ],
     )
     async def test_io_errors(self, tools, monkeypatch, fake_store, case, expected_result):

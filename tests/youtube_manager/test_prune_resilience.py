@@ -30,22 +30,22 @@ def days_ago(n: int) -> str:
 class TestPruneResilience:
     """prune_playlist: failure handling (T4-10, T4-11)."""
 
-    # @unit
-    # Scenario: T4-10 partial failure + T3-1 provider-vs-local labeling
+    # @unit [AC-B2]
+    # Scenario: T7-2 partial prune failure keeps the partial removal line
     #   Given two items qualify for removal and the first delete succeeds but the second raises
     #   When prune_playlist runs
-    #   Then a local/code delete failure labels the result "Local Error:" (the exception is code, not the provider)
-    #   And a provider delete failure (QuotaError) keeps the "YouTube Error:" label
-    #   And the result contains a "partial:" line naming the 1 succeeded removal
+    #   Then the first line is exactly "Error: {clean_reason}"
+    #   And the second line is exactly "partial: 1 item(s) removed before failure"
+    #   And the result does not start with "Local Error:" or "YouTube Error:"
     #   And no further delete is attempted after the failure
     #   And digest-state is updated only for the successfully removed item
     @pytest.mark.parametrize(
         ("error", "expected"),
         [
-            (RuntimeError("backend 500"), "Local Error: unexpected error\npartial: 1 item(s) removed before failure"),
+            (RuntimeError("backend 500"), "Error: unexpected error\npartial: 1 item(s) removed before failure"),
             (
                 QuotaError("YouTube Data API quota exceeded"),
-                "YouTube Error: quota reached\npartial: 1 item(s) removed before failure",
+                "Error: quota reached\npartial: 1 item(s) removed before failure",
             ),
         ],
         ids=["local_code_error", "provider_quota_error"],
@@ -173,7 +173,7 @@ class TestPruneApiDecodeGuard:
     #   Given prior state with one tracked item and a resolved playlist id
     #   And the Data API transport returns a transient empty/blank body
     #   When prune_playlist runs
-    #   Then it returns "Local Error: invalid API response"
+    #   Then it returns "Error: invalid API response"
     #   And the message does NOT surface the raw "Expecting value" JSON decode detail
     async def test_transient_empty_api_clean_error(self, tools, monkeypatch, fake_store):
         seed_state(fake_store, {VID_A: (days_ago(10), "Video A")}, playlist_id=PL)
@@ -181,7 +181,7 @@ class TestPruneApiDecodeGuard:
 
         result = await tools.prune_playlist()
 
-        assert result == "Local Error: invalid API response"
+        assert result == "Error: invalid API response"
         assert "Expecting value" not in result
 
     # @unit

@@ -1,8 +1,10 @@
 """T0 auth flow: consent URL, finish_auth exchange, reauth surfacing (scenarios T0-4…T0-6)."""
 
 import json
+import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -12,6 +14,7 @@ from yt_dlp.utils import DownloadError, ExtractorError
 from youtube_manager import (
     LOOPBACK_REDIRECT,
     SCOPE,
+    TOKEN_URL,
     QuotaError,
     ReauthNeeded,
     Tools,
@@ -20,8 +23,6 @@ from youtube_manager import (
     build_consent_url,
     parse_code_from_url,
 )
-
-from .conftest import FakeRequest
 
 
 class TestAuth:
@@ -60,15 +61,16 @@ class TestAuth:
         assert result.startswith("Error:")
         assert "google_client_id" in result
 
-    # @unit [AC-C1]
-    # Scenario: T7-1 successful finish_auth stores the refresh token and returns native OK
-    #   Given a Tools instance whose _oauth_token exchange returns a refresh token
-    #     And reserved context with __id__="tool-id" and an authorization header is present
-    #     And _notes_http succeeds
-    #   When finish_auth is called with a valid authorization code
-    #   Then the result is exactly "OK - credential stored; check_setup should now show ok"
-    #     And google_refresh_token is set to the exchanged refresh token
-    #     And the result does not contain the raw refresh token
+    # @unit
+    # Scenario: S1 finish_auth success
+    #   Given a Tools whose token exchange returns refresh token "new-refresh"
+    #     And a fresh DATA_DIR with no credential file
+    #   When finish_auth is called with a valid authorization code (bare code or redirect URL)
+    #   Then the token seam receives the parsed code
+    #     And DATA_DIR contains google-refresh-token.md containing exactly "new-refresh"
+    #     And the credential file mode is 0600
+    #     And the response is exactly "OK - credential stored; check_setup should now show ok"
+    #     And the response does not contain "new-refresh"
     @pytest.mark.parametrize(
         ("pasted", "label"),
         [
@@ -79,38 +81,32 @@ class TestAuth:
     )
     async def test_finish_auth_code_and_url(self, tools, pasted, label):
         token = {"access_token": "tok", "refresh_token": "new-refresh", "expires_in": 3600}
-        request = FakeRequest(headers={"authorization": "Bearer test"})
-        with (
-            patch("youtube_manager._oauth_token", return_value=token) as seam,
-            patch("youtube_manager._notes_http", return_value={}),
-        ):
-            result = await tools.finish_auth(pasted, __id__="tool-id", __request__=request)
+        with patch("youtube_manager._oauth_token", return_value=token) as seam:
+            result = await tools.finish_auth(pasted)
         assert seam.call_args.kwargs["code"] == "abc123code"
+        cred = Path(os.environ["DATA_DIR"]) / "google-refresh-token.md"
+        assert cred.read_text() == "new-refresh"
+        assert (cred.stat().st_mode & 0o777) == 0o600
         assert result == "OK - credential stored; check_setup should now show ok"
-        assert tools.valves.google_refresh_token == "new-refresh"
         assert "new-refresh" not in result
 
-    # @unit [AC-C1]
-    # Scenario: T7-1 reauth during exchange returns REAUTH_NEEDED without valve write
-    #   Given reserved context is present
-    #     And _oauth_token raises ReauthNeeded
-    #   When finish_auth is called
-    #   Then the result starts with "REAUTH_NEEDED"
+    # @unit
+    # Scenario: S8 reauth
+    #   Given exchange fails with ReauthNeeded
+    #   When finish_auth runs with a valid code
+    #   Then the response starts with REAUTH_NEEDED
     #     And it contains the start_auth / finish_auth fix instruction
-    #     And _notes_http is not called
-    async def test_finish_auth_reauth_pass_through(self):
+    #     And no credential file is written
+    async def test_finish_auth_reauth_pass_through(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
         t = Tools()
         t.valves.google_client_id = "client-id"
         t.valves.google_client_secret = "client-secret"
-        request = FakeRequest(headers={"authorization": "Bearer test"})
-        with (
-            patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("simulated")),
-            patch("youtube_manager._notes_http") as notes_http,
-        ):
-            result = await t.finish_auth("some-auth-code", __id__="tool-id", __request__=request)
+        with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("simulated")):
+            result = await t.finish_auth("some-auth-code")
         assert result.startswith("REAUTH_NEEDED")
         assert "Fix:" in result
-        assert notes_http.call_count == 0
+        assert not (Path(os.environ["DATA_DIR"]) / "google-refresh-token.md").exists()
 
     # T0-5 (edge): finish_auth without a code errors without calling the token seam
     async def test_finish_auth_without_code(self, tools):
@@ -135,37 +131,27 @@ class TestAuth:
     async def test_parse_code_from_url(self, text, expected):
         assert parse_code_from_url(text) == expected
 
-    # @unit [AC-C1]
-    # Scenario: T7-1 reauth during exchange returns REAUTH_NEEDED without valve write
-    #   Given reserved context is present
-    #     And _oauth_token raises ReauthNeeded
-    #   When finish_auth is called
-    #   Then the result starts with "REAUTH_NEEDED"
-    #     And it contains the start_auth / finish_auth fix instruction
-    #     And _notes_http is not called
-    #
-    # @unit [AC-C1-SECRET]
-    # Scenario: T7-1 generic token exchange failure returns a cleaned error without raw token
-    #   Given reserved context is present
-    #     And _oauth_token raises URLError
-    #   When finish_auth is called
-    #   Then the result is exactly "Error: network error"
-    #     And the result does not contain a refresh token
+    # @unit
+    # Scenario: S-EX exchange failure mapping
+    #   Given exchange fails with ReauthNeeded / URLError / urllib HTTPError 503
+    #   When finish_auth runs with a valid code
+    #   Then the response is the REAUTH_NEEDED block with the start_auth / finish_auth fix instruction
+    #     And the response is exactly "Error: network error" for URLError
+    #     And the response is exactly "Error: service unavailable - retry later" for urllib HTTPError 503
+    #     And the response does not contain a refresh token
+    #     And no credential file is written
     @pytest.mark.parametrize(
         ("boom", "expected"),
         [
             (ReauthNeeded("invalid_grant"), "REAUTH_NEEDED"),
             (URLError("network down"), "Error: network error"),
+            (HTTPError(TOKEN_URL, 503, "Service Unavailable", {}, None), "Error: service unavailable - retry later"),
         ],
-        ids=["invalid_grant", "network_error"],
+        ids=["invalid_grant", "network_error", "http_503"],
     )
-    async def test_reauth_on_invalid_grant(self, tools, boom, expected):
-        request = FakeRequest(headers={"authorization": "Bearer test"})
-        with (
-            patch("youtube_manager._oauth_token", side_effect=boom),
-            patch("youtube_manager._notes_http") as notes_http,
-        ):
-            result = await tools.finish_auth("sometoken", __id__="tool-id", __request__=request)
+    async def test_exchange_failure_mapping(self, tools, boom, expected):
+        with patch("youtube_manager._oauth_token", side_effect=boom):
+            result = await tools.finish_auth("sometoken")
         if expected == "REAUTH_NEEDED":
             assert result.startswith("REAUTH_NEEDED")
             assert "start_auth" in result
@@ -173,7 +159,7 @@ class TestAuth:
         else:
             assert result == expected
             assert "refresh-token" not in result
-        assert notes_http.call_count == 0
+        assert not (Path(os.environ["DATA_DIR"]) / "google-refresh-token.md").exists()
 
 
 def _http_error(status: int) -> HttpError:

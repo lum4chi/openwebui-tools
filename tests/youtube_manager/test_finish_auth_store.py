@@ -1,123 +1,170 @@
-"""T7-1 C1: finish_auth self-stores the exchanged refresh token via the Open WebUI valve update."""
+"""T7R-1 B: finish_auth stores the exchanged refresh token in a DATA_DIR file (0600); file-over-valve read precedence."""
 
-import email.message
+import os
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 import youtube_manager
+from youtube_manager import TOKEN_URL, ReauthNeeded
 
-from .conftest import FakeRequest
-
-TOKEN = {"access_token": "tok", "refresh_token": "new-refresh", "expires_in": 3600}
-MISSING_CONTEXT = "Error: valve update unavailable: missing internal request context"
-
-
-class TestFinishAuthReservedContext:
-    """finish_auth requires the reserved __id__/__request__ context before any token exchange."""
-
-    # @unit [AC-C1]
-    # Scenario: T7-1 missing internal request context fails before token exchange
-    #   Given a valid authorization code
-    #     And either __id__ is missing or __request__ is missing or the authorization header is missing
-    #   When finish_auth is called
-    #   Then the result is exactly "Error: valve update unavailable: missing internal request context"
-    #     And _oauth_token is not called
-    @pytest.mark.parametrize(
-        ("id_", "fake_request"),
-        [
-            (None, FakeRequest(headers={"authorization": "Bearer test"})),
-            ("tool-id", None),
-            ("tool-id", FakeRequest(headers={})),
-        ],
-        ids=["missing_id", "missing_request", "missing_authorization"],
-    )
-    async def test_missing_context_guard(self, tools, id_, fake_request):
-        with patch("youtube_manager._oauth_token") as oauth_token:
-            result = await tools.finish_auth("code123", __id__=id_, __request__=fake_request)
-        assert result == MISSING_CONTEXT
-        assert oauth_token.call_count == 0
+TOKEN = {"access_token": "tok", "refresh_token": "new-refresh-token", "expires_in": 3600}
+CREDENTIAL_FILE = "google-refresh-token.md"
 
 
-class TestFinishAuthValveUpdate:
-    """The valve-update POST carries the new refresh token; failures report a clean retry error."""
+def _credential_path() -> Path:
+    return Path(os.environ["DATA_DIR"]) / CREDENTIAL_FILE
 
-    # @unit [AC-C1]
-    # Scenario: T7-1 successful finish_auth stores the refresh token and returns native OK
-    #   Given a Tools instance whose _oauth_token exchange returns a refresh token
-    #     And reserved context with __id__="tool-id" and an authorization header is present
-    #     And _notes_http succeeds
+
+class _BoomStore:
+    """State store stub whose write raises OSError (S2 credential-file write failure)."""
+
+    def write(self, title: str, md: str, *, secret: bool = False) -> None:
+        raise OSError("disk full")
+
+
+class TestFinishAuthFileStore:
+    """finish_auth persists the exchanged refresh token to DATA_DIR/google-refresh-token.md (0600)."""
+
+    # @unit
+    # Scenario: S1 finish_auth success
+    #   Given a Tools whose token exchange returns refresh token "new-refresh-token"
+    #     And a fresh DATA_DIR with no credential file
     #   When finish_auth is called with a valid authorization code
-    #   Then _notes_http receives POST to the valve-update endpoint with the authorization header
-    #     And the JSON body {"google_refresh_token": "new-refresh"}
-    #   And the result is exactly "OK - credential stored; check_setup should now show ok"
-    #     And google_refresh_token is set to the exchanged refresh token
-    #     And the result does not contain the raw refresh token
-    async def test_valve_update_payload_on_success(self, tools):
-        request = FakeRequest(headers={"authorization": "Bearer test"})
-        with (
-            patch("youtube_manager._oauth_token", return_value=TOKEN),
-            patch("youtube_manager._notes_http", return_value={}) as notes_http,
-        ):
-            result = await tools.finish_auth("code123", __id__="tool-id", __request__=request)
-        notes_http.assert_called_once_with(
-            "POST",
-            "http://localhost:3000/api/v1/tools/id/tool-id/valves/update",
-            "Bearer test",
-            {"google_refresh_token": "new-refresh"},
-        )
+    #   Then DATA_DIR contains google-refresh-token.md containing exactly "new-refresh-token"
+    #     And the credential file mode is 0600
+    #     And the response is exactly "OK - credential stored; check_setup should now show ok"
+    #     And the response does not contain "new-refresh-token"
+    async def test_success_writes_0600_credential_file(self, tools):
+        with patch("youtube_manager._oauth_token", return_value=TOKEN):
+            result = await tools.finish_auth("code123")
+        cred = _credential_path()
+        assert cred.read_text() == "new-refresh-token"
+        assert (cred.stat().st_mode & 0o777) == 0o600
         assert result == "OK - credential stored; check_setup should now show ok"
-        assert tools.valves.google_refresh_token == "new-refresh"
-        assert "new-refresh" not in result
+        assert "new-refresh-token" not in result
 
-    # @unit [AC-C1-SECRET]
-    # Scenario: T7-1 valve update failure after exchange reports retry without raw token
-    #   Given _oauth_token returns a refresh token
-    #     And _notes_http raises a 503 HTTP error or a generic runtime error
-    #   When finish_auth is called
-    #   Then the result is exactly the valve-update failure string for that clean reason
-    #     And the result does not contain the raw refresh token
-    #     And google_refresh_token is not set to the exchanged refresh token
-    @pytest.mark.parametrize(
-        ("boom", "clean_reason"),
-        [
-            (
-                urllib.error.HTTPError(
-                    "http://localhost:3000/valves", 503, "Service Unavailable", email.message.Message(), None
-                ),
-                "service unavailable - retry later",
-            ),
-            (RuntimeError("update failed"), "unexpected error"),
-        ],
-        ids=["http_503", "runtime_error"],
-    )
-    async def test_valve_update_failure_after_exchange(self, tools, boom, clean_reason):
-        request = FakeRequest(headers={"authorization": "Bearer test"})
+    # @unit
+    # Scenario: S2 file-write failure after exchange
+    #   Given exchange returns "new-refresh-token"
+    #     And a fresh DATA_DIR
+    #     And the credential file write fails with an OSError
+    #   When finish_auth runs
+    #   Then the response is exactly the credential-file write failure string with the clean reason
+    #     And the response does not contain "new-refresh-token"
+    #     And the valve google_refresh_token is not modified
+    async def test_write_failure_after_exchange_reports_retry_without_raw_token(self, tools):
         with (
             patch("youtube_manager._oauth_token", return_value=TOKEN),
-            patch("youtube_manager._notes_http", side_effect=boom),
+            patch("youtube_manager._state_store", lambda request: _BoomStore()),
         ):
-            result = await tools.finish_auth("code123", __id__="tool-id", __request__=request)
-        assert result == (
-            f"Error: valve update failed: {clean_reason}. "
+            result = await tools.finish_auth("code123")
+        expected = (
+            "Error: credential file write failed: unexpected error. "
             "The authorization code was exchanged, but the new refresh token was not stored. "
             "Run start_auth and finish_auth again."
         )
-        assert "new-refresh" not in result
+        assert result == expected
+        assert "new-refresh-token" not in result
         assert tools.valves.google_refresh_token == "refresh-token"
 
 
-class TestFinishAuthDocstring:
-    """Agent-instruction step 3 reflects the stored-credential flow (no manual token storage)."""
+class TestEffectiveRefreshToken:
+    """File-over-valve precedence: the DATA_DIR credential file wins; the valve is the legacy fallback."""
 
-    # @unit [AC-C1]
-    # Scenario: T7-1 agent-instruction step 3 reflects the stored-credential flow
-    #   Given the top-level tool docstring
-    #   When the finish_auth agent-instruction step is read
-    #   Then it no longer says to print the refresh token to store
-    #   And it says the refresh token is stored via the Open WebUI valve update
-    def test_finish_auth_docstring_instruction_updated(self):
+    # @unit
+    # Scenario: S3 file precedence
+    #   Given DATA_DIR contains the credential file with "file-rt"
+    #     And the valve google_refresh_token "valve-rt"
+    #   When the effective refresh token is resolved
+    #   Then it is exactly "file-rt"
+    def test_file_precedence_over_valve(self, tools):
+        data_dir = Path(os.environ["DATA_DIR"])
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / CREDENTIAL_FILE).write_text("file-rt")
+        tools.valves.google_refresh_token = "valve-rt"
+        assert youtube_manager._effective_refresh_token(tools.valves) == "file-rt"
+
+    # @unit
+    # Scenario: S4 valve fallback
+    #   Given a fresh DATA_DIR (no file) or a whitespace-only credential file
+    #     And the valve google_refresh_token "valve-rt"
+    #   When the effective refresh token is resolved
+    #   Then it is exactly "valve-rt"
+    @pytest.mark.parametrize(
+        "content",
+        [pytest.param(None, id="no_file"), pytest.param("  \n", id="whitespace_only_file")],
+    )
+    def test_valve_fallback_when_file_absent(self, tools, content):
+        if content is not None:
+            data_dir = Path(os.environ["DATA_DIR"])
+            data_dir.mkdir(parents=True, exist_ok=True)
+            (data_dir / CREDENTIAL_FILE).write_text(content)
+        tools.valves.google_refresh_token = "valve-rt"
+        assert youtube_manager._effective_refresh_token(tools.valves) == "valve-rt"
+
+
+class TestFinishAuthErrors:
+    """finish_auth error paths: no code and reauth surface cleanly and write no credential file."""
+
+    # @unit
+    # Scenario: S7 no code
+    #   Given a Tools
+    #   When finish_auth is called with a string containing no code
+    #   Then the response is exactly "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
+    #     And no credential file is written
+    async def test_no_code_exact_and_no_file(self, tools):
+        with patch("youtube_manager._oauth_token"):
+            result = await tools.finish_auth("http://127.0.0.1:8085/oauth2callback?error=access_denied")
+        expected = "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
+        assert result == expected
+        assert not _credential_path().exists()
+
+    # @unit
+    # Scenario: S8 reauth
+    #   Given exchange fails with ReauthNeeded
+    #   When finish_auth runs with a valid code
+    #   Then the response starts with REAUTH_NEEDED
+    #     And it contains the start_auth / finish_auth fix instruction
+    #     And no credential file is written
+    async def test_reauth_pass_through_writes_no_file(self, tools):
+        with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("invalid_grant")):
+            result = await tools.finish_auth("some-auth-code")
+        assert result.startswith("REAUTH_NEEDED")
+        assert "start_auth" in result
+        assert "finish_auth" in result
+        assert not _credential_path().exists()
+
+
+class TestFinishAuthExchangeFailure:
+    """S-EX: a Google 503 from the token exchange maps to the clean service-unavailable error."""
+
+    # @unit
+    # Scenario: S-EX exchange failure mapping
+    #   Given exchange fails with a urllib HTTPError 503
+    #   When finish_auth runs with a valid code
+    #   Then the response is exactly "Error: service unavailable - retry later"
+    #     And no credential file is written
+    async def test_exchange_http_503_maps_to_service_unavailable(self, tools):
+        boom = urllib.error.HTTPError(TOKEN_URL, 503, "Service Unavailable", {}, None)
+        with patch("youtube_manager._oauth_token", side_effect=boom):
+            result = await tools.finish_auth("some-auth-code")
+        assert result == "Error: service unavailable - retry later"
+        assert not _credential_path().exists()
+
+
+class TestFinishAuthDocstring:
+    """Agent-instruction step 3 describes the local credential-file storage."""
+
+    # @unit
+    # Scenario: S10 docstring
+    #   Given the tool file
+    #   When agent-instructions step 3 is read
+    #   Then it does not contain "via the Open WebUI valve update"
+    #     And it contains "store the refresh token to a local credential file"
+    def test_step3_describes_local_credential_file(self):
         doc = youtube_manager.__doc__ or ""
-        assert "print the refresh token to store" not in doc
-        assert "store the refresh token via the Open WebUI valve update" in doc
+        assert "via the Open WebUI valve update" not in doc
+        assert "store the refresh token to a local credential file" in doc

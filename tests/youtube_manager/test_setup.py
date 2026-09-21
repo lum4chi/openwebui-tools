@@ -1,5 +1,7 @@
 """T0 setup checks: check_setup readiness reporting (scenarios T0-1…T0-3) + B3 per-source readiness."""
 
+import os
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
 
@@ -51,6 +53,32 @@ class TestCheckSetup:
         assert "session" not in lowered
         assert "cookies" not in lowered
         assert "username" not in lowered
+
+    # @unit
+    # Scenario: S5 check_setup READY from file
+    #   Given DATA_DIR contains the credential file with "file-rt"
+    #     And a Tools with client_id and client_secret set and an EMPTY valve google_refresh_token
+    #     And a successful token refresh
+    #   When check_setup is called
+    #   Then the response reports READY
+    async def test_ready_from_credential_file_with_empty_valve(self, tools):
+        data_dir = Path(os.environ["DATA_DIR"])
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "google-refresh-token.md").write_text("file-rt")
+        tools.valves.google_refresh_token = ""
+        with patch(
+            "youtube_manager._oauth_token",
+            return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+        ):
+            result = await tools.check_setup()
+        lines = result.splitlines()
+        assert lines[0] == "search: ok"
+        assert lines[1] == "subscriptions: ok"
+        assert lines[2] == "watch_later: ok (playlist not checked)"
+        assert lines[-1] == "READY"
+        assert "NOT READY" not in result
+        assert "MISSING" not in result
+        assert "INVALID" not in result
 
     # @unit
     # Scenario: T0-2 check_setup missing parts
@@ -111,6 +139,24 @@ class TestCheckSetup:
             state = "INVALID - stored refresh token is stale; run start_auth then finish_auth"
         else:
             state = "CHECK FAILED - token endpoint unreachable"
+        assert lines[1] == f"subscriptions: {state}"
+        assert lines[2] == f"watch_later: {state}"
+        assert lines[-1] == "NOT READY"
+
+    # @unit
+    # Scenario: S6 wiped file + stale valve
+    #   Given a fresh DATA_DIR (no file)
+    #     And a Tools with client_id/client_secret set and a stale valve google_refresh_token
+    #     And a token refresh that fails with ReauthNeeded
+    #   When check_setup is called
+    #   Then the response reports NOT READY
+    #     And the token line is exactly "INVALID - stored refresh token is stale; run start_auth then finish_auth"
+    async def test_stale_valve_with_absent_file_reports_stale(self, tools):
+        with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("invalid_grant")):
+            result = await tools.check_setup()
+        lines = result.splitlines()
+        assert lines[0] == "search: ok"
+        state = "INVALID - stored refresh token is stale; run start_auth then finish_auth"
         assert lines[1] == f"subscriptions: {state}"
         assert lines[2] == f"watch_later: {state}"
         assert lines[-1] == "NOT READY"

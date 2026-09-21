@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.0
+version: 1.5.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -12,7 +12,7 @@ Agent instructions:
   SETUP (this slice):
    1. check_setup — verify the Google OAuth set (live token check only when the set is complete)
   2. start_auth — print the Google consent URL for the youtube scope
-   3. finish_auth — exchange the pasted code/redirect URL and store the refresh token via the Open WebUI valve update
+   3. finish_auth — exchange the pasted code/redirect URL and store the refresh token to a local credential file (automatic; no manual storage)
 """
 
 import contextlib
@@ -44,6 +44,7 @@ SCOPE = "https://www.googleapis.com/auth/youtube"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 LOOPBACK_REDIRECT = "http://127.0.0.1:8085/oauth2callback"
 NOTE_TASTE, NOTE_FEEDBACK, NOTE_STATE = "taste-profile", "feedback-log", "digest-state"
+CREDENTIAL_TITLE = "google-refresh-token"
 GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
 DECISIONS = ("watched", "listened", "skipped")
 DATA_API_VERSION = "v3"
@@ -680,7 +681,9 @@ def _fetch_gated(
 
 
 def _oauth_set(valves) -> bool:
-    return all(getattr(valves, name) for name in GOOGLE_FIELDS)
+    return (
+        bool(valves.google_client_id) and bool(valves.google_client_secret) and bool(_effective_refresh_token(valves))
+    )
 
 
 def _oauth_token(valves, code: str | None = None) -> dict:
@@ -695,7 +698,7 @@ def _oauth_token(valves, code: str | None = None) -> dict:
     else:
         data = {
             "grant_type": "refresh_token",
-            "refresh_token": valves.google_refresh_token,
+            "refresh_token": _effective_refresh_token(valves),
             "client_id": valves.google_client_id,
             "client_secret": valves.google_client_secret,
         }
@@ -863,9 +866,12 @@ class _FileStore:
         path = self.data_dir / f"{title}.md"
         return path.read_text() if path.exists() else None
 
-    def write(self, title: str, md: str) -> None:
+    def write(self, title: str, md: str, *, secret: bool = False) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        (self.data_dir / f"{title}.md").write_text(md)
+        path = self.data_dir / f"{title}.md"
+        path.write_text(md)
+        if secret:
+            path.chmod(0o600)
 
 
 class _NotesStore:
@@ -880,7 +886,7 @@ class _NotesStore:
                 return note.get("content")
         return None
 
-    def write(self, title: str, md: str) -> None:
+    def write(self, title: str, md: str, *, secret: bool = False) -> None:
         _notes_http("POST", self.url, self.auth, {"title": title, "content": md})
 
 
@@ -891,6 +897,15 @@ def _state_store(request):
         return _NotesStore(f"{base}/api/v1/studio/notes", auth)
     data_dir = Path(os.environ.get("DATA_DIR") or Path.cwd() / "data")
     return _FileStore(data_dir)
+
+
+def _file_refresh_token() -> str | None:
+    token = _read_doc(_state_store(None), CREDENTIAL_TITLE)
+    return token.strip() if token else None
+
+
+def _effective_refresh_token(valves) -> str:
+    return _file_refresh_token() or valves.google_refresh_token
 
 
 def _read_doc(store, title: str) -> str | None:
@@ -1125,29 +1140,24 @@ class Tools:
             f"{url}"
         )
 
-    async def finish_auth(self, code_or_url: str, __id__: str | None = None, __request__: Any | None = None) -> str:
+    async def finish_auth(self, code_or_url: str) -> str:
         code = parse_code_from_url(code_or_url)
         if not code:
             return "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
-        auth = __request__.headers.get("authorization") if __request__ is not None else None
-        if not __id__ or __request__ is None or not auth:
-            return "Error: valve update unavailable: missing internal request context"
         try:
             token = _oauth_token(self.valves, code=code)
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
             return _error_return(err, self.valves.verbose)
-        url = f"{str(__request__.base_url).rstrip('/')}/api/v1/tools/id/{__id__}/valves/update"
         try:
-            _notes_http("POST", url, str(auth), {"google_refresh_token": token["refresh_token"]})
+            _state_store(None).write(CREDENTIAL_TITLE, token["refresh_token"], secret=True)
         except Exception as err:
             return (
-                f"Error: valve update failed: {_clean_exception(err)}. "
+                f"Error: credential file write failed: {_clean_exception(err)}. "
                 "The authorization code was exchanged, but the new refresh token was not stored. "
                 "Run start_auth and finish_auth again."
             )
-        self.valves.google_refresh_token = token["refresh_token"]
         return "OK - credential stored; check_setup should now show ok"
 
     def _video_details(self, video_ids: list[str]) -> dict[str, dict]:

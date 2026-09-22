@@ -77,18 +77,24 @@ class TestTaste:
         assert removed == 0
 
     # @unit
-    # Scenario: T1-12 save taste profile
-    #   Given a taste-profile markdown string
+    # Scenario: T8-3 S3 success returns a confirmation echo and writes the file
+    #   Given a non-empty md="## Topics\n- rust async"
     #   When save_taste_profile is called
-    #   Then the state store write is called with the taste-profile title and the markdown
-    #   And the result is OK
-    #   And a state-store write that raises is caught and returned as an Error string (no crash)
+    #   Then the file is written with exactly that md
+    #   And the response is exactly "OK - saved taste profile: 22 chars, 2 lines; first line: \"## Topics\""
     async def test_save_taste_profile(self, tools, fake_store):
-        result = await tools.save_taste_profile(DOC)
+        md = "## Topics\n- rust async"
 
-        assert result == "OK"
-        assert fake_store.docs[NOTE_TASTE] == DOC
+        result = await tools.save_taste_profile(md)
 
+        assert result == 'OK - saved taste profile: 22 chars, 2 lines; first line: "## Topics"'
+        assert fake_store.docs[NOTE_TASTE] == md
+
+    # @unit
+    # Scenario: T8-3 S5 a write failure returns the cleaned error path
+    #   Given a non-empty md and a mocked state store whose write raises OSError
+    #   When save_taste_profile is called
+    #   Then the response is the cleaned error return via _error_return (not the success echo)
     async def test_save_taste_profile_write_failure(self, tools, monkeypatch):
         def _boom(title, md):
             raise RuntimeError("state store down")
@@ -100,6 +106,44 @@ class TestTaste:
         result = await tools.save_taste_profile(DOC)  # no exception propagates
 
         assert result == "Error: unexpected error"
+
+    # @unit
+    # Scenario: T8-3 S1 empty string is rejected without a write
+    #   Given an empty md=""
+    #   When save_taste_profile is called
+    #   Then the response is exactly "Error: cannot save an empty taste profile"
+    #   And no file is written
+    async def test_save_taste_profile_empty(self, tools, fake_store):
+        result = await tools.save_taste_profile("")
+
+        assert result == "Error: cannot save an empty taste profile"
+        assert NOTE_TASTE not in fake_store.docs
+
+    # @unit
+    # Scenario: T8-3 S2 whitespace-only is rejected without a write
+    #   Given a whitespace-only md="   \n\t  "
+    #   When save_taste_profile is called
+    #   Then the response is exactly "Error: cannot save an empty taste profile"
+    #   And no file is written
+    async def test_save_taste_profile_whitespace_only(self, tools, fake_store):
+        result = await tools.save_taste_profile("   \n\t  ")
+
+        assert result == "Error: cannot save an empty taste profile"
+        assert NOTE_TASTE not in fake_store.docs
+
+    # @unit
+    # Scenario: T8-3 S4 the first line in the echo is truncated to 80 chars
+    #   Given a non-empty md whose first non-empty line is longer than 80 chars
+    #   When save_taste_profile is called
+    #   Then the response first-line field shows exactly the first 80 chars of that line
+    async def test_save_taste_profile_echo_truncates_first_line(self, tools, fake_store):
+        first = "x" * 120
+        md = f"{first}\n- rust async"
+
+        result = await tools.save_taste_profile(md)
+
+        assert result == f'OK - saved taste profile: {len(md)} chars, 2 lines; first line: "{"x" * 80}"'
+        assert fake_store.docs[NOTE_TASTE] == md
 
 
 def _entry(video_id):

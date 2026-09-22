@@ -1412,11 +1412,14 @@ class Tools:
         return _with_notes(payload, notes)
 
     async def save_taste_profile(self, md: str) -> str:
+        if not (md or "").strip():
+            return "Error: cannot save an empty taste profile"
         try:
             _state_store(None).write(NOTE_TASTE, md)
         except Exception as err:
             return _error_return(err, self.valves.verbose)
-        return "OK"
+        first_line = next((line for line in md.splitlines() if line.strip()), "")[:80]
+        return f'OK - saved taste profile: {len(md)} chars, {len(md.splitlines())} lines; first line: "{first_line}"'
 
     async def transcript(self, video_id: str, language: str = "en") -> str:
         """Podcast-format transcript: yt-dlp subtitles primary, youtube-transcript-api fallback."""

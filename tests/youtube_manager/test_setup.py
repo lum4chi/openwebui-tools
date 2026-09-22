@@ -7,7 +7,7 @@ from urllib.error import URLError
 
 import pytest
 
-from youtube_manager import ReauthNeeded
+from youtube_manager import ReauthNeeded, Tools
 
 GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
 
@@ -25,6 +25,13 @@ def _set_case(tools, case):
         setattr(tools.valves, field, value)
 
 
+def _probe_return(value: str):
+    async def probe(self):
+        return value
+
+    return probe
+
+
 class TestCheckSetup:
     """check_setup readiness reporting."""
 
@@ -35,16 +42,24 @@ class TestCheckSetup:
     #   Then the result contains "READY"
     #   And it names no missing or invalid item
     #   And it names no session, cookies, or username requirement
+    # Scenario: T9-1 S2 check_setup is READY only when the WL probe succeeds
+    #   Given the OAuth fields are complete and the token status is valid
+    #   And Tools._watch_later_probe returns "ok (playlist checked)"
+    #   When check_setup runs
+    #   Then the result lines are exactly "search: ok", "subscriptions: ok", "watch_later: ok (playlist checked)", "READY"
     async def test_ready(self, tools):
-        with patch(
-            "youtube_manager._oauth_token",
-            return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+        with (
+            patch(
+                "youtube_manager._oauth_token",
+                return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+            ),
+            patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
         ):
             result = await tools.check_setup()
         lines = result.splitlines()
         assert lines[0] == "search: ok"
         assert lines[1] == "subscriptions: ok"
-        assert lines[2] == "watch_later: ok (playlist not checked)"
+        assert lines[2] == "watch_later: ok (playlist checked)"
         assert lines[-1] == "READY"
         assert "NOT READY" not in result
         assert "MISSING" not in result
@@ -66,19 +81,45 @@ class TestCheckSetup:
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / "google-refresh-token.md").write_text("file-rt")
         tools.valves.google_refresh_token = ""
-        with patch(
-            "youtube_manager._oauth_token",
-            return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+        with (
+            patch(
+                "youtube_manager._oauth_token",
+                return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+            ),
+            patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
         ):
             result = await tools.check_setup()
         lines = result.splitlines()
         assert lines[0] == "search: ok"
         assert lines[1] == "subscriptions: ok"
-        assert lines[2] == "watch_later: ok (playlist not checked)"
+        assert lines[2] == "watch_later: ok (playlist checked)"
         assert lines[-1] == "READY"
         assert "NOT READY" not in result
         assert "MISSING" not in result
         assert "INVALID" not in result
+
+    # @unit
+    # Scenario: T9-1 S3 check_setup is NOT READY when the WL probe fails
+    #   Given the OAuth fields are complete and the token status is valid
+    #   And Tools._watch_later_probe returns "CHECK FAILED - reauth"
+    #   When check_setup runs
+    #   Then the watch_later line is exactly "watch_later: CHECK FAILED - reauth"
+    #   And the final line is exactly "NOT READY"
+    async def test_ready_probe_failed_not_ready(self, tools):
+        with (
+            patch(
+                "youtube_manager._oauth_token",
+                return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+            ),
+            patch.object(Tools, "_watch_later_probe", _probe_return("CHECK FAILED - reauth")),
+        ):
+            result = await tools.check_setup()
+        assert result.splitlines() == [
+            "search: ok",
+            "subscriptions: ok",
+            "watch_later: CHECK FAILED - reauth",
+            "NOT READY",
+        ]
 
     # @unit
     # Scenario: T0-2 check_setup missing parts
@@ -171,18 +212,26 @@ class TestCheckSetupPerSource:
     #   When check_setup is called
     #   Then the first line is exactly "search: ok"
     #   And the second line is exactly "subscriptions: ok"
-    #   And the third line is exactly "watch_later: ok (playlist not checked)"
+    #   And the third line is exactly "watch_later: ok (playlist checked)"
     #   And the last line is exactly "READY"
+    # Scenario: T9-1 S2 check_setup is READY only when the WL probe succeeds
+    #   Given the OAuth fields are complete and the token status is valid
+    #   And Tools._watch_later_probe returns "ok (playlist checked)"
+    #   When check_setup runs
+    #   Then the result lines are exactly "search: ok", "subscriptions: ok", "watch_later: ok (playlist checked)", "READY"
     async def test_check_setup_per_source_ready(self, tools):
-        with patch(
-            "youtube_manager._oauth_token",
-            return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+        with (
+            patch(
+                "youtube_manager._oauth_token",
+                return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
+            ),
+            patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
         ):
             result = await tools.check_setup()
         assert result.splitlines() == [
             "search: ok",
             "subscriptions: ok",
-            "watch_later: ok (playlist not checked)",
+            "watch_later: ok (playlist checked)",
             "READY",
         ]
 

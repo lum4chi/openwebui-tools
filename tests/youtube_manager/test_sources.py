@@ -47,17 +47,14 @@ def _playlist_item(video_id):
     return {"contentDetails": {"videoId": video_id}} if video_id else {"id": "item-without-video"}
 
 
-def _api_fake(details, playlist_items, playlist_id="WL-1"):
-    """Route _data_api_request by method; record calls as (method, params) pairs."""
+def _api_fake(details, playlist_items):
+    """Route _data_api_request by method (literal WL); record calls as (method, params) pairs."""
     calls: list[tuple[str, dict]] = []
 
     def fake(valves, method, params):
         calls.append((method, dict(params)))
         if method == "channels.list":
-            channel: dict = {"id": "me"}
-            if playlist_id is not None:
-                channel["contentDetails"] = {"relatedPlaylists": {"watchLater": playlist_id}}
-            return {"items": [channel]}
+            raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlistItems.list":
             return {"items": playlist_items}
         if method == "videos.list":
@@ -101,8 +98,15 @@ class TestWatchLater:
     #   Then watch-later items appear as candidates
     #   And their duration/views come from the batched videos enrichment
     #   And items already present from other sources are deduped, not duplicated
+    # Scenario: T9-1 S1 Watch Later reads the canonical WL playlist directly
+    #   Given OAuth is configured
+    #   And the Data API seam serves playlistItems.list for playlistId "WL"
+    #   When _fetch_watch_later runs
+    #   Then playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
+    #     And channels.list is never called
+    #     And the returned candidates are labelled "watch_later"
     @pytest.mark.parametrize(
-        ("playlist_ids", "expected_ids", "search_overlap", "expected_video_calls", "playlist_id", "detail_overrides"),
+        ("playlist_ids", "expected_ids", "search_overlap", "expected_video_calls", "detail_overrides"),
         [
             (
                 # wl-a also arrives via the search source -> deduped, not duplicated;
@@ -112,7 +116,6 @@ class TestWatchLater:
                 ["wl-a", "wl-b", "wl-c"],
                 True,
                 1,
-                "WL-1",
                 {"wl-c": _detail("wl-c", duration=None, published_at=None)},
             ),
             (
@@ -122,21 +125,18 @@ class TestWatchLater:
                 [f"wl-{i:02d}" for i in range(51)],
                 False,
                 2,
-                "WL-1",
                 {"wl-25": _detail("wl-25", duration="P9Y")},
             ),
             (
-                # channel has no relatedPlaylists -> watch_later yields nothing,
-                # no playlistItems/videos calls
+                # no watch_later items -> one playlistItems.list call, no videos.list
                 [],
                 [],
                 False,
                 0,
-                None,
                 {},
             ),
         ],
-        ids=["overlap_and_enrich", "batched_enrichment_order_preserved", "no_watch_later_playlist"],
+        ids=["overlap_and_enrich", "batched_enrichment_order_preserved", "no_watch_later_items"],
     )
     async def test_merge_and_enrich(
         self,
@@ -146,12 +146,11 @@ class TestWatchLater:
         expected_ids,
         search_overlap,
         expected_video_calls,
-        playlist_id,
         detail_overrides,
     ):
         details = {vid: _detail(vid, view_count=777 if vid == "wl-b" else None) for vid in playlist_ids if vid}
         details.update(detail_overrides)
-        api_fake, calls = _api_fake(details, [_playlist_item(vid) for vid in playlist_ids], playlist_id=playlist_id)
+        api_fake, calls = _api_fake(details, [_playlist_item(vid) for vid in playlist_ids])
         flat = {"ytsearch51:rust async": ["wl-a"] if search_overlap else []}
         full = {"https://www.youtube.com/watch?v=wl-a": _entry("wl-a")} if search_overlap else {}
         ytdlp_calls = _ytdlp_fake(monkeypatch, flat, full)
@@ -168,11 +167,12 @@ class TestWatchLater:
         if expected_video_calls == 2:
             assert video_calls[0]["ids"] == ",".join(expected_ids[:50])
             assert video_calls[1]["ids"] == expected_ids[50]
-        if playlist_id is None:
-            assert calls == [("channels.list", {"part": "contentDetails", "mine": "true"})]
+        if not playlist_ids:
+            assert calls == [("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "51"})]
+        assert not any(method == "channels.list" for method, _ in calls)
         for method, params in calls:
             if method == "playlistItems.list":
-                assert params["playlistId"] == "WL-1"
+                assert params["playlistId"] == "WL"
                 assert params["maxResults"] == "51"
         if search_overlap:
             # first-seen (search) candidate wins the dedupe; watch-later copy dropped

@@ -72,7 +72,7 @@ def _api_fake(monkeypatch, video_ids, raise_on: str | None = None):
         if raise_on is not None and method == raise_on:
             raise ReauthNeeded("Google credential rejected by the Data API")
         if method == "channels.list":
-            return {"items": [{"id": "me", "contentDetails": {"relatedPlaylists": {"watchLater": "WL-1"}}}]}
+            raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlistItems.list":
             return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
         if method == "videos.list":
@@ -164,7 +164,7 @@ class TestDigest:
     async def test_watch_later_reauth(self, tools, monkeypatch, fake_store):
         fake_store.docs[NOTE_TASTE] = sample_taste_profile(["rust async"], [])
         _ytdlp_fake(monkeypatch, {"ytsearch20:rust async": [_entry("rust1")]})
-        _api_fake(monkeypatch, ["wl1"], raise_on="channels.list")
+        _api_fake(monkeypatch, ["wl1"], raise_on="playlistItems.list")
 
         payload = await tools.digest()  # no exception propagates
 

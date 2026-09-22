@@ -34,10 +34,12 @@ def _stub_urlopen(monkeypatch, feeds: Mapping[str, Exception]) -> None:
 
 
 def _stub_api(monkeypatch, subscriptions_items: list[dict]) -> None:
-    """Route channels.list -> no Watch Later, subscriptions.list -> the given items."""
+    """Route the digest Data API seam: literal WL empty, subscriptions.list -> the given items."""
 
     def fake(valves, method, params):
         if method == "channels.list":
+            raise AssertionError("channels.list must never be called on the watch_later path")
+        if method == "playlistItems.list":
             return {"items": []}
         if method == "subscriptions.list":
             return {"items": subscriptions_items}

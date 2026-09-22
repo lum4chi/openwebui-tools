@@ -59,7 +59,7 @@ def _api_fake(
         if method == "subscriptions.list":
             return {"items": channels or []}
         if method == "channels.list":
-            return {"items": [{"contentDetails": {"relatedPlaylists": {"watchLater": "WL-1"}}}]}
+            raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlistItems.list":
             return {"items": watch_later_items or []}
         if method == "videos.list":

@@ -1143,8 +1143,8 @@ class Tools:
         token_status = _token_status(self.valves) if oauth_ok else None
         if oauth_ok and token_status is None:
             subscriptions = "subscriptions: ok"
-            watch_later = "watch_later: ok (playlist not checked)"
-            overall = "READY"
+            watch_later = f"watch_later: {await self._watch_later_probe()}"
+            overall = "READY" if watch_later.startswith("watch_later: ok") else "NOT READY"
         elif oauth_ok:
             subscriptions = f"subscriptions: {token_status}"
             watch_later = f"watch_later: {token_status}"
@@ -1197,16 +1197,10 @@ class Tools:
         return details
 
     def _fetch_watch_later(self, max_per_source: int, notes: list[str] | None = None) -> list[Candidate]:
-        channel = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "mine": "true"})
-        item = (channel.get("items") or [{}])[0]
-        playlist_id = ((item.get("contentDetails") or {}).get("relatedPlaylists") or {}).get("watchLater")
-        if not playlist_id:
-            _note_watch_later(notes, "Watch Later playlist not found")
-            return []
         resp = _data_api_request(
             self.valves,
             "playlistItems.list",
-            {"part": "contentDetails", "playlistId": playlist_id, "maxResults": str(max_per_source)},
+            {"part": "contentDetails", "playlistId": "WL", "maxResults": str(max_per_source)},
         )
         video_ids: list[str] = []
         for it in resp.get("items") or []:
@@ -1217,6 +1211,17 @@ class Tools:
         resolved = [details[vid] for vid in video_ids if vid in details]
         _note_details_unavailable(notes, video_ids, resolved)
         return candidates_from_api(resolved, "watch_later")
+
+    async def _watch_later_probe(self) -> str:
+        try:
+            _data_api_request(
+                self.valves,
+                "playlistItems.list",
+                {"part": "contentDetails", "playlistId": "WL", "maxResults": "1"},
+            )
+        except Exception as err:
+            return f"CHECK FAILED - {_failure_reason(err)}"
+        return "ok (playlist checked)"
 
     def _list_subscription_channels(self) -> list[dict]:
         channels: list[dict] = []

@@ -113,7 +113,7 @@ def _api_fake(monkeypatch, video_ids=("wl1",)):
 
     def fake(valves, method, params):
         if method == "channels.list":
-            return {"items": [{"id": "me", "contentDetails": {"relatedPlaylists": {"watchLater": "WL-1"}}}]}
+            raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlistItems.list":
             return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
         if method == "videos.list":

@@ -635,6 +635,10 @@ def render_digest(
     lines += _stats_lines(stats)
     lines += _sources_lines(source_counts)
     lines += _candidates_section(candidates)
+    if not candidates:
+        lines.append(
+            "Next: review Sources above; if any source is skipped, run check_setup, then start_auth and finish_auth."
+        )
     return "\n".join(lines)
 
 

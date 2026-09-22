@@ -1,7 +1,7 @@
 """T1 digest payload: raw profile verbatim (T1-1), watch_later reauth (T1-7), id list (T1-8), first-run guidance (T1-9)."""
 
 import youtube_manager
-from youtube_manager import NOTE_TASTE, ReauthNeeded
+from youtube_manager import NOTE_TASTE, Candidate, FeedbackStats, ReauthNeeded, render_digest
 
 from .conftest import sample_taste_profile
 
@@ -227,3 +227,68 @@ class TestDigest:
 
         assert payload_raising == payload_absent  # treated as absent — same guidance, no crash
         assert ytdlp_calls == []
+
+
+HINT = "Next: review Sources above; if any source is skipped, run check_setup, then start_auth and finish_auth."
+
+
+class TestDigestZeroCandidateHint:
+    """T9-4 M2: stable zero-candidate next-step hint in render_digest only."""
+
+    # @unit
+    # Scenario: T9-4 S1 digest zero candidates emits stable next-step hint
+    #   Given the digest has zero candidates
+    #   When render_digest renders the digest payload
+    #   Then the payload contains "=== Candidates (0) ==="
+    #     And it contains "Candidate IDs: (none)"
+    #     And the line immediately after "Candidate IDs: (none)" is exactly "Next: review Sources above; if any source is skipped, run check_setup, then start_auth and finish_auth."
+    def test_render_digest_zero_candidates_emits_hint(self):
+        payload = render_digest([], None, FeedbackStats({}, {}, []), {})
+        lines = payload.splitlines()
+        assert "=== Candidates (0) ===" in payload
+        assert "Candidate IDs: (none)" in payload
+        idx = lines.index("Candidate IDs: (none)")
+        assert lines[idx + 1] == HINT  # immediately after, no extra blank line between them
+
+    # @unit
+    # Scenario: T9-4 S2 digest positive candidates do not emit the hint
+    #   Given the digest has one candidate
+    #   When render_digest renders the digest payload
+    #   Then the payload contains "=== Candidates (1) ==="
+    #     And the payload does not contain "Next: review Sources above"
+    #     And the candidates section keeps the existing positive-candidate shape
+    def test_render_digest_positive_candidates_has_no_hint(self):
+        cand = Candidate(
+            video_id="wl1",
+            title="Detail title wl1",
+            channel_name="Detail channel wl1",
+            channel_id="ch-wl1",
+            duration_sec=155,
+            views=980,
+            published="2026-09-01",
+            description="Detail description wl1",
+            tags=["wl-tag"],
+            sources=["watch_later"],
+        )
+        payload = render_digest([cand], None, FeedbackStats({}, {}, []), {"watch_later": 1})
+        lines = payload.splitlines()
+        assert "=== Candidates (1) ===" in payload
+        assert HINT not in payload
+        idx = lines.index("=== Candidates (1) ===")
+        assert lines[idx + 1] == "[1] Detail title wl1 - Detail channel wl1 (2:35, 980 views, 2026-09-01)"
+        assert lines[idx + 2] == "Candidate IDs: wl1"
+        assert lines[-1] == "Candidate IDs: wl1"  # candidates section is last — no hint appended
+
+    # @unit
+    # Scenario: T9-4 S3 gather_candidates zero candidates remain unchanged
+    #   Given gather_candidates returns zero candidates
+    #   When gather_candidates renders the candidates payload
+    #   Then the payload contains "=== Candidates (0) ==="
+    #     And the payload does not contain "Next: review Sources above"
+    async def test_gather_zero_candidates_has_no_hint(self, tools, monkeypatch):
+        _clear_oauth(tools)  # OAuth unset: watch_later skipped with a note
+        _api_fake(monkeypatch, [])  # inert: no Data API calls expected
+        _ytdlp_fake(monkeypatch, {})  # no search seam; nothing to serve
+        payload = await tools.gather_candidates(sources="watch_later")
+        assert "=== Candidates (0) ===" in payload
+        assert HINT not in payload

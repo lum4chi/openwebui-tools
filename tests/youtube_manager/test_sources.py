@@ -67,13 +67,15 @@ def _api_fake(details, playlist_items, playlist_id="WL-1"):
     return fake, calls
 
 
-def _ytdlp_fake(monkeypatch, by_url):
-    """Patch _ytdlp_extract to serve entries per URL; return the called-URL list."""
+def _ytdlp_fake(monkeypatch, flat: dict[str, list[str]], full: dict[str, dict]):
+    """Patch _ytdlp_extract: flat listings serve id-only rows, watch URLs serve full entries."""
     calls: list[str] = []
 
     def fake(url, extra=None):
         calls.append(url)
-        return {"entries": by_url.get(url, [])}
+        if url in flat:
+            return {"entries": [{"id": video_id} for video_id in flat[url]]}
+        return full[url]
 
     monkeypatch.setattr(youtube_manager, "_ytdlp_extract", fake)
     return calls
@@ -150,8 +152,9 @@ class TestWatchLater:
         details = {vid: _detail(vid, view_count=777 if vid == "wl-b" else None) for vid in playlist_ids if vid}
         details.update(detail_overrides)
         api_fake, calls = _api_fake(details, [_playlist_item(vid) for vid in playlist_ids], playlist_id=playlist_id)
-        ytdlp_by_url = {"ytsearch51:rust async": [_entry("wl-a")]} if search_overlap else {"ytsearch51:rust async": []}
-        ytdlp_calls = _ytdlp_fake(monkeypatch, ytdlp_by_url)
+        flat = {"ytsearch51:rust async": ["wl-a"] if search_overlap else []}
+        full = {"https://www.youtube.com/watch?v=wl-a": _entry("wl-a")} if search_overlap else {}
+        ytdlp_calls = _ytdlp_fake(monkeypatch, flat, full)
         monkeypatch.setattr(youtube_manager, "_data_api_request", api_fake)
 
         payload = await tools.gather_candidates(
@@ -187,7 +190,11 @@ class TestWatchLater:
             assert "Detail title wl-00" in payload
             assert "Detail title wl-50" in payload
             assert "duration unknown" in payload  # wl-25 malformed ISO-8601 duration
-        assert ytdlp_calls == ["ytsearch51:rust async"]
+        if search_overlap:
+            # flat listing call first, then the per-video watch-URL fetch (B1)
+            assert ytdlp_calls == ["ytsearch51:rust async", "https://www.youtube.com/watch?v=wl-a"]
+        else:
+            assert ytdlp_calls == ["ytsearch51:rust async"]
 
 
 class TestSourcesArg:
@@ -207,7 +214,11 @@ class TestSourcesArg:
         ids=["query_ok", "empty_query", "whitespace_query"],
     )
     async def test_search_needs_query(self, tools, monkeypatch, search_query, expect_error):
-        ytdlp_calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("srch-1")]})
+        ytdlp_calls = _ytdlp_fake(
+            monkeypatch,
+            {"ytsearch5:rust async": ["srch-1"]},
+            {"https://www.youtube.com/watch?v=srch-1": _entry("srch-1")},
+        )
 
         payload = await tools.gather_candidates(sources="search", max_per_source=5, search_query=search_query)
 
@@ -217,11 +228,11 @@ class TestSourcesArg:
             assert ytdlp_calls == []  # no I/O for the invalid request
         else:
             assert "srch-1" in payload  # search results appear as a candidate source
-            assert ytdlp_calls == ["ytsearch5:rust async"]
+            assert ytdlp_calls == ["ytsearch5:rust async", "https://www.youtube.com/watch?v=srch-1"]
 
     # Scenario T1-4 (edge): unknown name / empty / whitespace -> error naming valid sources, no I/O
     async def test_unknown_source_error(self, tools, monkeypatch):
-        ytdlp_calls = _ytdlp_fake(monkeypatch, {})
+        ytdlp_calls = _ytdlp_fake(monkeypatch, {}, {})
         api_calls: list[str] = []
 
         def api(valves, method, params):
@@ -248,7 +259,11 @@ class TestSourcesArg:
     #   And no exception propagates
     async def test_watch_later_guard(self, tools, monkeypatch):
         _clear_oauth(tools)
-        ytdlp_calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("srch-1")]})
+        ytdlp_calls = _ytdlp_fake(
+            monkeypatch,
+            {"ytsearch5:rust async": ["srch-1"]},
+            {"https://www.youtube.com/watch?v=srch-1": _entry("srch-1")},
+        )
         api_calls: list[str] = []
 
         def api(valves, method, params):
@@ -264,5 +279,5 @@ class TestSourcesArg:
         assert not payload.startswith("Error:")
         assert "srch-1" in payload  # search results are still returned
         assert "watch_later skipped" in payload  # skipped with a note, not an error
-        assert ytdlp_calls == ["ytsearch5:rust async"]
+        assert ytdlp_calls == ["ytsearch5:rust async", "https://www.youtube.com/watch?v=srch-1"]
         assert api_calls == []

@@ -85,16 +85,32 @@ def _detail(video_id: str) -> dict:
     }
 
 
-def _ytdlp_fake(monkeypatch, by_url: Mapping[str, list]) -> list[str]:
-    """Patch _ytdlp_extract; serve entries per URL; record URLs."""
+def _ytdlp_fake(monkeypatch, flat: dict[str, list[str]], full: dict[str, dict]) -> list[str]:
+    """Patch _ytdlp_extract: flat listings serve id-only rows, watch URLs serve full entries."""
     calls: list[str] = []
 
     def fake(url, extra=None):
         calls.append(url)
-        return {"entries": by_url.get(url, [])}
+        if url in flat:
+            return {"entries": [{"id": video_id} for video_id in flat[url]]}
+        return full[url]
 
     monkeypatch.setattr(youtube_manager, "_ytdlp_extract", fake)
     return calls
+
+
+def _entry(video_id: str) -> dict:
+    return {
+        "id": video_id,
+        "title": f"Feed title {video_id}",
+        "uploader": f"Feed uploader {video_id}",
+        "channel_id": f"ch-{video_id}",
+        "duration": 120,
+        "view_count": 500,
+        "upload_date": "20260910",
+        "description": f"Feed description {video_id}",
+        "tags": ["feed-tag"],
+    }
 
 
 def _clear_oauth(tools) -> None:
@@ -232,12 +248,19 @@ class TestGatherSubscriptions:
     async def test_default_sources_excludes_subscriptions(self, tools, monkeypatch):
         calls = _api_fake(monkeypatch)
         urls = _stub_feeds(monkeypatch, {})
-        ytdlp = _ytdlp_fake(monkeypatch, {})
+        ytdlp = _ytdlp_fake(
+            monkeypatch,
+            {"ytsearch20:rust async": ["dflt-1"]},
+            {"https://www.youtube.com/watch?v=dflt-1": _entry("dflt-1")},
+        )
 
         payload = await tools.gather_candidates(search_query="rust async")
 
         assert not payload.startswith("Error")
-        assert ytdlp == ["ytsearch20:rust async"]  # default sources = "search" only
+        assert ytdlp == [
+            "ytsearch20:rust async",
+            "https://www.youtube.com/watch?v=dflt-1",
+        ]  # default sources = "search" only
         assert calls == []  # subscriptions.list NOT invoked
         assert urls == []
 

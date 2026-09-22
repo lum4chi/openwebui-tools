@@ -116,13 +116,15 @@ def _entry(video_id):
     }
 
 
-def _ytdlp_fake(monkeypatch, by_url):
-    """Patch _ytdlp_extract to serve entries per URL; return the called-URL list."""
+def _ytdlp_fake(monkeypatch, flat: dict[str, list[str]], full: dict[str, dict]):
+    """Patch _ytdlp_extract: flat listings serve id-only rows, watch URLs serve full entries."""
     calls: list[str] = []
 
     def fake(url, extra=None):
         calls.append(url)
-        return {"entries": by_url.get(url, [])}
+        if url in flat:
+            return {"entries": [{"id": video_id} for video_id in flat[url]]}
+        return full[url]
 
     monkeypatch.setattr(youtube_manager, "_ytdlp_extract", fake)
     return calls
@@ -138,11 +140,15 @@ class TestSearchProfile:
     #   Then the search API call recorded by the fake shows a query containing the profile-derived terms
     async def test_search_query_carries_profile_terms(self, tools, fake_store, monkeypatch):
         fake_store.docs[NOTE_TASTE] = sample_taste_profile(["rust async"], [])
-        calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("sp-1")]})
+        calls = _ytdlp_fake(
+            monkeypatch,
+            {"ytsearch5:rust async": ["sp-1"]},
+            {"https://www.youtube.com/watch?v=sp-1": _entry("sp-1")},
+        )
 
         payload = await tools.gather_candidates(sources="search", max_per_source=5, search_query="rust async")
 
-        assert calls == ["ytsearch5:rust async"]
+        assert calls == ["ytsearch5:rust async", "https://www.youtube.com/watch?v=sp-1"]
         assert "Feed title sp-1" in payload
         assert "Candidate IDs: sp-1" in payload
 
@@ -173,12 +179,16 @@ class TestSearchProfile:
     async def test_search_requires_explicit_query(self, tools, fake_store, monkeypatch, profile_doc, search_query):
         if profile_doc is not None:
             fake_store.docs[NOTE_TASTE] = profile_doc
-        calls = _ytdlp_fake(monkeypatch, {"ytsearch5:rust async": [_entry("sp-2")]})
+        calls = _ytdlp_fake(
+            monkeypatch,
+            {"ytsearch5:rust async": ["sp-2"]},
+            {"https://www.youtube.com/watch?v=sp-2": _entry("sp-2")},
+        )
 
         payload = await tools.gather_candidates(sources="search", max_per_source=5, search_query=search_query)
 
         if search_query.strip():
-            assert calls == ["ytsearch5:rust async"]
+            assert calls == ["ytsearch5:rust async", "https://www.youtube.com/watch?v=sp-2"]
             assert "Feed title sp-2" in payload
         else:
             assert calls == []

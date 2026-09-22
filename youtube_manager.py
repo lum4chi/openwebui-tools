@@ -66,6 +66,14 @@ class QuotaError(Exception):
     """YouTube Data API quota exceeded."""
 
 
+class _AllUnavailable(Exception):  # noqa: N818 - private internal signal, not a user-facing error type
+    """All listed search results failed to resolve; carry the first cleaned reason."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class TranscriptUnavailable(Exception):  # noqa: N818 - plan/test contract name
     """Transcript could not be fetched on any path."""
 
@@ -1252,6 +1260,34 @@ class Tools:
             entries.append(entry)
         return None
 
+    @staticmethod
+    def _resolve_search_videos(flat: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
+        entries: list[dict] = []
+        failures: list[tuple[str, str]] = []
+        for entry in flat:
+            video_id = entry.get("id")
+            if not video_id:
+                continue
+            try:
+                entries.append(_ytdlp_extract(f"https://www.youtube.com/watch?v={video_id}"))
+            except Exception as err:
+                failures.append((video_id, _failure_reason(err)))
+        return entries, failures
+
+    def _search_candidates(self, search_query: str, max_per_source: int, notes: list[str]) -> list[Candidate]:
+        flat = (
+            _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}", extra={"extract_flat": "in_playlist"}).get(
+                "entries"
+            )
+            or []
+        )
+        entries, failures = self._resolve_search_videos(flat)
+        if not entries and failures:
+            raise _AllUnavailable(failures[0][1])
+        if failures:
+            notes.append(f"skipped {len(failures)} unavailable: {', '.join(video_id for video_id, _ in failures)}")
+        return candidates_from_ytdlp(entries, "search")
+
     def _gather_one(self, source: str, max_per_source: int, search_query: str, notes: list[str]) -> list[Candidate]:
         if source == "watch_later":
             if not _oauth_set(self.valves):
@@ -1263,8 +1299,51 @@ class Tools:
                 notes.append("subscriptions skipped: OAuth not configured")
                 return []
             return self._fetch_subscriptions(max_per_source, notes)
-        entries = _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}").get("entries") or []
-        return candidates_from_ytdlp(entries, "search")
+        return self._search_candidates(search_query, max_per_source, notes)
+
+    def _gather_isolated(
+        self,
+        source: str,
+        max_per_source: int,
+        search_query: str,
+        notes: list[str],
+        reauth_reasons: set[str],
+        failures: list[str],
+    ) -> list[Candidate]:
+        try:
+            return self._gather_one(source, max_per_source, search_query, notes)
+        except ReauthNeeded:
+            reauth_reasons.add("reauth")
+            notes.append(f"{source} failed: reauth")
+        except _AllUnavailable as err:
+            failures.append(err.reason)
+            notes.append(f"search unavailable: {err.reason}")
+        except Exception as err:
+            reason = _failure_reason(err)
+            failures.append(f"{source}: {reason}")
+            notes.append(f"{source} failed: {reason}")
+        return []
+
+    @staticmethod
+    def _compose_gather(
+        merged: list[Candidate], notes: list[str], reauth_reasons: set[str], failures: list[str]
+    ) -> str:
+        if reauth_reasons and not merged:
+            return _reauth_block(notes, reauth_reasons)
+        if not merged and failures:
+            return f"Error: {'; '.join(failures)}"
+        return _candidates_payload(merged, notes)
+
+    def _gather_all(self, parsed: list[str], max_per_source: int, search_query: str) -> str:
+        notes: list[str] = []
+        reauth_reasons: set[str] = set()
+        failures: list[str] = []
+        batches: list[list[Candidate]] = []
+        for source in parsed:
+            batch = self._gather_isolated(source, max_per_source, search_query, notes, reauth_reasons, failures)
+            if batch:
+                batches.append(batch)
+        return self._compose_gather(merge_candidates(batches), notes, reauth_reasons, failures)
 
     async def gather_candidates(
         self, sources: str = "search", max_per_source: int = MAX_PER_SOURCE, search_query: str = ""
@@ -1279,9 +1358,7 @@ class Tools:
             return f"Error: unknown source name(s) in {sources!r} - valid sources: {', '.join(SOURCES)}"
         if "search" in parsed and not search_query.strip():
             return "Error: search needs search_query (e.g. search_query='rust async')"
-        notes: list[str] = []
-        batches = [self._gather_one(source, max_per_source, search_query, notes) for source in parsed]
-        return _candidates_payload(merge_candidates(batches), notes)
+        return self._gather_all(parsed, max_per_source, search_query)
 
     def _digest_sources(self, taste: TasteProfile) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
         """Watch_later + subscriptions: (batches, pre-merge source counts, notes, reauth reasons)."""

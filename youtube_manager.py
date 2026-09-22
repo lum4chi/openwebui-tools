@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.2
+version: 1.5.3
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -676,11 +676,13 @@ def assemble_podcast_text(title: str, channel: str, segments: list[tuple[int, st
     lines = [f"=== Podcast transcript: {title} — {channel} ==="]
     kept = 0
     last = ""
-    for start, text in segments:
+    for idx, (start, text) in enumerate(segments):
         if text == last:
             continue
         if kept >= PODCAST_MAX_LINES:
-            lines.append(f"... (truncated at {PODCAST_MAX_LINES} lines)")
+            lines.append(
+                f"... (truncated at {PODCAST_MAX_LINES} lines; {len(segments) - idx} transcript segment(s) omitted)"
+            )
             break
         lines.append(f"[{start // 60}:{start % 60:02d}] {text}")
         last = text

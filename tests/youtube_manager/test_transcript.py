@@ -268,7 +268,12 @@ class TestVtt:
                 id="duplicate_lines_collapse",
             ),
             pytest.param(None, _SEGS_400, _pod(_SEGS_400), id="cap_400_no_marker"),
-            pytest.param(None, _SEGS_401, _pod(_SEGS_400) + ["... (truncated at 400 lines)"], id="truncate_401"),
+            pytest.param(
+                None,
+                _SEGS_401,
+                _pod(_SEGS_400) + ["... (truncated at 400 lines; 1 transcript segment(s) omitted)"],
+                id="truncate_401",
+            ),
         ],
     )
     def test_parse_and_assemble_edges(self, vtt_text, segments, expected_lines):

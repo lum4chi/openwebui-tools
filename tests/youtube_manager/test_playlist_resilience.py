@@ -1,5 +1,7 @@
 """T3 add_to_playlist resilience: reauth (T3-5), validation (T3-6), I/O errors (T3-7), state failures (T3-8)."""
 
+import urllib.error
+
 import pytest
 
 from youtube_manager import NOTE_STATE, QuotaError, ReauthNeeded, parse_digest_state
@@ -191,3 +193,30 @@ class TestAddToPlaylistResilience:
         else:
             assert result.count("state record failed") == 1
             assert NOTE_STATE not in fake_store.docs
+
+    # @unit
+    # Scenario: T9-3 S4 add_to_playlist 404 remains not-found
+    #   Given add_to_playlist has a cached digest playlist and an empty membership listing
+    #   And playlistItems.insert raises a real HTTPError 404
+    #   When add_to_playlist runs
+    #   Then the result is exactly "Error: not found - the resource no longer exists"
+    #     And digest-state is NOT modified
+    async def test_add_to_playlist_http_404_is_not_found(self, tools, monkeypatch, fake_store):
+        seed_state(fake_store, {}, playlist_id=PL_CACHED)
+        original = dict(fake_store.docs)
+        pages = {PL_CACHED: [listing_page([])]}
+        calls = api_fake(
+            monkeypatch,
+            pages=pages,
+            raise_for={
+                "playlistItems.insert": urllib.error.HTTPError(
+                    "https://www.googleapis.com/youtube/v3/playlistItems", 404, "Not Found", None, None
+                )
+            },
+        )
+
+        result = await tools.add_to_playlist(VIDEO_ID)
+
+        assert result == "Error: not found - the resource no longer exists"
+        assert "playlistItems.insert" in _methods(calls)
+        assert fake_store.docs == original

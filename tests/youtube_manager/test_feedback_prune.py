@@ -47,16 +47,16 @@ class TestRecordFeedback:
 
             monkeypatch.setattr(fake_store, "write", write_boom)
 
-        result = await tools.record_feedback("vid010", "watched", reason=REASON)
+        result = await tools.record_feedback("vid010abcde", "watched", reason=REASON)
 
         if case == "write_raises":
             assert result == "Error: state record failed: unexpected error"
             assert NOTE_FEEDBACK not in fake_store.docs
             return
-        assert result == "OK — recorded watched for vid010"
+        assert result == "OK — recorded watched for vid010abcde"
         lines = fake_store.docs[NOTE_FEEDBACK].strip().splitlines()
         assert lines[0] == HEADER
-        assert lines[-1] == f"| {today} | vid010 | watched |  | digest | {REASON} |"
+        assert lines[-1] == f"| {today} | vid010abcde | watched |  | digest | {REASON} |"
         if case == "prior_rows":
             assert len(lines) == 3
             assert lines[1] == "| 2026-09-01 | vid001 | skipped | Old Video | digest | boring |"

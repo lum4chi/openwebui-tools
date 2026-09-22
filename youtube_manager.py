@@ -228,6 +228,10 @@ def _valid_video_id(video_id: str) -> bool:
     return re.fullmatch(r"[A-Za-z0-9_-]+", video_id) is not None
 
 
+def _standard_video_id(video_id: str) -> bool:
+    return re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id) is not None
+
+
 def _error_return(exc: BaseException, verbose: bool = False) -> str:
     reason = _clean_exception(exc)
     if verbose:
@@ -1594,6 +1598,7 @@ class Tools:
         """Append a validated feedback row to the feedback-log document.
 
         decision must be one of: watched, listened, skipped.
+        Non-standard video_id values are recorded with a warning.
         """
         if decision not in DECISIONS:
             return "Error: decision must be one of: watched, listened, skipped"
@@ -1613,7 +1618,9 @@ class Tools:
             store.write(NOTE_FEEDBACK, _feedback_doc([*prior, entry]))
         except Exception as err:
             return f"Error: state record failed: {_clean_exception(err)}"
-        return f"OK — recorded {decision} for {video_id}"
+        if _standard_video_id(video_id):
+            return f"OK — recorded {decision} for {video_id}"
+        return f"OK — recorded {decision} for {video_id}\nNotice: video_id is not the standard 11-character format"
 
     async def prune_playlist(self) -> str:
         """Remove policy-stale tool-added items from the custom digest playlist and report the removals."""

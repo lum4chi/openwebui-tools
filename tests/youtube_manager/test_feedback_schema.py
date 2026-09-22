@@ -1,10 +1,12 @@
 """B5: record_feedback decisions schema — docstring contract (T1-1) + FeedbackEntry JSON-schema decision enum (T0-5)."""
 
+from typing import get_args, get_type_hints
+
 import pytest
 from pydantic import ValidationError
 
 import youtube_manager
-from youtube_manager import FeedbackEntry, Tools, parse_feedback_log
+from youtube_manager import DECISIONS, FeedbackEntry, Tools, parse_feedback_log
 
 from .conftest import sample_feedback_log
 
@@ -83,12 +85,28 @@ class TestFeedbackEntryDecisionEnum:
         entries = parse_feedback_log(md)
         assert [e.decision for e in entries] == ["watched", "listened", "skipped"]
 
-    # @unit [AC-VERSION]
-    # Scenario: S9 version
-    #   Given the tool file
-    #   When the metadata version is read
-    #   Then the version is exactly "1.5.1"
-    def test_version_bumped_to_1_5_1(self):
+    # @unit
+    # Scenario: T8-4 S3 the module docstring version is bumped to 1.5.2
+    #   Given the module docstring
+    #   When read
+    #   Then it contains "1.5.2"
+    #   And it does not contain "1.5.1"
+    def test_version_bumped_to_1_5_2(self):
         doc = youtube_manager.__doc__ or ""
-        assert "1.5.1" in doc
-        assert "1.5.0" not in doc
+        assert "1.5.2" in doc
+        assert "1.5.1" not in doc
+
+
+class TestRecordFeedbackToolSchema:
+    """The OWUI tool schema (signature-derived) advertises the decision enum (T8-4)."""
+
+    # @unit
+    # Scenario: T8-4 S1 the OWUI tool schema advertises the decision enum (values equal DECISIONS)
+    #   Given the record_feedback signature
+    #   When the OWUI tool schema is derived from its type hints (get_type_hints → create_model → model_json_schema)
+    #   Then decision is advertised as type "string" with enum exactly ["watched", "listened", "skipped"]
+    #   And the enum values are exactly the DECISIONS tuple values
+    def test_record_feedback_tool_schema_advertises_decision_enum(self):
+        hints = get_type_hints(Tools.record_feedback)
+        assert get_args(hints["decision"]) == ("watched", "listened", "skipped")
+        assert set(get_args(hints["decision"])) == set(DECISIONS)

@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.1
+version: 1.5.2
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -1553,7 +1553,9 @@ class Tools:
             return False
         return True
 
-    async def record_feedback(self, video_id: str, decision: str, reason: str = "") -> str:
+    async def record_feedback(
+        self, video_id: str, decision: Literal["watched", "listened", "skipped"], reason: str = ""
+    ) -> str:
         """Append a validated feedback row to the feedback-log document.
 
         decision must be one of: watched, listened, skipped.

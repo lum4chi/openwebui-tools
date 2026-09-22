@@ -300,6 +300,14 @@ class TestDigestSubscriptions:
     #   and _data_api_request raising ReauthNeeded for "subscriptions.list"
     # When digest() is called
     # Then the payload starts with "REAUTH_NEEDED" (reauth block, same shape as the watch_later path)
+    # T8-5 S2 · @unit — partial-stale facet: subscriptions ReauthNeeded, watch_later healthy →
+    # reauth block followed by the digest payload with the healthy source's candidates
+    # Scenario: T8-5 S2 one source stale returns the healthy source's candidates plus the per-source reauth line
+    #   Given watch_later returns candidates and subscriptions fails with ReauthNeeded
+    #   When digest is called
+    #   Then the return starts with "REAUTH_NEEDED"
+    #     And it contains "subscriptions failed: reauth"
+    #     And it contains the watch_later candidates in the payload (the "=== Candidates (" section with the healthy count)
     async def test_digest_reauth_block_on_subscription_failure(self, tools, monkeypatch, fake_store):
         fake_store.docs[NOTE_TASTE] = sample_taste_profile([], [])
         _api_fake(
@@ -315,3 +323,4 @@ class TestDigestSubscriptions:
         assert payload.startswith("REAUTH_NEEDED")
         assert "subscriptions failed: reauth" in payload
         assert "Fix: run start_auth, open the URL, then finish_auth with the new code." in payload
+        assert "=== Candidates (" in payload  # T8-5 S2: the digest payload is no longer discarded

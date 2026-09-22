@@ -1408,7 +1408,7 @@ class Tools:
         stats = aggregate_feedback(rows, kept)
         payload = render_digest(kept, taste, stats, source_counts)
         if reauth_reasons:
-            return _reauth_block(notes, reauth_reasons)
+            return _reauth_block(notes, reauth_reasons) + "\n\n" + payload
         return _with_notes(payload, notes)
 
     async def save_taste_profile(self, md: str) -> str:

@@ -152,6 +152,15 @@ class TestDigest:
         assert ids_line == "Candidate IDs: (none)"
 
     # Scenario T1-7 (watch_later variant): OAuth invalid_grant on the watch_later source
+    # T8-5 S1 · @unit — all-stale facet: both gated sources stale (watch_later ReauthNeeded;
+    # subscriptions stale via the file-local fake) → reauth block followed by the digest payload
+    # Scenario: T8-5 S1 all OAuth sources stale returns the reauth block followed by the digest payload
+    #   Given watch_later and subscriptions both fail with ReauthNeeded (OAuth configured)
+    #   When digest is called
+    #   Then the return starts with "REAUTH_NEEDED"
+    #     And it contains each per-source "<source> failed: reauth" line
+    #     And it contains "Fix: run start_auth, open the URL, then finish_auth with the new code."
+    #     And it contains the digest payload (the "=== Candidates (" section is present — the payload is no longer discarded)
     async def test_watch_later_reauth(self, tools, monkeypatch, fake_store):
         fake_store.docs[NOTE_TASTE] = sample_taste_profile(["rust async"], [])
         _ytdlp_fake(monkeypatch, {"ytsearch20:rust async": [_entry("rust1")]})
@@ -162,6 +171,7 @@ class TestDigest:
         assert payload.startswith("REAUTH_NEEDED")  # the only feed-path reauth
         assert "watch_later failed: reauth" in payload
         assert "Fix: run start_auth, open the URL, then finish_auth with the new code." in payload
+        assert "=== Candidates (" in payload  # T8-5 S1: the digest payload is no longer discarded
 
     # @unit
     # Scenario: T1-9 no taste profile

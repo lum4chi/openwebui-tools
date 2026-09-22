@@ -1,4 +1,4 @@
-"""T6-1 B1: subscriptions digest zero-candidate diagnostics (feeds returned no usable entries / capped entries produced no candidates)."""
+"""T6-1 B1 / T9-2 B2-new: subscriptions digest zero-candidate diagnostics (zero-entry / no usable video id / capped entries)."""
 
 import email.message
 import urllib.error
@@ -32,6 +32,23 @@ def _one_entry_feed(video_id: str, published: str, channel_id: str) -> bytes:
         f"<media:description>desc {video_id}</media:description></media:group>"
         "</entry>"
     )
+
+
+def _idless_entry(i: int) -> str:
+    """An Atom <entry> with neither a <yt:videoId> nor a yt:video: <id> (no usable video id)."""
+    return (
+        "<entry>"
+        f"<id>http://www.youtube.com/channel/UC{i:04d}</id>"
+        f"<title>No video id {i}</title>"
+        "<author><name>Feed Chan</name></author>"
+        "<published>2026-09-03</published>"
+        "</entry>"
+    )
+
+
+def _idless_feed(count: int) -> bytes:
+    """An ok feed carrying ``count`` entries, none with a usable video id."""
+    return _entry_feed("".join(_idless_entry(i) for i in range(count)))
 
 
 class _FakeResp:
@@ -95,15 +112,23 @@ def _stub_api(monkeypatch, items: list[dict]) -> None:
 class TestSubscriptionCandidates:
     """T6-1 B1: the zero-candidate digest suffix distinguishes why capped entries produced no candidates."""
 
-    # @workflow [AC-1]
-    # Scenario: B1 zero-candidate note distinguishes empty gathered entries
-    #   Given a Tools instance with subscriptions enabled, one ok source, one failed source, and no gathered entries
-    #   When the subscriptions digest note is generated
-    #   Then the note is exactly "subscriptions: 1 ok, 1 failed, 0 candidates (feeds returned no usable entries)"
-    # @workflow [AC-1]
-    # Scenario: B1 zero-candidate note distinguishes non-empty entries capped to zero
-    #   Given a Tools instance with subscriptions enabled, one ok source, one failed source, and non-empty gathered entries that yield zero candidates
-    #   When the subscriptions digest note is generated
+    # Scenario: T9-2 S1 zero-entry ok feeds report feeds returned zero entries
+    #   Given _fetch_subscriptions sees 1 ok channel and 1 failed channel
+    #   And the ok feed contains no <entry> elements
+    #   And candidate_count is 0
+    #   When the subscriptions note is generated
+    #   Then the note is exactly "subscriptions: 1 ok, 1 failed, 0 candidates (feeds returned zero entries)"
+    # Scenario: T9-2 S2 idless ok feed entries report no usable video id
+    #   Given _fetch_subscriptions sees 1 ok channel and 1 failed channel
+    #   And the ok feed contains 2 entries with no usable video id
+    #   And candidate_count is 0
+    #   When the subscriptions note is generated
+    #   Then the note is exactly "subscriptions: 1 ok, 1 failed, 0 candidates (feeds returned 2 entry(s) with no usable video id)"
+    # Scenario: T9-2 S3 capped zero-candidate shape is unchanged
+    #   Given _fetch_subscriptions sees 1 ok channel and 1 failed channel
+    #   And the ok feed contains 1 usable entry
+    #   And max_per_source is 0
+    #   When the subscriptions note is generated
     #   Then the note is exactly "subscriptions: 1 ok, 1 failed, 0 candidates (capped entries produced no candidates)"
     @pytest.mark.parametrize(
         ("ok_feed", "max_per_source", "expected_note"),
@@ -111,7 +136,12 @@ class TestSubscriptionCandidates:
             (
                 FEED_HEAD + "</feed>",  # ok feed carries no <entry> element
                 20,
-                "subscriptions: 1 ok, 1 failed, 0 candidates (feeds returned no usable entries)",
+                "subscriptions: 1 ok, 1 failed, 0 candidates (feeds returned zero entries)",
+            ),
+            (
+                _idless_feed(2),  # ok feed carries 2 entries, none with a usable video id
+                20,
+                "subscriptions: 1 ok, 1 failed, 0 candidates (feeds returned 2 entry(s) with no usable video id)",
             ),
             (
                 _one_entry_feed("V0", "2026-09-03", "UC0000"),  # ok feed carries an entry the cap slices away
@@ -119,7 +149,7 @@ class TestSubscriptionCandidates:
                 "subscriptions: 1 ok, 1 failed, 0 candidates (capped entries produced no candidates)",
             ),
         ],
-        ids=["empty_entries", "capped_to_zero"],
+        ids=["empty_entries", "no_video_id", "capped_to_zero"],
     )
     def test_zero_candidates_suffix(self, tools, monkeypatch, ok_feed: bytes, max_per_source: int, expected_note: str):
         _stub_api(monkeypatch, [_channel(0), _channel(1)])

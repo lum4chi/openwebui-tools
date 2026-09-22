@@ -409,14 +409,22 @@ def _rss_entry(elem: ET.Element) -> dict | None:
     }
 
 
-def _parse_rss(raw: bytes) -> list[dict]:
+def _parse_rss(raw: bytes, drop_counts: dict[str, int] | None = None) -> list[dict]:
     entries: list[dict] = []
+    raw_count = 0
+    no_video_count = 0
     for elem in ET.fromstring(raw).iter():
         if _rss_local(elem) != "entry":
             continue
         entry = _rss_entry(elem)
-        if entry is not None:
+        raw_count += 1
+        if entry is None:
+            no_video_count += 1
+        else:
             entries.append(entry)
+    if drop_counts is not None:
+        drop_counts["raw_entries"] = drop_counts.get("raw_entries", 0) + raw_count
+        drop_counts["no_video_id"] = drop_counts.get("no_video_id", 0) + no_video_count
     return entries
 
 
@@ -1097,15 +1105,26 @@ def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], res
         _note_watch_later(notes, "details unavailable")
 
 
-def _subscription_headline(ok: int, failed: int, entries: list[dict], candidate_count: int) -> str:
+def _subscription_zero_suffix(entries: list[dict], drop_counts: dict[str, int] | None = None) -> str:
+    if entries:
+        return "capped entries produced no candidates"
+    counts = drop_counts or {}
+    if counts.get("no_video_id", 0):
+        return f"feeds returned {counts.get('raw_entries', counts['no_video_id'])} entry(s) with no usable video id"
+    if counts.get("zero_entry_feeds", 0):
+        return "feeds returned zero entries"
+    return "feeds returned no usable entries"
+
+
+def _subscription_headline(
+    ok: int, failed: int, entries: list[dict], candidate_count: int, drop_counts: dict[str, int] | None = None
+) -> str:
     """Headline for the subscriptions digest note, computed after the capped candidate count is known."""
     if ok == 0:
         return f"subscriptions: {ok} ok, {failed} failed"
     if candidate_count > 0:
         return f"subscriptions: {ok} ok, {failed} failed, {candidate_count} candidates"
-    if entries:
-        return f"subscriptions: {ok} ok, {failed} failed, 0 candidates (capped entries produced no candidates)"
-    return f"subscriptions: {ok} ok, {failed} failed, 0 candidates (feeds returned no usable entries)"
+    return f"subscriptions: {ok} ok, {failed} failed, 0 candidates ({_subscription_zero_suffix(entries, drop_counts)})"
 
 
 class Tools:
@@ -1250,8 +1269,9 @@ class Tools:
         entries: list[dict] = []
         failures: dict[str, int] = {}
         ok = 0
+        drop_counts: dict[str, int] = {}
         for channel in channels:
-            reason = self._collect_channel(channel, entries)
+            reason = self._collect_channel(channel, entries, drop_counts)
             if reason is None:
                 ok += 1
             else:
@@ -1259,24 +1279,34 @@ class Tools:
         entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
         capped_entries = entries[:max_per_source]
         candidate_count = len(candidates_from_rss(capped_entries, "subscriptions"))
-        self._note_subscription_results(notes, ok, failures, entries, candidate_count)
+        self._note_subscription_results(notes, ok, failures, entries, candidate_count, drop_counts)
         return candidates_from_rss(capped_entries, "subscriptions")
 
     def _note_subscription_results(
-        self, notes: list[str], ok: int, failures: dict[str, int], entries: list[dict], candidate_count: int
+        self,
+        notes: list[str],
+        ok: int,
+        failures: dict[str, int],
+        entries: list[dict],
+        candidate_count: int,
+        drop_counts: dict[str, int] | None = None,
     ) -> None:
-        notes.append(_subscription_headline(ok, sum(failures.values()), entries, candidate_count))
+        notes.append(_subscription_headline(ok, sum(failures.values()), entries, candidate_count, drop_counts))
         if self.valves.verbose:
             for reason, count in failures.items():
                 notes.append(f"{count} channel(s) failed: {reason}")
 
-    def _collect_channel(self, channel: dict, entries: list[dict]) -> str | None:
+    def _collect_channel(
+        self, channel: dict, entries: list[dict], drop_counts: dict[str, int] | None = None
+    ) -> str | None:
         snippet = channel.get("snippet") or {}
         channel_id = snippet.get("channelId") or ""
         try:
-            parsed = _parse_rss(_fetch_rss(_rss_url(channel_id)))
+            parsed = _parse_rss(_fetch_rss(_rss_url(channel_id)), drop_counts)
         except Exception as err:  # per-channel isolation: one bad RSS feed must not sink the rest
             return _failure_reason(err)
+        if not parsed and drop_counts is not None:
+            _bump(drop_counts, "zero_entry_feeds")
         for entry in parsed:
             entry["channel_id"] = channel_id
             entries.append(entry)

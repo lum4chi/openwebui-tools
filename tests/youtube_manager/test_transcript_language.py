@@ -144,12 +144,13 @@ class TestTranscriptLanguageNotice:
         assert "[1:00] fb two" in lines
 
     # @unit [AC-B4]
-    # Scenario: T7-3 transcript error path is unchanged without a notice
-    #   Given the primary transcript path fails
-    #   And the fallback returns no segments
-    #   When transcript runs
-    #   Then the result is exactly "Error: no transcript available for {video_id}: primary: {primary_reason}; fallback: {reason}"
-    #     And no "Notice:" line is present
+    # Scenario: T8-2 S5 no captions is a clean non-error result
+    #   Given a primary yt-dlp subtitle extraction that succeeds but yields no usable VTT segments
+    #   And a fallback transcript fetch that returns no segments
+    #   When transcript is called with video_id="vid123"
+    #   Then the response is exactly "No captions found for vid123"
+    #   And the response does not start with "Error:"
+    #   And no "Notice:" line is present (T7-3 no-Notice invariant, D9)
     async def test_error_path_unchanged_no_notice(self, tools, monkeypatch):
         monkeypatch.setattr(youtube_manager, "_ytdlp_extract", _YtdlpStub(info={}))
         monkeypatch.setattr(
@@ -160,8 +161,5 @@ class TestTranscriptLanguageNotice:
 
         result = await tools.transcript("vid123")
 
-        assert (
-            result
-            == "Error: no transcript available for vid123: primary: no captions found; fallback: no transcript returned"
-        )
+        assert result == "No captions found for vid123"
         assert "Notice:" not in result

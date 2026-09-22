@@ -158,11 +158,13 @@ class TestTranscript:
         assert "[1:00] fb two" in lines
 
     # @unit
-    # Scenario: T2-3 fallback (dependency-missing variant)
-    #   Given the yt-dlp seam reports no captions
-    #   And the fallback dependency is missing (import failure)
-    #   When transcript runs
-    #   Then the result starts with "Error:" and contains the fallback reason "fallback dependency not installed" (no crash)
+    # Scenario: T8-2 S5 no captions is a clean non-error result
+    #   Given a primary yt-dlp subtitle extraction that succeeds but yields no usable VTT segments
+    #   And a fallback transcript fetch that returns no segments
+    #   When transcript is called with video_id="vid123"
+    #   Then the response is exactly "No captions found for vid123"
+    #   And the response does not start with "Error:"
+    # Variant: the fallback dependency is missing (TranscriptUnavailable) — the no-captions result is still clean.
     async def test_fallback_missing(self, tools, monkeypatch):
         stub = _YtdlpStub(info={})
         fb = MagicMock(side_effect=TranscriptUnavailable("fallback dependency not installed"))
@@ -171,25 +173,29 @@ class TestTranscript:
 
         result = await tools.transcript("vid123")
 
-        assert result.startswith("Error:")
-        assert "vid123" in result
-        assert "primary: no captions found" in result
-        assert "fallback: fallback dependency not installed" in result
+        assert result == "No captions found for vid123"
 
     # @unit
-    # Scenario: T2-4 no transcript
-    #   Given the yt-dlp seam reports no captions and the fallback returns none
-    #   When transcript runs
-    #   Then the result starts with "Error:", names the video id, and contains both the primary and the fallback reasons
+    # Scenario: T8-2 S5 no captions is a clean non-error result
+    #   Given a primary yt-dlp subtitle extraction that succeeds but yields no usable VTT segments
+    #   And a fallback transcript fetch that returns no segments
+    #   When transcript is called with video_id="vid123"
+    #   Then the response is exactly "No captions found for vid123"
+    #   And the response does not start with "Error:"
+    # Retained S2 guard: [primary_raised] keeps the plain-exception "unexpected error" true-failure pin.
     @pytest.mark.parametrize(
-        ("variant", "primary_reason"),
+        ("variant", "expected"),
         [
-            pytest.param("info", "no captions found", id="info_without_subtitles"),
-            pytest.param("missing_file", "no captions found", id="vtt_file_missing"),
-            pytest.param("raised", "unexpected error", id="primary_raised"),
+            pytest.param("info", "No captions found for vid123", id="info_without_subtitles"),
+            pytest.param("missing_file", "No captions found for vid123", id="vtt_file_missing"),
+            pytest.param(
+                "raised",
+                "Error: no transcript available for vid123: primary: unexpected error; fallback: no transcript returned",
+                id="primary_raised",
+            ),
         ],
     )
-    async def test_no_transcript_message(self, tools, monkeypatch, tmp_path, variant, primary_reason):
+    async def test_no_transcript_message(self, tools, monkeypatch, tmp_path, variant, expected):
         if variant == "info":
             stub = _YtdlpStub(info={})
         elif variant == "missing_file":
@@ -202,9 +208,7 @@ class TestTranscript:
 
         result = await tools.transcript("vid123")
 
-        assert result == (
-            f"Error: no transcript available for vid123: primary: {primary_reason}; fallback: no transcript returned"
-        )
+        assert result == expected
 
     # @workflow [AC-2]
     # Scenario: B4 transcript failure reports clean primary and fallback reasons / extraction reasons

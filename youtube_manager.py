@@ -193,6 +193,16 @@ def _clean_http_error(exc: BaseException) -> str:
     return "unexpected error"
 
 
+_TRANSCRIPT_API_REASONS: dict[str, str] = {
+    "NoTranscriptFound": "no transcript found",
+    "TranscriptsDisabled": "transcripts disabled",
+    "VideoUnavailable": "video unavailable",
+    "TranscriptRetrievalFailed": "transcript retrieval failed",
+    "CouldNotRetrieveTranscript": "transcript retrieval failed",
+    "InvalidVideoId": "invalid video id",
+}
+
+
 def _clean_exception(exc: BaseException) -> str:
     if isinstance(exc, ReauthNeeded):
         return "reauthentication required"
@@ -210,7 +220,12 @@ def _clean_exception(exc: BaseException) -> str:
         return "transcript extraction failed"
     if isinstance(exc, TranscriptUnavailable):
         return "fallback dependency not installed"
-    return "unexpected error"
+    name = _TRANSCRIPT_API_REASONS.get(type(exc).__name__)
+    return name if name is not None else "unexpected error"
+
+
+def _valid_video_id(video_id: str) -> bool:
+    return re.fullmatch(r"[A-Za-z0-9_-]+", video_id) is not None
 
 
 def _error_return(exc: BaseException, verbose: bool = False) -> str:
@@ -1008,6 +1023,8 @@ def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel:
             language,
             language_code or "unknown",
         )
+    if primary_reason == "no captions found":
+        return f"No captions found for {video_id}"
     return f"Error: no transcript available for {video_id}: primary: {primary_reason}; fallback: {reason}"
 
 
@@ -1403,6 +1420,8 @@ class Tools:
 
     async def transcript(self, video_id: str, language: str = "en") -> str:
         """Podcast-format transcript: yt-dlp subtitles primary, youtube-transcript-api fallback."""
+        if not _valid_video_id(video_id):
+            return f"Error: invalid video_id: {video_id!r}"
         tmp = tempfile.mkdtemp(prefix="ytm-sub-")
         try:
             return self._transcript_core(video_id, language, tmp)

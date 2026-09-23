@@ -1420,9 +1420,9 @@ class Tools:
         notes: list[str],
         reauth_reasons: set[str],
         failures: list[str],
-    ) -> list[Candidate]:
+    ) -> tuple[list[Candidate], bool]:
         try:
-            return self._gather_one(source, max_per_source, search_query, notes)
+            return self._gather_one(source, max_per_source, search_query, notes), True
         except ReauthNeeded:
             reauth_reasons.add("reauth")
             notes.append(f"{source} failed: reauth")
@@ -1433,15 +1433,15 @@ class Tools:
             reason = _failure_reason(err)
             failures.append(f"{source}: {reason}")
             notes.append(f"{source} failed: {reason}")
-        return []
+        return [], False
 
     @staticmethod
     def _compose_gather(
-        merged: list[Candidate], notes: list[str], reauth_reasons: set[str], failures: list[str]
+        merged: list[Candidate], notes: list[str], reauth_reasons: set[str], failures: list[str], usable: int
     ) -> str:
         if reauth_reasons and not merged:
             return _reauth_block(notes, reauth_reasons)
-        if not merged and failures:
+        if usable == 0 and failures:
             return _gather_error(failures)
         return _candidates_payload(merged, notes)
 
@@ -1450,11 +1450,14 @@ class Tools:
         reauth_reasons: set[str] = set()
         failures: list[str] = []
         batches: list[list[Candidate]] = []
+        usable = 0
         for source in parsed:
-            batch = self._gather_isolated(source, max_per_source, search_query, notes, reauth_reasons, failures)
+            batch, ok = self._gather_isolated(source, max_per_source, search_query, notes, reauth_reasons, failures)
+            if ok:
+                usable += 1
             if batch:
                 batches.append(batch)
-        return self._compose_gather(merge_candidates(batches), notes, reauth_reasons, failures)
+        return self._compose_gather(merge_candidates(batches), notes, reauth_reasons, failures, usable)
 
     async def gather_candidates(
         self, sources: str = "search", max_per_source: int = MAX_PER_SOURCE, search_query: str = ""

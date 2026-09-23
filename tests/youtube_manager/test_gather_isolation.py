@@ -1,13 +1,17 @@
 """T8-1 (Batch 8): per-video search isolation (B1) + per-source gather isolation (B3).
 
 Scenarios S1-S6 (plan .opencode/plans/youtube-production-readiness.md, Task T8-1); Gherkin preserved verbatim.
+T2-1 (youtube-manager-bugfixes): partial-source composition (usable sources).
 """
 
+import email.message
 import urllib.error
 from typing import Any
 
 import youtube_manager
-from youtube_manager import ReauthNeeded, Tools
+from youtube_manager import ReauthNeeded, Tools, _AllUnavailable
+
+from .conftest import sample_candidates
 
 WATCH = "https://www.youtube.com/watch?v="
 
@@ -188,3 +192,72 @@ class TestGatherIsolation:
         assert [entry["id"] for entry in entries] == ["vid-ok"]
         assert failures == []
         assert calls == [WATCH + "vid-ok"]
+
+
+class TestGatherPartialSources:
+    """T2-1: a completed source counts as usable (even with zero candidates); error only when ALL requested sources fail."""
+
+    # @unit
+    # Scenario: T2-1.S1 regression guard: one source fails while another source RETURNS RESULTS → partial-result payload (not an error), failing source noted
+    # Given gather is requested with sources="search,subscriptions"
+    # And the search source raises the bot-check unavailability (_AllUnavailable("bot_check")) while the subscriptions source completes and returns one candidate
+    # When the agent calls gather_candidates
+    # Then the result is NOT an error (does not start with "Error:")
+    # And the result starts with "=== Candidates (1) ===" and lists the subscriptions candidate
+    # And the result carries the per-source note "search unavailable: bot_check"
+    async def test_search_fails_subscriptions_returns_results(self, tools, monkeypatch):
+        def gather_one(self, source, max_per_source, search_query, notes):
+            if source == "search":
+                raise _AllUnavailable("bot_check")
+            return sample_candidates(1)
+
+        monkeypatch.setattr(Tools, "_gather_one", gather_one)
+
+        payload = await tools.gather_candidates(sources="search,subscriptions", search_query="rust async")
+
+        assert not payload.startswith("Error:")
+        assert payload.startswith("=== Candidates (1) ===")
+        assert "Sample video 0" in payload
+        assert "search unavailable: bot_check" in payload
+
+    # @unit
+    # Scenario: T2-1.S2 the behavior change: one source fails while another source completes EMPTY (0 candidates) → partial-result payload, NOT an error (today this is swallowed by the failing source's error)
+    # Given gather is requested with sources="search,subscriptions"
+    # And the search source raises the bot-check unavailability (_AllUnavailable("bot_check")) while the subscriptions source completes with zero candidates
+    # When the agent calls gather_candidates
+    # Then the result is NOT an error (does not start with "Error:")
+    # And the result starts with "=== Candidates (0) ==="
+    # And the result carries the per-source note "search unavailable: bot_check"
+    async def test_search_fails_subscriptions_empty_still_partial_payload(self, tools, monkeypatch):
+        def gather_one(self, source, max_per_source, search_query, notes):
+            if source == "search":
+                raise _AllUnavailable("bot_check")
+            return []
+
+        monkeypatch.setattr(Tools, "_gather_one", gather_one)
+
+        payload = await tools.gather_candidates(sources="search,subscriptions", search_query="rust async")
+
+        assert not payload.startswith("Error:")
+        assert payload.startswith("=== Candidates (0) ===")
+        assert "search unavailable: bot_check" in payload
+
+    # @unit
+    # Scenario: T2-1.S3 regression guard: ALL requested sources fail → error (usable == 0)
+    # Given gather is requested with sources="search,subscriptions"
+    # And the search source raises the bot-check unavailability (_AllUnavailable("bot_check")) while the subscriptions source raises an HTTP 404 (classified "HTTP 404: Not Found")
+    # When the agent calls gather_candidates
+    # Then the result IS an error (starts with "Error:")
+    async def test_all_sources_fail_returns_error(self, tools, monkeypatch):
+        def gather_one(self, source, max_per_source, search_query, notes):
+            if source == "search":
+                raise _AllUnavailable("bot_check")
+            raise urllib.error.HTTPError(
+                "https://www.googleapis.com/youtube/v3/channels", 404, "Not Found", email.message.Message(), None
+            )
+
+        monkeypatch.setattr(Tools, "_gather_one", gather_one)
+
+        payload = await tools.gather_candidates(sources="search,subscriptions", search_query="rust async")
+
+        assert payload.startswith("Error:")

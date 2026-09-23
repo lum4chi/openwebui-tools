@@ -1,73 +1,20 @@
-"""T0-1 · R2-B1: surface the real RSS HTTP status + dedup to one line per distinct reason.
+"""T0-1: surface the real Data API HTTP status + dedup to one line per distinct reason."""
 
-Drives the subscriptions source (``_fetch_subscriptions``) and inspects the deduped failure
-notes it emits. The BDD (plan ``.opencode/plans/youtube-production-readiness.md`` · Task T0-1)
-is workflow-level: each scenario feeds a channel's RSS via stubbed ``urlopen`` and asserts on
-the emitted note lines (one per distinct failure reason).
-"""
-
-import email.message
 import urllib.error
-from collections.abc import Mapping
+from unittest.mock import MagicMock
 
-import youtube_manager
-from youtube_manager import _rss_url
+import pytest
+from googleapiclient.errors import HttpError
 
-FEED_HEAD = (
-    '<?xml version="1.0" encoding="UTF-8"?>'
-    '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" '
-    'xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">'
-)
+from .conftest import api_fake, guard_urlopen, playlist_item, sub_channel, uploads_channel_reply
 
 
-def _entry_feed(entry_xml: str) -> bytes:
-    return (FEED_HEAD + entry_xml + "</feed>").encode()
-
-
-def _one_entry_feed(video_id: str, published: str, channel_id: str) -> bytes:
-    return _entry_feed(
-        "<entry>"
-        f"<id>yt:video:{video_id}</id><yt:videoId>{video_id}</yt:videoId>"
-        f"<yt:channelId>{channel_id}</yt:channelId>"
-        f"<title>Video {video_id}</title>"
-        "<author><name>Feed Chan</name></author>"
-        f"<published>{published}</published>"
-        f'<media:group><media:content url="https://example.com/{video_id}" type="video"/>'
-        f"<media:description>desc {video_id}</media:description></media:group>"
-        "</entry>"
-    )
-
-
-class _FakeResp:
-    """urlopen answer: file-like read() + context manager."""
-
-    def __init__(self, body: bytes):
-        self._body = body
-
-    def read(self):
-        return self._body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-
-def _http_error(code: int, reason: str) -> urllib.error.HTTPError:
-    """A real HTTP response error (RSS urlopen raises these for 4xx/5xx); hdrs/fp are unused here."""
-    return urllib.error.HTTPError("https://www.youtube.com/feeds/atom.xml", code, reason, email.message.Message(), None)
+def _http_error(code: int, reason: str) -> HttpError:
+    return HttpError(MagicMock(status=code, reason=reason), b"")
 
 
 def _channel(i: int) -> dict:
-    return {
-        "id": f"UC{i:04d}",
-        "snippet": {
-            "channelId": f"UC{i:04d}",
-            "channelTitle": f"Chan {i}",
-            "publishedAt": f"2026-01-{i + 1:02d}T00:00:00Z",
-        },
-    }
+    return sub_channel(f"UC{i:04d}", published=f"2026-01-{i + 1:02d}T00:00:00Z")
 
 
 def _reason_for(i: int) -> tuple[int, str]:
@@ -79,161 +26,112 @@ def _reason_for(i: int) -> tuple[int, str]:
     return 404, "Not Found"
 
 
-def _stub_urlopen(monkeypatch, feeds: Mapping[str, bytes | Exception]) -> list[str]:
-    """Patch urllib.request.urlopen to serve feed bytes per URL (or raise); record URLs."""
-    calls: list[str] = []
-
-    def fake(url, timeout=None):
-        calls.append(url)
-        outcome = feeds[url]
-        if isinstance(outcome, Exception):
-            raise outcome
-        return _FakeResp(outcome)
-
-    monkeypatch.setattr(youtube_manager.urllib.request, "urlopen", fake)
-    return calls
-
-
-def _stub_api(monkeypatch, responder) -> list[tuple[str, dict]]:
-    """Patch youtube_manager._data_api_request; responder(params) replies or raises."""
-    calls: list[tuple[str, dict]] = []
-
-    def fake(valves, method, params):
-        calls.append((method, dict(params)))
-        if method != "subscriptions.list":
-            raise AssertionError(f"unexpected API method {method}")
-        return responder(params)
-
-    monkeypatch.setattr(youtube_manager, "_data_api_request", fake)
-    return calls
-
-
 class TestSubscriptionsErrorSurface:
-    """T0-1: RSS HTTP status surfaced in notes + one deduped line per distinct failure reason."""
+    """T0-1: Data API HTTP status surfaced in notes + one deduped line per distinct failure reason."""
 
-    # T0-1.1 · unit · provenance: BDD Task T0-1 (R2-B1 "surface the real error")
-    #   Given a subscriptions channel whose RSS feed fetch raises an HTTP 404 error
+    # T0-1.1/T0-1.2/T0-1.3 · unit — real HTTP status is surfaced in the verbose failure line.
+    #   Given a subscriptions channel whose playlistItems.list raises an HTTP 404 error (T0-1.1)
     #   When gather_candidates runs the subscriptions source
-    #   Then the failure line contains "HTTP 404" and an HTTP reason phrase
-    #   And it does not contain the bare word "transient"
-    def test_http_404_surfaces_real_status(self, tools, monkeypatch):
+    #   Then the failure line contains "HTTP 404" and the reason phrase
+    #   Given a subscriptions channel whose playlistItems.list raises an HTTP 429 error (T0-1.2)
+    #   When gather_candidates runs the subscriptions source
+    #   Then the failure line contains "HTTP 429" and the reason phrase
+    #   Given a subscriptions channel whose playlistItems.list raises an HTTP 503 error (T0-1.3)
+    #   When gather_candidates runs the subscriptions source
+    #   Then the failure line contains "HTTP 503" and the reason phrase
+    #   Given exactly 1 channel failing with HTTP 404 (T0-1.6, subsumed by the 404 case above)
+    #   When gather_candidates runs the subscriptions source
+    #   Then exactly 1 failure line "1 channel(s) failed: transient HTTP 404: Not Found" is emitted
+    @pytest.mark.parametrize(
+        ("code", "reason"),
+        [(404, "Not Found"), (429, "Too Many Requests"), (503, "Service Unavailable")],
+    )
+    def test_http_status_surfaces_real_status(self, tools, monkeypatch, code: int, reason: str):
         tools.valves.verbose = True
-        _stub_api(monkeypatch, lambda params: {"items": [_channel(0)]})
-        _stub_urlopen(monkeypatch, {_rss_url("UC0000"): _http_error(404, "Not Found")})
+        api_fake(
+            monkeypatch,
+            pages={"PU0000": [{"items": []}]},
+            subscription_pages=[{"items": [_channel(0)]}],
+            channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
+            raise_for_playlist={"PU0000": _http_error(code, reason)},
+        )
+        guard_urlopen(monkeypatch)
         notes: list[str] = []
 
         cands = tools._fetch_subscriptions(20, notes)
 
         assert cands == []
-        assert len(notes) == 2
-        assert notes[0] == "subscriptions: 0 ok, 1 failed"
-        assert "HTTP 404" in notes[1]
-        assert "Not Found" in notes[1]
-        assert "transient" not in notes[1]
+        assert notes == [
+            "subscriptions: 0 ok, 1 failed",
+            f"1 channel(s) failed: transient HTTP {code}: {reason}",
+        ]
 
-    # T0-1.2 · unit · provenance: BDD Task T0-1 (R2-B1 "surface the real error")
-    #   Given a subscriptions channel whose RSS feed fetch raises an HTTP 429 error
-    #   When gather_candidates runs the subscriptions source
-    #   Then the failure line contains "HTTP 429"
-    def test_http_429_surfaces_real_status(self, tools, monkeypatch):
-        tools.valves.verbose = True
-        _stub_api(monkeypatch, lambda params: {"items": [_channel(0)]})
-        _stub_urlopen(monkeypatch, {_rss_url("UC0000"): _http_error(429, "Too Many Requests")})
-        notes: list[str] = []
-
-        cands = tools._fetch_subscriptions(20, notes)
-
-        assert cands == []
-        assert len(notes) == 2
-        assert notes[0] == "subscriptions: 0 ok, 1 failed"
-        assert "HTTP 429" in notes[1]
-
-    # T0-1.3 · unit · provenance: BDD Task T0-1 (R2-B1 "surface the real error")
-    #   Given a subscriptions channel whose RSS feed fetch raises an HTTP 503 error
-    #   When gather_candidates runs the subscriptions source
-    #   Then the failure line contains "HTTP 503"
-    #   And it does not contain the bare word "transient"
-    def test_http_503_surfaces_real_status(self, tools, monkeypatch):
-        tools.valves.verbose = True
-        _stub_api(monkeypatch, lambda params: {"items": [_channel(0)]})
-        _stub_urlopen(monkeypatch, {_rss_url("UC0000"): _http_error(503, "Service Unavailable")})
-        notes: list[str] = []
-
-        cands = tools._fetch_subscriptions(20, notes)
-
-        assert cands == []
-        assert len(notes) == 2
-        assert notes[0] == "subscriptions: 0 ok, 1 failed"
-        assert "HTTP 503" in notes[1]
-        assert "transient" not in notes[1]
-
-    # T0-1.4 · unit · provenance: BDD Task T0-1 (R2-B1 — no status to surface)
-    #   Given a subscriptions channel whose RSS feed fetch raises a URLError with no HTTP response (DNS failure / connection refused)
+    # T0-1.4 · unit — a genuine URLError has no HTTP status and stays classified transient.
+    #   Given a subscriptions channel whose playlistItems.list raises a URLError with no HTTP response
     #   When gather_candidates runs the subscriptions source
     #   Then the failure line still classifies as "transient" (connectivity failure — no status to surface)
     def test_genuine_urlerror_stays_transient(self, tools, monkeypatch):
         tools.valves.verbose = True
-        _stub_api(monkeypatch, lambda params: {"items": [_channel(0)]})
-        _stub_urlopen(monkeypatch, {_rss_url("UC0000"): urllib.error.URLError("connect boom")})
+        api_fake(
+            monkeypatch,
+            pages={"PU0000": [{"items": []}]},
+            subscription_pages=[{"items": [_channel(0)]}],
+            channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
+            raise_for_playlist={"PU0000": urllib.error.URLError("connect boom")},
+        )
+        guard_urlopen(monkeypatch)
         notes: list[str] = []
 
         cands = tools._fetch_subscriptions(20, notes)
 
         assert cands == []
-        assert len(notes) == 2
-        assert notes[0] == "subscriptions: 0 ok, 1 failed"
-        assert "transient" in notes[1]
+        assert notes == ["subscriptions: 0 ok, 1 failed", "1 channel(s) failed: transient"]
 
-    # T0-1.5 · unit · provenance: BDD Task T0-1 (R2-B1 "Dedup — one line per distinct error, not one per channel")
+    # T0-1.5 · unit — 25 failing channels dedup to one line per distinct reason.
     #   Given 25 subscription channels failing under 3 distinct error reasons
     #   When gather_candidates runs the subscriptions source
     #   Then exactly 3 failure lines are emitted, one per distinct reason
-    #   And each line is prefixed with its channel count (e.g. "5 channel(s) failed: HTTP 404: Not Found")
+    #   And each line is prefixed with its channel count (e.g. "5 channel(s) failed: transient HTTP 404: Not Found")
     #   And the 25-channel total is preserved (nothing lost, nothing per-channel duplicated)
     def test_dedup_one_line_per_distinct_reason(self, tools, monkeypatch):
         tools.valves.verbose = True
         channels = [_channel(i) for i in range(25)]
-        _stub_api(monkeypatch, lambda params: {"items": channels})
-        feeds = {_rss_url(f"UC{i:04d}"): _http_error(*_reason_for(i)) for i in range(25)}
-        _stub_urlopen(monkeypatch, feeds)
-        notes: list[str] = []
-
-        cands = tools._fetch_subscriptions(20, notes)
-
-        # processed in publishedAt desc (i 24->0): 503 first (i15-24), then 429 (i5-14), then 404 (i0-4)
-        assert cands == []
-        assert len(notes) == 4
-        assert notes[0] == "subscriptions: 0 ok, 25 failed"
-        assert notes[1] == "10 channel(s) failed: HTTP 503: Service Unavailable"
-        assert notes[2] == "10 channel(s) failed: HTTP 429: Too Many Requests"
-        assert notes[3] == "5 channel(s) failed: HTTP 404: Not Found"
-
-    # T0-1.6 · unit · provenance: BDD Task T0-1 (R2-B1 "Dedup ... one line per distinct error")
-    #   Given exactly 1 subscription channel whose RSS feed fetch raises an HTTP 404 error
-    #   When gather_candidates runs the subscriptions source
-    #   Then exactly 1 failure line "1 channel(s) failed: HTTP 404: Not Found" is emitted
-    def test_single_failing_channel_exact_format(self, tools, monkeypatch):
-        tools.valves.verbose = True
-        _stub_api(monkeypatch, lambda params: {"items": [_channel(0)]})
-        _stub_urlopen(monkeypatch, {_rss_url("UC0000"): _http_error(404, "Not Found")})
+        api_fake(
+            monkeypatch,
+            pages={},
+            subscription_pages=[{"items": channels}],
+            channels_by_id={f"UC{i:04d}": uploads_channel_reply(f"PU{i:04d}") for i in range(25)},
+            raise_for_playlist={f"PU{i:04d}": _http_error(*_reason_for(i)) for i in range(25)},
+        )
+        guard_urlopen(monkeypatch)
         notes: list[str] = []
 
         cands = tools._fetch_subscriptions(20, notes)
 
         assert cands == []
-        assert notes == ["subscriptions: 0 ok, 1 failed", "1 channel(s) failed: HTTP 404: Not Found"]
+        assert notes == [
+            "subscriptions: 0 ok, 25 failed",
+            "10 channel(s) failed: transient HTTP 503: Service Unavailable",
+            "10 channel(s) failed: transient HTTP 429: Too Many Requests",
+            "5 channel(s) failed: transient HTTP 404: Not Found",
+        ]
 
-    # T0-1.7 · unit · provenance: BDD Task T0-1 (regression — healthy channels unaffected)
-    #   Given subscription channels whose RSS feeds parse cleanly
+    # T0-1.7 · unit — healthy channels return candidates without failure lines.
+    #   Given subscription channels whose uploads lists return entries cleanly
     #   When gather_candidates runs the subscriptions source
     #   Then their candidates are returned and no failure lines are emitted
     def test_healthy_channels_no_failure_lines(self, tools, monkeypatch):
-        _stub_api(monkeypatch, lambda params: {"items": [_channel(i) for i in range(2)]})
-        feeds = {
-            _rss_url("UC0000"): _one_entry_feed("V0", "2026-09-03", "UC0000"),
-            _rss_url("UC0001"): _one_entry_feed("V1", "2026-09-01", "UC0001"),
-        }
-        _stub_urlopen(monkeypatch, feeds)
+        api_fake(
+            monkeypatch,
+            pages={
+                "PU0000": [{"items": [playlist_item("V0", "V0", "C0", "2026-09-03T00:00:00Z")]}],
+                "PU0001": [{"items": [playlist_item("V1", "V1", "C1", "2026-09-01T00:00:00Z")]}],
+            },
+            subscription_pages=[{"items": [sub_channel("UC0000"), sub_channel("UC0001")]}],
+            channels_by_id={"UC0000": uploads_channel_reply("PU0000"), "UC0001": uploads_channel_reply("PU0001")},
+            videos={},
+        )
+        guard_urlopen(monkeypatch)
         notes: list[str] = []
 
         cands = tools._fetch_subscriptions(20, notes)

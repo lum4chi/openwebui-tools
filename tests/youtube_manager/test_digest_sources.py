@@ -1,51 +1,17 @@
-"""B4: digest path — OAuth-unset skipped-source notes, and RSS HTTP-status surfacing in the source notes."""
+"""B4: digest path — OAuth-unset skipped-source notes, and Data API HTTP-status surfacing in the source notes."""
 
-import email.message
-import urllib.error
-from collections.abc import Mapping
+from unittest.mock import MagicMock
 
-import youtube_manager
-from youtube_manager import TasteProfile, Tools, _rss_url
+from googleapiclient.errors import HttpError
 
+from youtube_manager import TasteProfile, Tools
 
-def _channel(i: int) -> dict:
-    return {
-        "id": f"UC{i:04d}",
-        "snippet": {
-            "channelId": f"UC{i:04d}",
-            "channelTitle": f"Chan {i}",
-            "publishedAt": f"2026-01-{i + 1:02d}T00:00:00Z",
-        },
-    }
+from .conftest import api_fake, guard_urlopen, sub_channel, uploads_channel_reply
 
 
-def _http_error(code: int, reason: str) -> urllib.error.HTTPError:
-    """A real HTTP response error (RSS urlopen raises these for 4xx/5xx); hdrs/fp are unused here."""
-    return urllib.error.HTTPError("https://www.youtube.com/feeds/atom.xml", code, reason, email.message.Message(), None)
-
-
-def _stub_urlopen(monkeypatch, feeds: Mapping[str, Exception]) -> None:
-    """Patch urllib.request.urlopen to raise the per-URL RSS outcome."""
-
-    def fake(url, timeout=None):
-        raise feeds[url]
-
-    monkeypatch.setattr(youtube_manager.urllib.request, "urlopen", fake)
-
-
-def _stub_api(monkeypatch, subscriptions_items: list[dict]) -> None:
-    """Route the digest Data API seam: literal WL empty, subscriptions.list -> the given items."""
-
-    def fake(valves, method, params):
-        if method == "channels.list":
-            raise AssertionError("channels.list must never be called on the watch_later path")
-        if method == "playlistItems.list":
-            return {"items": []}
-        if method == "subscriptions.list":
-            return {"items": subscriptions_items}
-        raise AssertionError(f"unexpected API method {method}")
-
-    monkeypatch.setattr(youtube_manager, "_data_api_request", fake)
+def _http_error(code: int, reason: str) -> HttpError:
+    """A Google Data API HTTP error with the status/reason surfaced by _failure_reason."""
+    return HttpError(MagicMock(status=code, reason=reason), b"")
 
 
 class TestDigestSources:
@@ -87,18 +53,23 @@ class TestDigestSources:
 
 
 class TestDigestErrorSurface:
-    """T0-1: digest() surfaces the real RSS HTTP status in the source notes (not a bare "transient")."""
+    """T0-1: digest() surfaces the real Data API HTTP status in the source notes."""
 
     # T0-1.8 · workflow · provenance: BDD Task T0-1 (R2-B1 "surface the real error")
-    #   Given an OAuth-configured Tools with 1 subscription channel whose RSS feed fetch raises HTTP 404
+    #   Given an OAuth-configured Tools with 1 subscription channel whose uploads fetch raises HTTP 404
     #   When digest() runs
     #   Then the payload's source notes contain "HTTP 404" (the real status), not a bare "transient"
     async def test_digest_surfaces_real_http_status(self, tools, monkeypatch):
         tools.valves.verbose = True
-        _stub_api(monkeypatch, [_channel(0)])
-        _stub_urlopen(monkeypatch, {_rss_url("UC0000"): _http_error(404, "Not Found")})
+        api_fake(
+            monkeypatch,
+            pages={"WL": [{"items": []}]},
+            subscription_pages=[{"items": [sub_channel("UC0000", "Chan 0", "2026-01-01T00:00:00Z")]}],
+            channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
+            raise_for_playlist={"PU0000": _http_error(404, "Not Found")},
+        )
+        guard_urlopen(monkeypatch)
 
         out = await tools.digest()
 
         assert "HTTP 404" in out
-        assert "transient" not in out

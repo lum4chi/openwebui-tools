@@ -1,69 +1,38 @@
-"""T9-2 B2-new: _parse_rss drop-counters, _subscription_zero_suffix branch priority, _subscription_headline fallback shape."""
+"""T9-2: drop-counters, zero-suffix branch priority, and headline fallback for the Data API path."""
 
-from youtube_manager import _parse_rss, _subscription_headline, _subscription_zero_suffix
+import youtube_manager
+from youtube_manager import _subscription_headline, _subscription_zero_suffix
 
-FEED_HEAD = (
-    '<?xml version="1.0" encoding="UTF-8"?>'
-    '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" '
-    'xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">'
-)
+from .conftest import idless_playlist_item, playlist_item, video_detail
 
 
-def _entry_feed(*entries: str) -> bytes:
-    return (FEED_HEAD + "".join(entries) + "</feed>").encode()
-
-
-def _usable_entry(video_id: str) -> str:
-    return (
-        "<entry>"
-        f"<id>yt:video:{video_id}</id><yt:videoId>{video_id}</yt:videoId>"
-        "<yt:channelId>UC0000</yt:channelId>"
-        f"<title>Video {video_id}</title>"
-        "<author><name>Feed Chan</name></author>"
-        "<published>2026-09-03</published>"
-        "</entry>"
-    )
-
-
-def _idless_entry(i: int) -> str:
-    """An Atom <entry> with neither a <yt:videoId> nor a yt:video: <id> (no usable video id)."""
-    return (
-        "<entry>"
-        f"<id>http://www.youtube.com/channel/UC{i:04d}</id>"
-        f"<title>No video id {i}</title>"
-        "<author><name>Feed Chan</name></author>"
-        "<published>2026-09-03</published>"
-        "</entry>"
-    )
-
-
-class TestParseRssDropCounts:
-    # Scenario: T9-2 (drop_counts) _parse_rss counts raw entries and dropped no-video-id entries
-    #   Given a feed with 1 usable V1 entry and 1 idless entry
-    #   When _parse_rss is called with a drop_counts dict
+class TestUploadEntriesDropCounts:
+    # Scenario: T9-2 (drop_counts) _upload_entries counts raw items and dropped no-video-id items
+    #   Given Data API uploads with 1 usable V1 item and 1 idless item
+    #   When _upload_entries is called with a drop_counts dict
     #   Then entries is exactly the 1 usable entry with video_id "V1"
     #   And drop_counts is exactly {"raw_entries": 2, "no_video_id": 1}
-    def test_parse_rss_with_drop_counts(self):
-        raw = _entry_feed(_usable_entry("V1"), _idless_entry(0))
+    def test_upload_entries_with_drop_counts(self):
+        items = [playlist_item("V1", "V1", "C1", "2026-09-03T00:00:00Z"), idless_playlist_item()]
+        details = {"V1": video_detail("V1", "PT1M0S", "100")}
         drop_counts: dict[str, int] = {}
 
-        entries = _parse_rss(raw, drop_counts)
+        entries = youtube_manager._upload_entries(items, details, "UC1", drop_counts)
 
-        assert len(entries) == 1
-        assert entries[0]["video_id"] == "V1"
+        assert [entry["video_id"] for entry in entries] == ["V1"]
         assert drop_counts == {"raw_entries": 2, "no_video_id": 1}
 
-    # Scenario: T9-2 (no counter) _parse_rss without drop_counts returns only usable entries
-    #   Given a feed with 1 usable V1 entry and 1 idless entry
-    #   When _parse_rss is called without a drop_counts dict
+    # Scenario: T9-2 (no counter) _upload_entries without drop_counts returns only usable entries
+    #   Given Data API uploads with 1 usable V1 item and 1 idless item
+    #   When _upload_entries is called without a drop_counts dict
     #   Then entries is exactly the 1 usable entry with video_id "V1" (no counter required or mutated)
-    def test_parse_rss_without_drop_counts(self):
-        raw = _entry_feed(_usable_entry("V1"), _idless_entry(0))
+    def test_upload_entries_without_drop_counts(self):
+        items = [playlist_item("V1", "V1", "C1", "2026-09-03T00:00:00Z"), idless_playlist_item()]
+        details = {"V1": video_detail("V1", "PT1M0S", "100")}
 
-        entries = _parse_rss(raw)
+        entries = youtube_manager._upload_entries(items, details, "UC1")
 
-        assert len(entries) == 1
-        assert entries[0]["video_id"] == "V1"
+        assert [entry["video_id"] for entry in entries] == ["V1"]
 
 
 class TestSubscriptionZeroSuffix:

@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.4
+version: 1.5.5
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -25,7 +25,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -55,7 +54,6 @@ TASTE_STARTER = "# Taste profile\n\n## Topics\n- rust async\n- postgres\n\n## Av
 PODCAST_MAX_LINES = 400
 MAX_PER_SOURCE = 20
 SUBSCRIPTION_CHANNEL_CAP = 25
-RSS_TIMEOUT = 10.0
 FEEDBACK_HEADER = "| date | video_id | decision | title | source | reason |"
 SEARCH_BOT_CHECK_ERROR: str = (
     "YouTube search blocked by bot check — wait before retrying (search is rate-limited); other sources are unaffected."
@@ -361,85 +359,60 @@ def candidates_from_api(items: list[dict], source: str) -> list[Candidate]:
     return cands
 
 
-def _rss_url(channel_id: str) -> str:
-    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+def _upload_video_id(item: dict) -> str | None:
+    snippet = item.get("snippet") or {}
+    resource_id = snippet.get("resourceId") or {}
+    return resource_id.get("videoId")
 
 
-def _fetch_rss(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=RSS_TIMEOUT) as resp:
-        return resp.read()
+def _upload_video_ids(items: list[dict]) -> list[str]:
+    video_ids: list[str] = []
+    for item in items:
+        video_id = _upload_video_id(item)
+        if video_id:
+            video_ids.append(video_id)
+    return video_ids
 
 
-def _rss_local(elem: ET.Element) -> str:
-    return elem.tag.rsplit("}", 1)[-1]
-
-
-def _rss_find(elem: ET.Element, name: str) -> ET.Element | None:
-    for child in elem.iter():
-        if child is not elem and _rss_local(child) == name:
-            return child
-    return None
-
-
-def _rss_text(elem: ET.Element, name: str) -> str | None:
-    found = _rss_find(elem, name)
-    if found is None or not found.text:
-        return None
-    return found.text
-
-
-def _rss_int(value: str | None) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
-def _rss_attr(elem: ET.Element | None, name: str) -> str | None:
-    return elem.get(name) if elem is not None else None
-
-
-def _rss_entry(elem: ET.Element) -> dict | None:
-    video_id = _rss_text(elem, "videoId")
-    if video_id is None:
-        atom_id = _rss_text(elem, "id")
-        video_id = atom_id.removeprefix("yt:video:") if atom_id and atom_id.startswith("yt:video:") else None
-    if video_id is None:
-        return None
+def _upload_entry(item: dict, video_id: str, detail: dict | None, channel_id: str) -> dict:
+    snippet = item.get("snippet") or {}
+    detail = detail or {}
+    detail_snippet = detail.get("snippet") or {}
+    content = detail.get("contentDetails") or {}
+    statistics = detail.get("statistics") or {}
+    views = statistics.get("viewCount")
     return {
         "video_id": video_id,
-        "title": _rss_text(elem, "title"),
-        "channel_name": _rss_text(elem, "name"),
-        "channel_id": _rss_text(elem, "channelId") or "",
-        "published": _published_from_api(_rss_text(elem, "published")),
-        "duration_sec": _rss_int(_rss_attr(_rss_find(elem, "content"), "duration")),
-        "views": _rss_int(_rss_attr(_rss_find(elem, "statistics"), "views")),
-        "description": _rss_text(elem, "description"),
+        "title": detail_snippet.get("title") or snippet.get("title") or "",
+        "channel_name": detail_snippet.get("channelTitle") or snippet.get("channelTitle") or "",
+        "channel_id": channel_id,
+        "published": _published_from_api(detail_snippet.get("publishedAt") or snippet.get("publishedAt")),
+        "duration_sec": _iso_duration_to_sec(content.get("duration")),
+        "views": int(views) if views is not None else None,
+        "description": detail_snippet.get("description") or snippet.get("description"),
     }
 
 
-def _parse_rss(raw: bytes, drop_counts: dict[str, int] | None = None) -> list[dict]:
+def _upload_entries(
+    items: list[dict], details: dict[str, dict], channel_id: str, drop_counts: dict[str, int] | None = None
+) -> list[dict]:
     entries: list[dict] = []
     raw_count = 0
     no_video_count = 0
-    for elem in ET.fromstring(raw).iter():
-        if _rss_local(elem) != "entry":
-            continue
-        entry = _rss_entry(elem)
+    for item in items:
         raw_count += 1
-        if entry is None:
+        video_id = _upload_video_id(item)
+        if video_id is None:
             no_video_count += 1
         else:
-            entries.append(entry)
+            entries.append(_upload_entry(item, video_id, details.get(video_id), channel_id))
     if drop_counts is not None:
         drop_counts["raw_entries"] = drop_counts.get("raw_entries", 0) + raw_count
         drop_counts["no_video_id"] = drop_counts.get("no_video_id", 0) + no_video_count
     return entries
 
 
-def candidates_from_rss(entries: list[dict], source: str) -> list[Candidate]:
+def candidates_from_entries(entries: list[dict], source: str) -> list[Candidate]:
     cands: list[Candidate] = []
     for entry in entries:
         cands.append(
@@ -1268,13 +1241,11 @@ class Tools:
             )
         return "OK - credential stored; check_setup should now show ok"
 
-    def _video_details(self, video_ids: list[str]) -> dict[str, dict]:
+    def _video_details(self, video_ids: list[str], part: str = "snippet,contentDetails") -> dict[str, dict]:
         details: dict[str, dict] = {}
         for start in range(0, len(video_ids), 50):
             chunk = video_ids[start : start + 50]
-            resp = _data_api_request(
-                self.valves, "videos.list", {"part": "snippet,contentDetails", "ids": ",".join(chunk)}
-            )
+            resp = _data_api_request(self.valves, "videos.list", {"part": part, "ids": ",".join(chunk)})
             for item in resp.get("items") or []:
                 details[item["id"]] = item
         return details
@@ -1337,16 +1308,16 @@ class Tools:
         ok = 0
         drop_counts: dict[str, int] = {}
         for channel in channels:
-            reason = self._collect_channel(channel, entries, drop_counts)
+            reason = self._collect_channel(channel, entries, max_per_source, drop_counts)
             if reason is None:
                 ok += 1
             else:
                 failures[reason] = failures.get(reason, 0) + 1
         entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
         capped_entries = entries[:max_per_source]
-        candidate_count = len(candidates_from_rss(capped_entries, "subscriptions"))
+        candidate_count = len(candidates_from_entries(capped_entries, "subscriptions"))
         self._note_subscription_results(notes, ok, failures, entries, candidate_count, drop_counts)
-        return candidates_from_rss(capped_entries, "subscriptions")
+        return candidates_from_entries(capped_entries, "subscriptions")
 
     def _note_subscription_results(
         self,
@@ -1362,20 +1333,46 @@ class Tools:
             for reason, count in failures.items():
                 notes.append(f"{count} channel(s) failed: {reason}")
 
+    def _channel_uploads(self, channel_id: str) -> str | None:
+        resp = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "id": channel_id})
+        items = resp.get("items") or []
+        if not items:
+            return None
+        content = items[0].get("contentDetails") or {}
+        related = content.get("relatedPlaylists") or {}
+        return related.get("uploads")
+
+    def _uploads_items(self, uploads: str, max_per_source: int) -> list[dict]:
+        resp = _data_api_request(
+            self.valves,
+            "playlistItems.list",
+            {"part": "snippet", "playlistId": uploads, "maxResults": str(max(1, max_per_source))},
+        )
+        return resp.get("items") or []
+
     def _collect_channel(
-        self, channel: dict, entries: list[dict], drop_counts: dict[str, int] | None = None
+        self,
+        channel: dict,
+        entries: list[dict],
+        max_per_source: int,
+        drop_counts: dict[str, int] | None = None,
     ) -> str | None:
         snippet = channel.get("snippet") or {}
         channel_id = snippet.get("channelId") or ""
+        items: list[dict] = []
+        channel_entries: list[dict] = []
         try:
-            parsed = _parse_rss(_fetch_rss(_rss_url(channel_id)), drop_counts)
-        except Exception as err:  # per-channel isolation: one bad RSS feed must not sink the rest
+            uploads = self._channel_uploads(channel_id)
+            if uploads is None:
+                return "channel not found"
+            items = self._uploads_items(uploads, max_per_source)
+            details = self._video_details(_upload_video_ids(items), part="snippet,contentDetails,statistics")
+            channel_entries = _upload_entries(items, details, channel_id, drop_counts)
+        except Exception as err:  # per-channel isolation: one bad Data API channel must not sink the rest
             return _failure_reason(err)
-        if not parsed and drop_counts is not None:
+        if not items and drop_counts is not None:
             _bump(drop_counts, "zero_entry_feeds")
-        for entry in parsed:
-            entry["channel_id"] = channel_id
-            entries.append(entry)
+        entries.extend(channel_entries)
         return None
 
     @staticmethod

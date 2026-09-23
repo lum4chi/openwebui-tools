@@ -159,6 +159,10 @@ def api_fake(
     insert_reply: dict | None = None,
     deletes: list | None = None,
     raise_for: dict | None = None,
+    subscription_pages: list[dict] | None = None,
+    channels_by_id: dict[str, dict] | None = None,
+    videos: dict[str, dict] | None = None,
+    raise_for_playlist: dict[str, Exception] | None = None,
 ):
     """Route _data_api_request by method; record every call as (method, params).
 
@@ -167,23 +171,30 @@ def api_fake(
     ``create_reply``/``insert_reply`` are the playlists.insert / playlistItems.insert
     replies; ``deletes`` feeds per-call playlistItems.delete outcomes in order
     (None = ok, an Exception instance = raise it); ``raise_for`` raises before dispatch
-    keyed by method name.
+    keyed by method name. ``subscription_pages`` serves subscriptions.list pages in order;
+    ``channels_by_id`` serves per-id channels.list replies; ``videos`` serves videos.list
+    rows; ``raise_for_playlist`` raises per playlistId before playlistItems.list dispatch.
     """
     calls: list[tuple[str, dict]] = []
     page_index: dict[str, int] = {}
     playlist_page_index = {"n": 0}
     delete_index = {"n": 0}
+    subscription_page_index = {"n": 0}
 
     def fake(valves, method, params):
         calls.append((method, dict(params)))
         if raise_for is not None and method in raise_for:
             raise raise_for[method]
         if method == "channels.list":
+            if channels_by_id is not None:
+                return channels_by_id.get(params.get("id"), {"items": []})
             if channels is None:
                 raise AssertionError("unexpected channels.list")
             return channels
         if method == "playlistItems.list":
             playlist_id = params.get("playlistId")
+            if raise_for_playlist is not None and playlist_id in raise_for_playlist:
+                raise raise_for_playlist[playlist_id]
             page_list = pages.get(playlist_id)
             if page_list is None:
                 raise AssertionError(f"unseeded playlist {playlist_id!r}")
@@ -211,7 +222,78 @@ def api_fake(
             if isinstance(outcome, Exception):
                 raise outcome
             return {}
+        if method == "subscriptions.list":
+            if subscription_pages is None:
+                raise AssertionError("unexpected subscriptions.list")
+            n = subscription_page_index["n"]
+            subscription_page_index["n"] = n + 1
+            return subscription_pages[n] if n < len(subscription_pages) else {"items": []}
+        if method == "videos.list":
+            if videos is None:
+                raise AssertionError("unexpected videos.list")
+            ids = [vid for vid in str(params.get("ids", "")).split(",") if vid]
+            return {"items": [videos[vid] for vid in ids if vid in videos]}
         raise AssertionError(f"unexpected API method {method}")
 
     monkeypatch.setattr("youtube_manager._data_api_execute", fake)
     return calls
+
+
+def guard_urlopen(monkeypatch) -> None:
+    """Patch urllib.request.urlopen to fail if any code path tries real network I/O."""
+
+    def blocked(*args, **kwargs):
+        raise AssertionError("urllib.request.urlopen must not be called")
+
+    monkeypatch.setattr("youtube_manager.urllib.request.urlopen", blocked)
+
+
+def sub_channel(channel_id: str, title: str = "", published: str = "2026-01-01T00:00:00Z") -> dict:
+    """One subscriptions.list item keyed by channelId."""
+    return {
+        "id": channel_id,
+        "snippet": {"channelId": channel_id, "title": title, "publishedAt": published},
+    }
+
+
+def uploads_channel_reply(uploads: str) -> dict:
+    """A channels.list reply whose item exposes the uploads playlist id."""
+    return {"items": [{"contentDetails": {"relatedPlaylists": {"uploads": uploads}}}]}
+
+
+def empty_channel_reply() -> dict:
+    """A channels.list reply with no items (channel not found)."""
+    return {"items": []}
+
+
+def no_uploads_channel_reply() -> dict:
+    """A channels.list reply whose item has no uploads playlist id."""
+    return {"items": [{"contentDetails": {"relatedPlaylists": {}}}]}
+
+
+def playlist_item(video_id: str, title: str, channel_title: str, published: str, description: str = "") -> dict:
+    """One playlistItems.list item with a resolvable resourceId.videoId."""
+    return {
+        "snippet": {
+            "resourceId": {"videoId": video_id},
+            "title": title,
+            "channelTitle": channel_title,
+            "publishedAt": published,
+            "description": description,
+        }
+    }
+
+
+def idless_playlist_item(title: str = "No video id") -> dict:
+    """One playlistItems.list item without a resolvable resourceId."""
+    return {"snippet": {"title": title, "channelTitle": "No ID", "publishedAt": "2026-01-01T00:00:00Z"}}
+
+
+def video_detail(video_id: str, duration: str | None = None, views: str | None = None, title: str | None = None):
+    """One videos.list item; omit duration/views/title to exercise absent metadata."""
+    return {
+        "id": video_id,
+        "snippet": {"title": title} if title is not None else {},
+        "contentDetails": {"duration": duration} if duration is not None else {},
+        "statistics": {"viewCount": views} if views is not None else {},
+    }

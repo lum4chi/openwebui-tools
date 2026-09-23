@@ -86,15 +86,15 @@ class TestFeedbackEntryDecisionEnum:
         assert [e.decision for e in entries] == ["watched", "listened", "skipped"]
 
     # @unit
-    # Scenario: T9-5 S4 module version is bumped to 1.5.4
+    # Scenario: T0-1 S-version module version is bumped to 1.5.5
     #   Given the module docstring
     #   When read
-    #   Then it contains "1.5.4"
-    #   And it does not contain "1.5.3"
-    def test_version_bumped_to_1_5_4(self):
+    #   Then it contains "1.5.5"
+    #   And it does not contain "1.5.4"
+    def test_version_bumped_to_1_5_5(self):
         doc = youtube_manager.__doc__ or ""
-        assert "1.5.4" in doc
-        assert "1.5.3" not in doc
+        assert "1.5.5" in doc
+        assert "1.5.4" not in doc
 
 
 class TestRecordFeedbackToolSchema:

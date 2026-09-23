@@ -1022,6 +1022,19 @@ def _video_meta(info: dict | None, video_id: str) -> tuple[str, str]:
     return title, channel
 
 
+def _video_title_lookup(video_id: str) -> tuple[str, str] | None:
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        info = _ytdlp_extract(url, extra=None)
+    except Exception:
+        return None
+    title = info.get("title")
+    if not title:
+        return None
+    channel = info.get("uploader") or info.get("channel") or "unknown"
+    return title, channel
+
+
 def _try_primary(video_id: str, language: str, tmp: str) -> tuple[dict | None, str | None]:
     """(info, primary failure reason) from yt-dlp subtitle extraction. No reauth path (decision 3): a primary failure just falls through to the fallback."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -1053,11 +1066,17 @@ def _transcript_with_notice(text: str, language: str, used: str) -> str:
     return f"Notice: transcript language fallback: requested {language}, used {used}\n{text}"
 
 
-def _resolve_transcript(video_id: str, primary_reason: str, title: str, channel: str, language: str) -> str:
+def _resolve_transcript(
+    video_id: str, primary_reason: str, title: str, channel: str, language: str, info: dict | None = None
+) -> str:
     segments, reason, language_code = _fallback_transcript(video_id)
     if not segments and reason is None:
         reason = "no transcript returned"
     if segments:
+        if info is None:
+            lookup = _video_title_lookup(video_id)
+            if lookup is not None:
+                title, channel = lookup
         return _transcript_with_notice(
             assemble_podcast_text(title, channel, segments),
             language,
@@ -1551,7 +1570,7 @@ class Tools:
             )
         if primary_reason is None:
             primary_reason = "no captions found"
-        return _resolve_transcript(video_id, primary_reason, title, channel, language)
+        return _resolve_transcript(video_id, primary_reason, title, channel, language, info=info)
 
     async def add_to_playlist(self, video_id: str) -> str:
         """Idempotent add to the custom digest playlist (resolve-or-create by title), record tool-added items in digest-state."""

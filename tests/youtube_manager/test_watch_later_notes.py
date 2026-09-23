@@ -1,10 +1,15 @@
-"""Watch Later notes: literal WL path, details-unavailable note, API failure surfacing, readiness probe."""
+"""Watch Later notes: literal WL path, details-unavailable note, API failure surfacing, readiness probe.
+
+T3-1 (youtube-manager-bugfixes): watch_later zero-candidates note.
+"""
 
 import email.message
 import urllib.error
 
 import youtube_manager
-from youtube_manager import ReauthNeeded
+from youtube_manager import ReauthNeeded, Tools
+
+from .conftest import sample_candidates
 
 
 def _playlist_item(video_id: str) -> dict:
@@ -194,3 +199,72 @@ class TestWatchLaterProbe:
         monkeypatch.setattr(youtube_manager, "_data_api_request", api)
 
         assert await tools._watch_later_probe() == "CHECK FAILED - reauth"
+
+
+class TestWatchLaterZeroNote:
+    """T3-1: an empty-but-valid watch_later playlist carries the zero note (distinguishable from not-found)."""
+
+    # @unit
+    # Scenario: T3-1.S1 — standalone: an empty-but-valid watch_later playlist carries the zero note (not a bare zero-candidate payload)
+    # Given OAuth is configured and the Data API serves an empty playlistItems.list for playlistId "WL" (0 items)
+    # When the agent calls gather_candidates with sources="watch_later"
+    # Then the result starts with "=== Candidates (0) ===" and lists "Candidate IDs: (none)"
+    # And the result carries the note "watch_later: playlist ok, 0 items"
+    async def test_empty_watch_later_carries_zero_note(self, tools, monkeypatch):
+        _wl_api_fake(monkeypatch, playlist_items=[], video_details={})
+
+        payload = await tools.gather_candidates(sources="watch_later")
+
+        assert payload.startswith("=== Candidates (0) ===")
+        assert "Candidate IDs: (none)" in payload
+        assert "watch_later: playlist ok, 0 items" in payload
+
+    # @unit
+    # Scenario: T3-1.S2 — multi-source: an empty-but-valid watch_later playlist still carries the zero note alongside a healthy source's results
+    # Given gather is requested with sources="watch_later,subscriptions"
+    # And the Data API serves an empty playlistItems.list for playlistId "WL" (0 items) while the subscriptions source completes and returns one candidate
+    # When the agent calls gather_candidates
+    # Then the result is NOT an error (does not start with "Error:")
+    # And the result lists the subscriptions candidate
+    # And the result carries the note "watch_later: playlist ok, 0 items"
+    async def test_empty_watch_later_multi_source_carries_zero_note(self, tools, monkeypatch):
+        _wl_api_fake(monkeypatch, playlist_items=[], video_details={})
+        monkeypatch.setattr(Tools, "_fetch_subscriptions", lambda self, max_per_source, notes: sample_candidates(1))
+
+        payload = await tools.gather_candidates(sources="watch_later,subscriptions")
+
+        assert not payload.startswith("Error:")
+        assert "Sample video 0" in payload
+        assert "watch_later: playlist ok, 0 items" in payload
+
+    # @unit
+    # Scenario: T3-1.S3 — regression guard: a NON-empty watch_later playlist does NOT carry the zero note (and no "watch_later skipped" note)
+    # Given OAuth is configured and the Data API serves a watch_later playlist with 2 resolvable items (v1, v2)
+    # When the agent calls gather_candidates with sources="watch_later"
+    # Then the result starts with "=== Candidates (2) ==="
+    # And the result does NOT contain "watch_later: playlist ok, 0 items"
+    # And the result does NOT contain "watch_later skipped"
+    async def test_non_empty_watch_later_carries_no_zero_note(self, tools, monkeypatch):
+        _wl_api_fake(
+            monkeypatch,
+            playlist_items=[_playlist_item("v1"), _playlist_item("v2")],
+            video_details={"v1": _detail("v1"), "v2": _detail("v2")},
+        )
+
+        payload = await tools.gather_candidates(sources="watch_later")
+
+        assert "=== Candidates (2) ===" in payload
+        assert "watch_later: playlist ok, 0 items" not in payload
+        assert "watch_later skipped" not in payload
+
+    # @unit
+    # Scenario: T3-1.S4 — digest-path safety: the zero note is None-safe (notes=None on the digest path must not crash and must not append)
+    # Given the watch_later Data API serves an empty playlistItems.list (0 items)
+    # When _fetch_watch_later runs with notes omitted (notes defaults to None, as the digest path calls it)
+    # Then 0 candidates are returned and no exception is raised
+    async def test_zero_note_none_safe_digest_path(self, tools, monkeypatch):
+        _wl_api_fake(monkeypatch, playlist_items=[], video_details={})
+
+        candidates = tools._fetch_watch_later(20)
+
+        assert candidates == []

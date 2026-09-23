@@ -1129,6 +1129,12 @@ def _note_watch_later(notes: list[str] | None, reason: str) -> None:
         notes.append(f"watch_later skipped: {reason}")
 
 
+def _note_watch_later_zero(notes: list[str] | None) -> None:
+    """Append a ``watch_later: playlist ok, 0 items`` note (None-safe for the digest path)."""
+    if notes is not None:
+        notes.append("watch_later: playlist ok, 0 items")
+
+
 def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], resolved: list[dict]) -> None:
     """Note when the playlist listed items but none resolved in the videos.list details."""
     if video_ids and not resolved:
@@ -1265,6 +1271,8 @@ class Tools:
                 video_ids.append(vid)
         details = self._video_details(video_ids)
         resolved = [details[vid] for vid in video_ids if vid in details]
+        if not video_ids:
+            _note_watch_later_zero(notes)
         _note_details_unavailable(notes, video_ids, resolved)
         return candidates_from_api(resolved, "watch_later")
 

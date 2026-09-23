@@ -202,6 +202,8 @@ _TRANSCRIPT_API_REASONS: dict[str, str] = {
     "NoTranscriptFound": "no transcript found",
     "TranscriptsDisabled": "transcripts disabled",
     "VideoUnavailable": "video unavailable",
+    "VideoNotFound": "video unavailable",
+    "NoSubtitleTrack": "no subtitle track",
     "TranscriptRetrievalFailed": "transcript retrieval failed",
     "CouldNotRetrieveTranscript": "transcript retrieval failed",
     "InvalidVideoId": "invalid video id",

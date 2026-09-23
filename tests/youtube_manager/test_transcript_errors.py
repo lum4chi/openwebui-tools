@@ -1,5 +1,9 @@
-"""T8-2 transcript exception reason mapping, video_id pre-validation, no-captions distinction (S1, S3, S4, S5)."""
+"""T8-2 transcript exception reason mapping, video_id pre-validation, no-captions distinction (S1, S3, S4, S5).
 
+T4-1 (youtube-manager-bugfixes): transcript fallback surfaces the real not-found / no-subtitle-track reason.
+"""
+
+import email.message
 import urllib.error
 from unittest.mock import MagicMock
 
@@ -124,3 +128,61 @@ class TestTranscriptEndToEndReasons:
 
         assert result == "No captions found for vid123"
         assert not result.startswith("Error:")
+
+
+class TestTranscriptFallbackReasons:
+    """T4-1: the not-found / no-subtitle-track classes map to their specific reasons, not "unexpected error"."""
+
+    # @unit
+    # Scenario: T4-1.S1 [unit] — video-doesn't-exist class unifies to one specific reason end-to-end (both ids; not "unexpected error")
+    # Given a video whose primary yt-dlp subtitle extraction raises the not-found-class exception "VideoNotFound"
+    # And a fallback transcript fetch that also raises the not-found-class exception "VideoNotFound"
+    # When transcript is called with video_id="invalid_id_12345" and then again with video_id="00000000000"
+    # Then both results carry the SAME fallback reason "video unavailable"
+    # And neither result's fallback reason is "unexpected error"
+    # And the first result is exactly "Error: no transcript available for invalid_id_12345: primary: video unavailable; fallback: video unavailable"
+    async def test_video_not_found_class_unifies_to_one_reason(self, tools, monkeypatch):
+        not_found = type("VideoNotFound", (Exception,), {})
+        monkeypatch.setattr(youtube_manager, "_ytdlp_extract", MagicMock(side_effect=not_found("video unavailable")))
+        monkeypatch.setattr(
+            youtube_manager, "_fetch_transcript_fallback", MagicMock(side_effect=not_found("video unavailable"))
+        )
+
+        first = await tools.transcript("invalid_id_12345")
+        second = await tools.transcript("00000000000")
+
+        assert first == (
+            "Error: no transcript available for invalid_id_12345: primary: video unavailable; fallback: video unavailable"
+        )
+        assert second == (
+            "Error: no transcript available for 00000000000: primary: video unavailable; fallback: video unavailable"
+        )
+        assert "unexpected error" not in first
+        assert "unexpected error" not in second
+
+    # @unit
+    # Scenario: T4-1.S2 [unit] — no-subtitle-track class maps to its own short reason (not "unexpected error")
+    # Given a dummy exception class whose __name__ is "NoSubtitleTrack" (not currently in _TRANSCRIPT_API_REASONS)
+    # When _clean_exception is called on an instance of that class
+    # Then it returns exactly "no subtitle track"
+    def test_no_subtitle_track_maps_to_own_reason(self):
+        exc = type("NoSubtitleTrack", (Exception,), {})("no subtitle track")
+
+        assert _clean_exception(exc) == "no subtitle track"
+
+    # @unit
+    # Scenario: T4-1.S3 [unit] — regression guard: the HTTP not-found / rate-limited reasons the user named stay intact
+    # Given a urllib HTTPError with status 404 and a urllib HTTPError with status 429
+    # When _clean_exception is called on each
+    # Then the 404 maps to "not found - the resource no longer exists"
+    # And the 429 maps to "rate limited - retry later"
+    def test_http_404_and_429_reasons_stay_intact(self):
+        e404 = urllib.error.HTTPError(
+            "https://www.googleapis.com/youtube/v3/x", 404, "Not Found", email.message.Message(), None
+        )
+        e429 = urllib.error.HTTPError(
+            "https://www.googleapis.com/youtube/v3/x", 429, "Too Many Requests", email.message.Message(), None
+        )
+
+        assert _clean_exception(e404) == "not found - the resource no longer exists"
+        assert _clean_exception(e429) == "rate limited - retry later"

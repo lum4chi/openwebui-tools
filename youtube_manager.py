@@ -1188,9 +1188,15 @@ class Tools:
             default=False, description="Include raw HTTP error detail in source notes (off by default)"
         )
 
+    def _search_setup_line(self) -> str:
+        if self._in_search_cooldown():
+            return "search: ok (bot-check cooldown active)"
+        return "search: ok"
+
     async def check_setup(self) -> str:
         oauth_ok = _oauth_set(self.valves)
         token_status = _token_status(self.valves) if oauth_ok else None
+        search = self._search_setup_line()
         if oauth_ok and token_status is None:
             subscriptions = "subscriptions: ok"
             watch_later = f"watch_later: {await self._watch_later_probe()}"
@@ -1203,7 +1209,7 @@ class Tools:
             subscriptions = "subscriptions: MISSING - OAuth fields incomplete"
             watch_later = "watch_later: MISSING - OAuth fields incomplete"
             overall = "NOT READY"
-        return "\n".join(["search: ok", subscriptions, watch_later, overall])
+        return "\n".join([search, subscriptions, watch_later, overall])
 
     async def start_auth(self) -> str:
         client_id = self.valves.google_client_id

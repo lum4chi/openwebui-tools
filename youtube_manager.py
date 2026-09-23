@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -56,6 +57,10 @@ MAX_PER_SOURCE = 20
 SUBSCRIPTION_CHANNEL_CAP = 25
 RSS_TIMEOUT = 10.0
 FEEDBACK_HEADER = "| date | video_id | decision | title | source | reason |"
+SEARCH_BOT_CHECK_ERROR: str = (
+    "YouTube search blocked by bot check — wait before retrying (search is rate-limited); other sources are unaffected."
+)
+SEARCH_BOT_CHECK_COOLDOWN_SECONDS: float = 300.0
 
 
 class ReauthNeeded(Exception):  # noqa: N818 - plan/test contract name
@@ -707,6 +712,21 @@ def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
     return "\n".join(lines)
 
 
+def _now() -> float:
+    """Monotonic clock seam; tests inject a fixed value via monkeypatch."""
+    return time.monotonic()
+
+
+def _is_search_bot_check_only(failures: list[str]) -> bool:
+    return bool(failures) and all(e in ("bot_check", "search: bot_check") for e in failures)
+
+
+def _gather_error(failures: list[str]) -> str:
+    if _is_search_bot_check_only(failures):
+        return f"Error: {SEARCH_BOT_CHECK_ERROR}"
+    return f"Error: {'; '.join(failures)}"
+
+
 def _fetch_gated(
     source: str, fetch: Callable[[], list[Candidate]], notes: list[str], reauth_reasons: set[str]
 ) -> list[Candidate] | None:
@@ -1141,6 +1161,7 @@ class Tools:
     def __init__(self):
         self.valves = self.Valves()
         self.citation = False
+        self._search_bot_check_at: float | None = None
 
     class Valves(BaseModel):
         # google oauth (the only credential set - no YouTube session)
@@ -1336,15 +1357,37 @@ class Tools:
                 failures.append((video_id, _failure_reason(err)))
         return entries, failures
 
-    def _search_candidates(self, search_query: str, max_per_source: int, notes: list[str]) -> list[Candidate]:
-        flat = (
-            _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}", extra={"extract_flat": "in_playlist"}).get(
-                "entries"
+    def _in_search_cooldown(self) -> bool:
+        if self._search_bot_check_at is None:
+            return False
+        return _now() - self._search_bot_check_at < SEARCH_BOT_CHECK_COOLDOWN_SECONDS
+
+    def _note_search_bot_check(self) -> None:
+        self._search_bot_check_at = _now()
+
+    def _maybe_record_bot_check(self, reason: str) -> None:
+        if reason == "bot_check":
+            self._note_search_bot_check()
+
+    def _fetch_search_flat(self, search_query: str, max_per_source: int) -> list[dict]:
+        try:
+            return (
+                _ytdlp_extract(f"ytsearch{max_per_source}:{search_query}", extra={"extract_flat": "in_playlist"}).get(
+                    "entries"
+                )
+                or []
             )
-            or []
-        )
+        except Exception as err:
+            self._maybe_record_bot_check(_failure_reason(err))
+            raise
+
+    def _search_candidates(self, search_query: str, max_per_source: int, notes: list[str]) -> list[Candidate]:
+        if self._in_search_cooldown():
+            raise _AllUnavailable("bot_check")
+        flat = self._fetch_search_flat(search_query, max_per_source)
         entries, failures = self._resolve_search_videos(flat)
         if not entries and failures:
+            self._maybe_record_bot_check(failures[0][1])
             raise _AllUnavailable(failures[0][1])
         if failures:
             notes.append(f"skipped {len(failures)} unavailable: {', '.join(video_id for video_id, _ in failures)}")
@@ -1393,7 +1436,7 @@ class Tools:
         if reauth_reasons and not merged:
             return _reauth_block(notes, reauth_reasons)
         if not merged and failures:
-            return f"Error: {'; '.join(failures)}"
+            return _gather_error(failures)
         return _candidates_payload(merged, notes)
 
     def _gather_all(self, parsed: list[str], max_per_source: int, search_query: str) -> str:

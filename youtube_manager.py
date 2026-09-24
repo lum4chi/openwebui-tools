@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.8
+version: 1.6.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -656,16 +656,39 @@ def parse_vtt(text: str) -> list[tuple[int, str]]:
     return segments
 
 
-def assemble_podcast_text(title: str, channel: str, segments: list[tuple[int, str]]) -> str:
+def assemble_podcast_text(
+    video_id: str,
+    title: str,
+    channel: str,
+    segments: list[tuple[int, str]],
+    *,
+    language: str = "en",
+    max_lines: int = 0,
+    offset: int = 0,
+) -> str:
+    """Assemble podcast-format transcript text for the chunk of ``segments`` starting at ``offset``.
+
+    Dedup is per-chunk (the ``last``-seen line resets each call); ``max_lines <= 0`` falls back to
+    ``PODCAST_MAX_LINES``; on cap-break the notice carries the exact re-call for the next chunk.
+    """
+    offset = 0 if offset < 0 else offset
+    cap = max_lines if max_lines > 0 else PODCAST_MAX_LINES
+    if segments and offset >= len(segments):
+        return (
+            f"Error: transcript offset {offset} is beyond the end of the transcript ({len(segments)} segment(s) total)"
+        )
     lines = [f"=== Podcast transcript: {title} — {channel} ==="]
     kept = 0
     last = ""
-    for idx, (start, text) in enumerate(segments):
+    for idx, (start, text) in enumerate(
+        segments[offset:], offset
+    ):  # idx = absolute segment index (= next_offset at break)
         if text == last:
             continue
-        if kept >= PODCAST_MAX_LINES:
+        if kept >= cap:
             lines.append(
-                f"... (truncated at {PODCAST_MAX_LINES} lines; {len(segments) - idx} transcript segment(s) omitted)"
+                f"... (truncated at {cap} lines; {len(segments) - idx} transcript segment(s) omitted; "
+                f'next chunk: transcript(video_id="{video_id}", language="{language}", offset={idx}, max_lines={cap}))'
             )
             break
         lines.append(f"[{start // 60}:{start % 60:02d}] {text}")
@@ -1070,7 +1093,14 @@ def _transcript_with_notice(text: str, language: str, used: str) -> str:
 
 
 def _resolve_transcript(
-    video_id: str, primary_reason: str, title: str, channel: str, language: str, info: dict | None = None
+    video_id: str,
+    primary_reason: str,
+    title: str,
+    channel: str,
+    language: str,
+    info: dict | None = None,
+    max_lines: int = 0,
+    offset: int = 0,
 ) -> str:
     segments, reason, language_code = _fallback_transcript(video_id)
     if not segments and reason is None:
@@ -1081,7 +1111,9 @@ def _resolve_transcript(
             if lookup is not None:
                 title, channel = lookup
         return _transcript_with_notice(
-            assemble_podcast_text(title, channel, segments),
+            assemble_podcast_text(
+                video_id, title, channel, segments, language=language, max_lines=max_lines, offset=offset
+            ),
             language,
             language_code or "unknown",
         )
@@ -1618,30 +1650,37 @@ class Tools:
         first_line = next((line for line in md.splitlines() if line.strip()), "")[:80]
         return f'OK - saved taste profile: {len(md)} chars, {len(md.splitlines())} lines; first line: "{first_line}"'
 
-    async def transcript(self, video_id: str, language: str = "en") -> str:
-        """Podcast-format transcript: yt-dlp subtitles primary, youtube-transcript-api fallback."""
+    async def transcript(self, video_id: str, language: str = "en", max_lines: int = 0, offset: int = 0) -> str:
+        """Podcast-format transcript: yt-dlp subtitles primary, youtube-transcript-api fallback.
+
+        Chunked reads: ``offset`` skips the first N segments; ``max_lines <= 0`` falls back to the 400-line default cap.
+        """
         if not _valid_video_id(video_id):
             return f"Error: invalid video_id: {video_id!r}"
         tmp = tempfile.mkdtemp(prefix="ytm-sub-")
         try:
-            return self._transcript_core(video_id, language, tmp)
+            return self._transcript_core(video_id, language, tmp, max_lines, offset)
         finally:
             with contextlib.suppress(OSError):
                 shutil.rmtree(tmp)
 
-    def _transcript_core(self, video_id: str, language: str, tmp: str) -> str:
+    def _transcript_core(self, video_id: str, language: str, tmp: str, max_lines: int = 0, offset: int = 0) -> str:
         info, primary_reason = _try_primary(video_id, language, tmp)
         title, channel = _video_meta(info, video_id)
         segments = _vtt_segments(info, tmp, language) if info is not None else None
         if segments:
             return _transcript_with_notice(
-                assemble_podcast_text(title, channel, segments),
+                assemble_podcast_text(
+                    video_id, title, channel, segments, language=language, max_lines=max_lines, offset=offset
+                ),
                 language,
                 _primary_actual_language(info, language),
             )
         if primary_reason is None:
             primary_reason = "no captions found"
-        return _resolve_transcript(video_id, primary_reason, title, channel, language, info=info)
+        return _resolve_transcript(
+            video_id, primary_reason, title, channel, language, info=info, max_lines=max_lines, offset=offset
+        )
 
     async def add_to_playlist(self, video_id: str) -> str:
         """Idempotent add to the custom digest playlist (resolve-or-create by title), record tool-added items in digest-state."""

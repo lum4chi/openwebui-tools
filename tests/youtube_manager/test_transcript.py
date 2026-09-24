@@ -271,7 +271,11 @@ class TestVtt:
             pytest.param(
                 None,
                 _SEGS_401,
-                _pod(_SEGS_400) + ["... (truncated at 400 lines; 1 transcript segment(s) omitted)"],
+                _pod(_SEGS_400)
+                + [
+                    "... (truncated at 400 lines; 1 transcript segment(s) omitted; "
+                    'next chunk: transcript(video_id="vid", language="en", offset=400, max_lines=400))'
+                ],
                 id="truncate_401",
             ),
         ],
@@ -280,5 +284,5 @@ class TestVtt:
         parsed = segments if vtt_text is None else parse_vtt(vtt_text)
         if vtt_text is not None:
             assert parsed == segments
-        result = assemble_podcast_text("T", "C", parsed)
+        result = assemble_podcast_text("vid", "T", "C", parsed)
         assert result.splitlines() == expected_lines

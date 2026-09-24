@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.7
+version: 1.5.8
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -59,6 +59,9 @@ SEARCH_BOT_CHECK_ERROR: str = (
     "YouTube search blocked by bot check — wait before retrying (search is rate-limited); other sources are unaffected."
 )
 SEARCH_BOT_CHECK_COOLDOWN_SECONDS: float = 300.0
+TASTE_CHANGED_NOTICE = (
+    "Notice: taste profile changed during this digest run; this output reflects the profile as of digest start."
+)
 
 
 class ReauthNeeded(Exception):  # noqa: N818 - plan/test contract name
@@ -1582,8 +1585,13 @@ class Tools:
         return batches, source_counts, notes, reauth_reasons
 
     async def digest(self) -> str:
+        """Aggregate candidates, feedback stats, and source status into the LLM-facing digest.
+
+        The taste profile is read at call time: a save_taste_profile that completes before this digest call is visible; Open WebUI does not guarantee intra-batch ordering, so a save that lands mid-run is surfaced with a Notice (no per-batch snapshotting).
+        """
         store = _state_store(None)
-        taste = parse_taste_profile(_read_doc(store, NOTE_TASTE))
+        taste_raw = _read_doc(store, NOTE_TASTE)
+        taste = parse_taste_profile(taste_raw)
         rows = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
         batches, source_counts, notes, reauth_reasons = self._digest_sources(taste)
         merged = merge_candidates(batches)
@@ -1592,9 +1600,15 @@ class Tools:
         payload = render_digest(kept, taste, stats, source_counts)
         if reauth_reasons:
             return _reauth_block(notes, reauth_reasons) + "\n\n" + payload
+        if _read_doc(store, NOTE_TASTE) != taste_raw:
+            notes.append(TASTE_CHANGED_NOTICE)
         return _with_notes(payload, notes)
 
     async def save_taste_profile(self, md: str) -> str:
+        """Save the markdown taste-profile document.
+
+        Takes effect for digest calls that read the profile after this save (e.g. the next digest call, or a same-batch digest that runs after this save).
+        """
         if not (md or "").strip():
             return "Error: cannot save an empty taste profile"
         try:

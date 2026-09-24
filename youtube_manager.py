@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.6
+version: 1.5.7
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -279,11 +279,16 @@ def parse_digest_state(md: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def parse_sources_arg(s: str) -> list[str] | None:
-    names = [part.strip() for part in (s or "").split(",")]
-    if any(name not in SOURCES for name in names):
-        return None
-    return names
+def parse_sources_arg(s: str) -> tuple[list[str], list[str]]:
+    """Split a comma-separated source list into (valid, unknown) tokens, preserving order; empty tokens are dropped."""
+    valid: list[str] = []
+    unknown: list[str] = []
+    for part in (s or "").split(","):
+        name = part.strip()
+        if not name:
+            continue
+        (valid if name in SOURCES else unknown).append(name)
+    return valid, unknown
 
 
 def _published_from_ts(entry: dict) -> str | None:
@@ -1522,8 +1527,10 @@ class Tools:
             return _gather_error(failures)
         return _candidates_payload(merged, notes)
 
-    def _gather_all(self, parsed: list[str], max_per_source: int, search_query: str) -> str:
-        notes: list[str] = []
+    def _gather_all(
+        self, parsed: list[str], max_per_source: int, search_query: str, initial_notes: list[str] | None = None
+    ) -> str:
+        notes: list[str] = list(initial_notes) if initial_notes is not None else []
         reauth_reasons: set[str] = set()
         failures: list[str] = []
         batches: list[list[Candidate]] = []
@@ -1543,13 +1550,15 @@ class Tools:
 
         search_query is required only for the search source. watch_later and subscriptions use the
         existing Google OAuth valves and are skipped with a note when OAuth is not configured.
+        Unknown source tokens are skipped with a note; a call with no valid tokens returns an error.
         """
-        parsed = parse_sources_arg(sources)
-        if parsed is None:
+        valid, unknown = parse_sources_arg(sources)
+        if not valid:
             return f"Error: unknown source name(s) in {sources!r} - valid sources: {', '.join(SOURCES)}"
-        if "search" in parsed and not search_query.strip():
+        if "search" in valid and not search_query.strip():
             return "Error: search needs search_query (e.g. search_query='rust async')"
-        return self._gather_all(parsed, max_per_source, search_query)
+        notes = [f"{token} skipped: unknown source (valid sources: {', '.join(SOURCES)})" for token in unknown]
+        return self._gather_all(valid, max_per_source, search_query, notes)
 
     def _digest_sources(self, taste: TasteProfile) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
         """Watch_later + subscriptions: (batches, pre-merge source counts, notes, reauth reasons)."""

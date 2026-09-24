@@ -230,7 +230,10 @@ class TestSourcesArg:
             assert "srch-1" in payload  # search results appear as a candidate source
             assert ytdlp_calls == ["ytsearch5:rust async", "https://www.youtube.com/watch?v=srch-1"]
 
-    # Scenario T1-4 (edge): unknown name / empty / whitespace -> error naming valid sources, no I/O
+    # Scenario T1-4 (edge, T2-1 amended): ALL-unknown / empty / whitespace sources -> error naming valid sources, no I/O
+    # (T2-1: a MIXED valid+unknown list no longer errors — the valid tokens run and the unknown ones are
+    # skipped with a note; that behavior lives in test_sources_unknown_skip.py. The all-unknown error
+    # contract below stays frozen.)
     async def test_unknown_source_error(self, tools, monkeypatch):
         ytdlp_calls = _ytdlp_fake(monkeypatch, {}, {})
         api_calls: list[str] = []
@@ -241,7 +244,7 @@ class TestSourcesArg:
 
         monkeypatch.setattr(youtube_manager, "_data_api_request", api)
 
-        for bad in ("trending", "watch_later,trending", "", "   "):
+        for bad in ("trending", "", "   "):
             payload = await tools.gather_candidates(sources=bad)
             assert payload.startswith("Error:")
             assert "trending" in payload or bad in ("", "   ")

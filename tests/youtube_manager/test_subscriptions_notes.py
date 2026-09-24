@@ -56,7 +56,8 @@ class TestSubscriptionNotes:
     #   And 2 channels' uploads lists return 1 entry each
     #   And 1 channel's playlistItems.list fails with HttpError 404
     #   When gather_candidates runs the subscriptions source
-    #   Then the default subscriptions note is exactly "subscriptions: 2 ok, 1 failed, 2 candidates"
+    #   Then the default subscriptions note is exactly
+    #     "subscriptions: 2 ok, 1 failed, 2 candidates (e.g. channel UC2 → HTTP 404: Not Found)"
     def test_ok_and_failed_counts_reported(self, tools, monkeypatch):
         _stub_api(
             monkeypatch,
@@ -75,7 +76,7 @@ class TestSubscriptionNotes:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert len(cands) == 2
-        assert notes == ["subscriptions: 2 ok, 1 failed, 2 candidates"]
+        assert notes == ["subscriptions: 2 ok, 1 failed, 2 candidates (e.g. channel UC2 → HTTP 404: Not Found)"]
 
     # T3-1.A2 · unit — channel selection is deterministic across shuffled raw orders.
     #   Given OAuth is configured
@@ -134,16 +135,16 @@ class TestSubscriptionNotes:
         tools._fetch_subscriptions(20, notes_b)
 
         assert notes_a == notes_b
-        assert notes_a[0] == "subscriptions: 2 ok, 1 failed, 2 candidates"
+        assert notes_a[0] == "subscriptions: 2 ok, 1 failed, 2 candidates (e.g. channel UC2 → HTTP 404: Not Found)"
 
-    # T3-1.B1 · workflow — default note hides the raw HTTP status.
+    # T3-1.B1 · workflow — default note is a single-line diagnostic with the first-failure sample.
     #   Given OAuth is configured
     #   And 1 channel's playlistItems.list fails with HttpError 404
     #   And Valves.verbose is False
     #   When gather_candidates runs the subscriptions source
-    #   Then the default subscriptions note does not contain "HTTP 404"
+    #   Then the default note is one line with the first-failure sample, not a bare count
     #   And it does not contain "channel(s) failed:"
-    def test_default_note_has_no_raw_status(self, tools, monkeypatch):
+    def test_default_note_is_single_line_diagnostic(self, tools, monkeypatch):
         _stub_api(
             monkeypatch,
             channels=[sub_channel("UC0")],
@@ -158,18 +159,16 @@ class TestSubscriptionNotes:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert cands == []
-        assert notes == ["subscriptions: 0 ok, 1 failed"]
-        joined = "\n".join(notes)
-        assert "HTTP 404" not in joined
-        assert "channel(s) failed:" not in joined
+        assert notes == ["subscriptions: 0 ok, 1 failed (e.g. channel UC0 → HTTP 404: Not Found)"]
+        assert "channel(s) failed:" not in "\n".join(notes)
 
     # T3-1.B2 · workflow — verbose note carries the per-reason detail.
     #   Given OAuth is configured
     #   And 1 channel's playlistItems.list fails with HttpError 404
     #   And Valves.verbose is True
     #   When gather_candidates runs the subscriptions source
-    #   Then the note includes the friendly headline
-    #   And it includes "1 channel(s) failed: transient HTTP 404: Not Found"
+    #   Then the note includes the friendly headline with the first-failure sample
+    #   And it includes "channel UC0 → HTTP 404: Not Found"
     def test_verbose_note_has_raw_per_reason(self, tools, monkeypatch):
         tools.valves.verbose = True
         _stub_api(
@@ -185,8 +184,8 @@ class TestSubscriptionNotes:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert cands == []
-        assert "subscriptions: 0 ok, 1 failed" in notes
-        assert "1 channel(s) failed: transient HTTP 404: Not Found" in notes
+        assert "subscriptions: 0 ok, 1 failed (e.g. channel UC0 → HTTP 404: Not Found)" in notes
+        assert "channel UC0 → HTTP 404: Not Found" in notes
 
     # T3-1.B3 · unit — verbose is off by default.
     #   Given a Tools instance with default Valves
@@ -220,7 +219,7 @@ class TestSubscriptionNotes:
     #   And Valves.verbose is False
     #   When gather_candidates runs the subscriptions source
     #   Then the subscriptions note contains exactly one subscriptions summary line
-    #   And that line matches the exact locked format "subscriptions: {ok} ok, {failed} failed"
+    #   And that line matches the exact locked format "subscriptions: {ok} ok, {failed} failed (e.g. …)"
     def test_oauth_set_404_single_friendly_line(self, tools, monkeypatch):
         _stub_api(
             monkeypatch,
@@ -236,8 +235,8 @@ class TestSubscriptionNotes:
 
         assert cands == []
         assert len(notes) == 1
-        assert re.fullmatch(r"subscriptions: \d+ ok, \d+ failed", notes[0])
-        assert notes[0] == "subscriptions: 0 ok, 1 failed"
+        assert re.fullmatch(r"subscriptions: \d+ ok, \d+ failed \(e\.g\. .+\)", notes[0])
+        assert notes[0] == "subscriptions: 0 ok, 1 failed (e.g. channel UC0 → HTTP 404: Not Found)"
 
     # T3-1.C3 · workflow — unset OAuth and failed channels remain distinguishable.
     #   Given two otherwise identical scenarios
@@ -262,5 +261,5 @@ class TestSubscriptionNotes:
         notes_b: list[str] = []
         tools._gather_one("subscriptions", 20, "", notes_b)
         assert "subscriptions skipped: OAuth not configured" in notes_a
-        assert "subscriptions: 0 ok, 1 failed" in notes_b
+        assert "subscriptions: 0 ok, 1 failed (e.g. channel UC0 → HTTP 404: Not Found)" in notes_b
         assert "subscriptions skipped: OAuth not configured" not in notes_b

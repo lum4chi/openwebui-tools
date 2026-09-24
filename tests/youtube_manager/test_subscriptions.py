@@ -141,7 +141,7 @@ class TestFetchSubscriptions:
         cands = tools._fetch_subscriptions(20, notes)
 
         assert [c.video_id for c in cands] == ["V1"]
-        assert notes == ["subscriptions: 1 ok, 1 failed, 1 candidates"]
+        assert notes == ["subscriptions: 1 ok, 1 failed, 1 candidates (e.g. channel UC2 → HTTP 403: quota)"]
 
     # S4 [unit] — max_per_source boundary 1.
     #   Given 3 channels each with 5 playlist entries
@@ -271,13 +271,13 @@ class TestFetchSubscriptions:
         assert notes == []
 
     # T0-1 Data API boundary — channels.list with no uploads yields the soft "channel not found" reason.
-    # Given channels.list returns no uploads playlist; When _collect_channel runs; Then it returns "channel not found"
+    # Given channels.list has no uploads; When _collect_channel runs; Then it returns ("UC1", "channel not found")
     @pytest.mark.parametrize("reply", [empty_channel_reply(), no_uploads_channel_reply()], ids=["empty", "no_uploads"])
     def test_collect_channel_reports_channel_not_found(self, tools, monkeypatch, reply):
         api_fake(monkeypatch, pages={}, channels_by_id={"UC1": reply})
         guard_urlopen(monkeypatch)
 
-        assert tools._collect_channel(sub_channel("UC1"), [], 20) == "channel not found"
+        assert tools._collect_channel(sub_channel("UC1"), [], 20) == ("UC1", "channel not found")
 
     # T0-1 contract — channel enumeration pagination preserved: the second subscriptions.list call carries pageToken.
     # Given page 1 returns a pageToken; When _list_subscription_channels runs; Then the second call carries that pageToken

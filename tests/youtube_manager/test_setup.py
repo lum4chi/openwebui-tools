@@ -46,7 +46,7 @@ class TestCheckSetup:
     #   Given the OAuth fields are complete and the token status is valid
     #   And Tools._watch_later_probe returns "ok (playlist checked)"
     #   When check_setup runs
-    #   Then the result lines are exactly "search: ok", "subscriptions: ok", "watch_later: ok (playlist checked)", "READY"
+    #   Then the result lines are exactly "search: ok", "subscriptions: ok (subscription feed checked)", "watch_later: ok (playlist checked)", "READY"
     async def test_ready(self, tools):
         with (
             patch(
@@ -54,11 +54,12 @@ class TestCheckSetup:
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
             patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
         lines = result.splitlines()
         assert lines[0] == "search: ok"
-        assert lines[1] == "subscriptions: ok"
+        assert lines[1] == "subscriptions: ok (subscription feed checked)"
         assert lines[2] == "watch_later: ok (playlist checked)"
         assert lines[-1] == "READY"
         assert "NOT READY" not in result
@@ -87,11 +88,12 @@ class TestCheckSetup:
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
             patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
         lines = result.splitlines()
         assert lines[0] == "search: ok"
-        assert lines[1] == "subscriptions: ok"
+        assert lines[1] == "subscriptions: ok (subscription feed checked)"
         assert lines[2] == "watch_later: ok (playlist checked)"
         assert lines[-1] == "READY"
         assert "NOT READY" not in result
@@ -112,11 +114,12 @@ class TestCheckSetup:
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
             patch.object(Tools, "_watch_later_probe", _probe_return("CHECK FAILED - reauth")),
+            patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
         assert result.splitlines() == [
             "search: ok",
-            "subscriptions: ok",
+            "subscriptions: ok (subscription feed checked)",
             "watch_later: CHECK FAILED - reauth",
             "NOT READY",
         ]
@@ -211,14 +214,14 @@ class TestCheckSetupPerSource:
     #   Given a Tools instance with complete OAuth fields and a valid refresh token
     #   When check_setup is called
     #   Then the first line is exactly "search: ok"
-    #   And the second line is exactly "subscriptions: ok"
+    #   And the second line is exactly "subscriptions: ok (subscription feed checked)"
     #   And the third line is exactly "watch_later: ok (playlist checked)"
     #   And the last line is exactly "READY"
     # Scenario: T9-1 S2 check_setup is READY only when the WL probe succeeds
     #   Given the OAuth fields are complete and the token status is valid
     #   And Tools._watch_later_probe returns "ok (playlist checked)"
     #   When check_setup runs
-    #   Then the result lines are exactly "search: ok", "subscriptions: ok", "watch_later: ok (playlist checked)", "READY"
+    #   Then the result lines are exactly "search: ok", "subscriptions: ok (subscription feed checked)", "watch_later: ok (playlist checked)", "READY"
     async def test_check_setup_per_source_ready(self, tools):
         with (
             patch(
@@ -226,11 +229,12 @@ class TestCheckSetupPerSource:
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
             patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
         assert result.splitlines() == [
             "search: ok",
-            "subscriptions: ok",
+            "subscriptions: ok (subscription feed checked)",
             "watch_later: ok (playlist checked)",
             "READY",
         ]

@@ -20,6 +20,10 @@ def _http_error(status: int, reason: str | None = None) -> HttpError:
     return HttpError(_Resp(status, reason), b"")
 
 
+def _http_error_body(status: int, reason: str, body: bytes) -> HttpError:
+    return HttpError(_Resp(status, reason), body)
+
+
 class TestClassifyFeedError:
     # @unit
     # Scenario: T0-12 error classification (corpus) + T3-1 provider-vs-local tokens
@@ -119,16 +123,16 @@ class TestFailureReason:
     # Scenario: T3-1 digest failure note surfaces the HttpError status + message
     #   Given a healthy auth where a Data-API call raises an HttpError 503 (reason "Service Unavailable")
     #   When the digest note is formatted (note reads "watch_later failed: {_failure_reason(err)}")
-    #   Then the note reads "watch_later failed: transient HTTP 503: Service Unavailable"
+    #   Then the note reads "watch_later failed: HTTP 503: Service Unavailable"
     #   And a ReauthNeeded path still yields "watch_later failed: reauth" (unchanged)
     #   And a bot_check message still yields token-only "bot_check" (unchanged)
     #   And a local/code exception yields token-only "local" (no fake status)
     def test_http_error_carries_status_and_message(self):
         err = _http_error(503, "Service Unavailable")
-        assert _failure_reason(err) == "transient HTTP 503: Service Unavailable"
+        assert _failure_reason(err) == "HTTP 503: Service Unavailable"
 
     def test_http_error_without_reason_falls_back_to_message(self):
-        assert _failure_reason(_http_error(500, None)).startswith("transient HTTP 500: ")
+        assert _failure_reason(_http_error(500, None)) == "HTTP 500: error"
 
     def test_reauth_token_unchanged(self):
         assert _failure_reason(ReauthNeeded("Google credential rejected by the Data API")) == "reauth"
@@ -138,3 +142,33 @@ class TestFailureReason:
 
     def test_local_is_token_only(self):
         assert _failure_reason(AttributeError("no attribute 'x'")) == "local"
+
+    # @unit
+    # Scenario: S7 HttpError classification yields human-readable reason text
+    #   Given HttpError status_code 403 with JSON body error.message="…exceeded your quota."
+    #     and errors[0].reason="quotaExceeded"
+    #   Then _failure_reason returns "HTTP 403: …exceeded your quota. (quotaExceeded)"
+    #   And given HttpError 404 notFound the reason is "HTTP 404: …"
+    #   And given a ReauthNeeded the reason is "reauth" (unchanged)
+    #   And given HttpError with unparseable body the result is "HTTP <status_code>: <err.reason>" without raising
+    @pytest.mark.parametrize(
+        ("status", "body", "expected"),
+        [
+            (
+                403,
+                b'{"error": {"message": "You have exceeded your quota.", "errors": [{"reason": "quotaExceeded"}]}}',
+                "HTTP 403: You have exceeded your quota. (quotaExceeded)",
+            ),
+            (
+                404,
+                b'{"error": {"message": "The channel does not exist.", "errors": [{"reason": "notFound"}]}}',
+                "HTTP 404: The channel does not exist. (notFound)",
+            ),
+        ],
+        ids=["quota_403", "not_found_404"],
+    )
+    def test_http_error_carries_json_body_detail(self, status, body, expected):
+        assert _failure_reason(_http_error_body(status, str(status), body)) == expected
+
+    def test_http_error_unparseable_body_uses_reason_fallback(self):
+        assert _failure_reason(_http_error_body(403, "Forbidden", b"not json")) == "HTTP 403: Forbidden"

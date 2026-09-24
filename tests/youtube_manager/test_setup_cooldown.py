@@ -37,6 +37,7 @@ class TestCheckSetupCooldown:
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
             patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
         lines = result.splitlines()
@@ -58,6 +59,7 @@ class TestCheckSetupCooldown:
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
             patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
         lines = result.splitlines()

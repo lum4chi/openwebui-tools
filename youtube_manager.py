@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.5.5
+version: 1.5.6
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -159,10 +159,6 @@ def _http_status(err: BaseException) -> int | None:
     if status is None:
         status = getattr(err, "code", None)
     return status if isinstance(status, int) else None
-
-
-def _http_message(err: Exception) -> str:
-    return str(getattr(getattr(err, "resp", None), "reason", None) or err)
 
 
 def classify_feed_error(err: Exception) -> str:
@@ -670,14 +666,40 @@ def assemble_podcast_text(title: str, channel: str, segments: list[tuple[int, st
     return "\n".join(lines)
 
 
+def _google_http_error_fields(err: HttpError) -> tuple[str, str | None]:
+    """Two-stage parse of a Data API error body: message first, then errors[0].reason.
+
+    A body with a ``message`` but no ``errors`` list yields ``(message, None)``; an
+    unparseable body falls back to the transport ``resp.reason`` (or ``"error"``).
+    """
+    try:
+        payload = json.loads(err.content)
+        message = str(payload["error"]["message"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        return str(getattr(err.resp, "reason", None) or "error"), None
+    try:
+        reason = str(payload["error"]["errors"][0]["reason"])
+    except (KeyError, IndexError, TypeError):
+        return message, None
+    return message, reason
+
+
+def _google_http_error_detail(err: HttpError) -> str:
+    message, reason = _google_http_error_fields(err)
+    return f"{message} ({reason})" if reason else message
+
+
 def _failure_reason(err: Exception) -> str:
     if isinstance(err, ReauthNeeded):
         return "reauth"
+    if isinstance(err, HttpError):
+        return f"HTTP {err.status_code}: {_google_http_error_detail(err)}"
     reason = classify_feed_error(err)
     if isinstance(err, urllib.error.HTTPError):
         return reason
     status = _http_status(err)
-    return f"{reason} HTTP {status}: {_http_message(err)}" if status is not None else reason
+    message = str(getattr(getattr(err, "resp", None), "reason", None) or err)
+    return f"{reason} HTTP {status}: {message}" if status is not None else reason
 
 
 def _reauth_block(notes: list[str], reauth_reasons: set[str]) -> str:
@@ -1147,14 +1169,24 @@ def _subscription_zero_suffix(entries: list[dict], drop_counts: dict[str, int] |
 
 
 def _subscription_headline(
-    ok: int, failed: int, entries: list[dict], candidate_count: int, drop_counts: dict[str, int] | None = None
+    ok: int,
+    failed: int,
+    entries: list[dict],
+    candidate_count: int,
+    drop_counts: dict[str, int] | None = None,
+    sample: str | None = None,
 ) -> str:
     """Headline for the subscriptions digest note, computed after the capped candidate count is known."""
     if ok == 0:
-        return f"subscriptions: {ok} ok, {failed} failed"
-    if candidate_count > 0:
-        return f"subscriptions: {ok} ok, {failed} failed, {candidate_count} candidates"
-    return f"subscriptions: {ok} ok, {failed} failed, 0 candidates ({_subscription_zero_suffix(entries, drop_counts)})"
+        headline = f"subscriptions: {ok} ok, {failed} failed"
+    elif candidate_count > 0:
+        headline = f"subscriptions: {ok} ok, {failed} failed, {candidate_count} candidates"
+    else:
+        suffix = _subscription_zero_suffix(entries, drop_counts)
+        headline = f"subscriptions: {ok} ok, {failed} failed, 0 candidates ({suffix})"
+    if failed > 0 and sample:
+        headline += f" (e.g. {sample})"
+    return headline
 
 
 class Tools:
@@ -1198,9 +1230,10 @@ class Tools:
         token_status = _token_status(self.valves) if oauth_ok else None
         search = self._search_setup_line()
         if oauth_ok and token_status is None:
-            subscriptions = "subscriptions: ok"
+            subscriptions = f"subscriptions: {await self._subscriptions_probe()}"
             watch_later = f"watch_later: {await self._watch_later_probe()}"
-            overall = "READY" if watch_later.startswith("watch_later: ok") else "NOT READY"
+            ready = subscriptions.startswith("subscriptions: ok") and watch_later.startswith("watch_later: ok")
+            overall = "READY" if ready else "NOT READY"
         elif oauth_ok:
             subscriptions = f"subscriptions: {token_status}"
             watch_later = f"watch_later: {token_status}"
@@ -1279,6 +1312,23 @@ class Tools:
             return f"CHECK FAILED - {_failure_reason(err)}"
         return "ok (playlist checked)"
 
+    async def _subscriptions_probe(self) -> str:
+        try:
+            listing = _data_api_request(
+                self.valves,
+                "subscriptions.list",
+                {"part": "snippet", "mine": "true", "maxResults": "1"},
+            )
+            items = listing.get("items") or []
+            if not items:
+                return "ok (0 subscriptions)"
+            channel_id = (items[0].get("snippet") or {}).get("channelId") or ""
+            uploads = self._channel_uploads(channel_id)
+            self._uploads_items(uploads or "", 1)
+            return "ok (subscription feed checked)"
+        except Exception as err:
+            return f"CHECK FAILED - {_failure_reason(err)}"
+
     def _list_subscription_channels(self) -> list[dict]:
         channels: list[dict] = []
         page_token: str | None = None
@@ -1304,15 +1354,15 @@ class Tools:
             notes.append(f"subscriptions list failed: {_failure_reason(err)}")
             return []
         entries: list[dict] = []
-        failures: dict[str, int] = {}
+        failures: list[tuple[str, str]] = []
         ok = 0
         drop_counts: dict[str, int] = {}
         for channel in channels:
-            reason = self._collect_channel(channel, entries, max_per_source, drop_counts)
-            if reason is None:
+            result = self._collect_channel(channel, entries, max_per_source, drop_counts)
+            if result is None:
                 ok += 1
             else:
-                failures[reason] = failures.get(reason, 0) + 1
+                failures.append(result)
         entries.sort(key=lambda entry: entry["published"] or "", reverse=True)
         capped_entries = entries[:max_per_source]
         candidate_count = len(candidates_from_entries(capped_entries, "subscriptions"))
@@ -1323,15 +1373,16 @@ class Tools:
         self,
         notes: list[str],
         ok: int,
-        failures: dict[str, int],
+        failures: list[tuple[str, str]],
         entries: list[dict],
         candidate_count: int,
         drop_counts: dict[str, int] | None = None,
     ) -> None:
-        notes.append(_subscription_headline(ok, sum(failures.values()), entries, candidate_count, drop_counts))
+        sample = f"channel {failures[0][0]} → {failures[0][1]}" if failures else None
+        notes.append(_subscription_headline(ok, len(failures), entries, candidate_count, drop_counts, sample))
         if self.valves.verbose:
-            for reason, count in failures.items():
-                notes.append(f"{count} channel(s) failed: {reason}")
+            for channel_id, reason in failures:
+                notes.append(f"channel {channel_id} → {reason}")
 
     def _channel_uploads(self, channel_id: str) -> str | None:
         resp = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "id": channel_id})
@@ -1356,7 +1407,7 @@ class Tools:
         entries: list[dict],
         max_per_source: int,
         drop_counts: dict[str, int] | None = None,
-    ) -> str | None:
+    ) -> tuple[str, str] | None:
         snippet = channel.get("snippet") or {}
         channel_id = snippet.get("channelId") or ""
         items: list[dict] = []
@@ -1364,12 +1415,12 @@ class Tools:
         try:
             uploads = self._channel_uploads(channel_id)
             if uploads is None:
-                return "channel not found"
+                return (channel_id, "channel not found")
             items = self._uploads_items(uploads, max_per_source)
             details = self._video_details(_upload_video_ids(items), part="snippet,contentDetails,statistics")
             channel_entries = _upload_entries(items, details, channel_id, drop_counts)
         except Exception as err:  # per-channel isolation: one bad Data API channel must not sink the rest
-            return _failure_reason(err)
+            return (channel_id, _failure_reason(err))
         if not items and drop_counts is not None:
             _bump(drop_counts, "zero_entry_feeds")
         entries.extend(channel_entries)

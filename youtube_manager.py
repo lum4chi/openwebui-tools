@@ -1743,6 +1743,8 @@ class Tools:
 
         decision must be one of: watched, listened, skipped.
         Non-standard video_id values are recorded with a warning.
+        Intentional: the feedback log is append-only learning data — non-standard video_id values are
+        accepted with a Notice, not rejected (no live-ID validation).
         """
         if decision not in DECISIONS:
             return "Error: decision must be one of: watched, listened, skipped"

@@ -21,7 +21,7 @@ def _api_fake(
     """Patch the _data_api_request seam; record calls as (method, params) pairs."""
     calls = []
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if raise_for is not None and method in raise_for:
             raise raise_for[method]

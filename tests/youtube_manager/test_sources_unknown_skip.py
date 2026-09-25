@@ -41,7 +41,7 @@ def _guard_io(monkeypatch) -> list[str]:
         ytdlp_calls.append(url)
         raise AssertionError("no yt-dlp I/O for the rejected request")
 
-    def no_api(valves, method, params):
+    def no_api(valves, method, params, user_id=None):
         raise AssertionError(f"no Data API I/O for the rejected request ({method})")
 
     monkeypatch.setattr(youtube_manager, "_ytdlp_extract", no_ytdlp)

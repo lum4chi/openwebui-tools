@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 1.6.0
+version: 2.0.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -13,6 +13,15 @@ Agent instructions:
    1. check_setup — verify the Google OAuth set (live token check only when the set is complete)
   2. start_auth — print the Google consent URL for the youtube scope
    3. finish_auth — exchange the pasted code/redirect URL and store the refresh token to a local credential file (automatic; no manual storage)
+
+ STATE (per-user keying):
+   Durable state (taste profile, feedback log, digest state, Google refresh-token credential) is keyed by the requesting
+   user: data/<user_id>/<note>.md, where <user_id> is the sanitized Open WebUI __user__ id (allowlist A-Za-z0-9_-; anything
+   else stripped). Anonymous/unknown callers share the data/default/ namespace.
+   Upgrade: pre-keying state at the instance-wide data/<note>.md path is orphaned (not read, not migrated); the orphaned
+   refresh-token credential means each user re-auths once after upgrade.
+   Security: per-user keying fixes cross-user clobbering/collision of state files. Residual exposure is bounded by who can
+   create tools in Open WebUI (tool creation ≈ shell access); keying grants no in-process isolation the host does not have.
 """
 
 import contextlib
@@ -769,13 +778,15 @@ def _fetch_gated(
         return None
 
 
-def _oauth_set(valves) -> bool:
+def _oauth_set(valves, user_id: str | None = None) -> bool:
     return (
-        bool(valves.google_client_id) and bool(valves.google_client_secret) and bool(_effective_refresh_token(valves))
+        bool(valves.google_client_id)
+        and bool(valves.google_client_secret)
+        and bool(_effective_refresh_token(valves, user_id))
     )
 
 
-def _oauth_token(valves, code: str | None = None) -> dict:
+def _oauth_token(valves, code: str | None = None, user_id: str | None = None) -> dict:
     if code:
         data = {
             "grant_type": "authorization_code",
@@ -787,7 +798,7 @@ def _oauth_token(valves, code: str | None = None) -> dict:
     else:
         data = {
             "grant_type": "refresh_token",
-            "refresh_token": _effective_refresh_token(valves),
+            "refresh_token": _effective_refresh_token(valves, user_id),
             "client_id": valves.google_client_id,
             "client_secret": valves.google_client_secret,
         }
@@ -838,8 +849,8 @@ def _resolve_api_method(service, path: str):
     return resource
 
 
-def _data_api_execute(valves, method: str, params: dict) -> bytes:
-    token = _oauth_token(valves)
+def _data_api_execute(valves, method: str, params: dict, user_id: str | None = None) -> bytes:
+    token = _oauth_token(valves, user_id=user_id)
     service = discovery.build(
         "youtube",
         DATA_API_VERSION,
@@ -917,8 +928,8 @@ def _note_non_json_delete(raw: bytes | str, notes: list[str] | None) -> None:
         notes.append(msg)
 
 
-def _data_api_request(valves, method: str, params: dict) -> dict:
-    return _decode_api_response(_data_api_execute(valves, method, params))
+def _data_api_request(valves, method: str, params: dict, user_id: str | None = None) -> dict:
+    return _decode_api_response(_data_api_execute(valves, method, params, user_id))
 
 
 def _ytdlp_extract(url: str, extra: dict | None = None) -> dict:
@@ -979,22 +990,27 @@ class _NotesStore:
         _notes_http("POST", self.url, self.auth, {"title": title, "content": md})
 
 
-def _state_store(request):
+def _user_id_from(user: dict | None) -> str:
+    raw = (user or {}).get("id") or ""
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw) or "default"
+
+
+def _state_store(request, user_id: str | None = None):
     if request is not None and request.headers.get("authorization"):
         auth = request.headers.get("authorization")
         base = (request.base_url or "http://localhost:3000/").rstrip("/")
         return _NotesStore(f"{base}/api/v1/studio/notes", auth)
     data_dir = Path(os.environ.get("DATA_DIR") or Path.cwd() / "data")
-    return _FileStore(data_dir)
+    return _FileStore(data_dir / (user_id or "default"))
 
 
-def _file_refresh_token() -> str | None:
-    token = _read_doc(_state_store(None), CREDENTIAL_TITLE)
+def _file_refresh_token(user_id: str | None = None) -> str | None:
+    token = _read_doc(_state_store(None, user_id), CREDENTIAL_TITLE)
     return token.strip() if token else None
 
 
-def _effective_refresh_token(valves) -> str:
-    return _file_refresh_token() or valves.google_refresh_token
+def _effective_refresh_token(valves, user_id: str | None = None) -> str:
+    return _file_refresh_token(user_id) or valves.google_refresh_token
 
 
 def _read_doc(store, title: str) -> str | None:
@@ -1004,9 +1020,9 @@ def _read_doc(store, title: str) -> str | None:
         return None
 
 
-def _token_status(valves) -> str | None:
+def _token_status(valves, user_id: str | None = None) -> str | None:
     try:
-        _oauth_token(valves)
+        _oauth_token(valves, user_id=user_id)
     except ReauthNeeded:
         return "INVALID - stored refresh token is stale; run start_auth then finish_auth"
     except Exception:
@@ -1265,13 +1281,14 @@ class Tools:
             return "search: ok (bot-check cooldown active)"
         return "search: ok"
 
-    async def check_setup(self) -> str:
-        oauth_ok = _oauth_set(self.valves)
-        token_status = _token_status(self.valves) if oauth_ok else None
+    async def check_setup(self, __user__: dict | None = None) -> str:
+        user_id = _user_id_from(__user__)
+        oauth_ok = _oauth_set(self.valves, user_id)
+        token_status = _token_status(self.valves, user_id) if oauth_ok else None
         search = self._search_setup_line()
         if oauth_ok and token_status is None:
-            subscriptions = f"subscriptions: {await self._subscriptions_probe()}"
-            watch_later = f"watch_later: {await self._watch_later_probe()}"
+            subscriptions = f"subscriptions: {await self._subscriptions_probe(user_id)}"
+            watch_later = f"watch_later: {await self._watch_later_probe(user_id)}"
             ready = subscriptions.startswith("subscriptions: ok") and watch_later.startswith("watch_later: ok")
             overall = "READY" if ready else "NOT READY"
         elif oauth_ok:
@@ -1294,18 +1311,19 @@ class Tools:
             f"{url}"
         )
 
-    async def finish_auth(self, code_or_url: str) -> str:
+    async def finish_auth(self, code_or_url: str, __user__: dict | None = None) -> str:
+        user_id = _user_id_from(__user__)
         code = parse_code_from_url(code_or_url)
         if not code:
             return "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
         try:
-            token = _oauth_token(self.valves, code=code)
+            token = _oauth_token(self.valves, code=code, user_id=user_id)
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
             return _error_return(err, self.valves.verbose)
         try:
-            _state_store(None).write(CREDENTIAL_TITLE, token["refresh_token"], secret=True)
+            _state_store(None, user_id).write(CREDENTIAL_TITLE, token["refresh_token"], secret=True)
         except Exception as err:
             return (
                 f"Error: credential file write failed: {_clean_exception(err)}. "
@@ -1314,69 +1332,78 @@ class Tools:
             )
         return "OK - credential stored; check_setup should now show ok"
 
-    def _video_details(self, video_ids: list[str], part: str = "snippet,contentDetails") -> dict[str, dict]:
+    def _video_details(
+        self, video_ids: list[str], part: str = "snippet,contentDetails", user_id: str | None = None
+    ) -> dict[str, dict]:
         details: dict[str, dict] = {}
         for start in range(0, len(video_ids), 50):
             chunk = video_ids[start : start + 50]
-            resp = _data_api_request(self.valves, "videos.list", {"part": part, "ids": ",".join(chunk)})
+            resp = _data_api_request(
+                self.valves, "videos.list", {"part": part, "ids": ",".join(chunk)}, user_id=user_id
+            )
             for item in resp.get("items") or []:
                 details[item["id"]] = item
         return details
 
-    def _fetch_watch_later(self, max_per_source: int, notes: list[str] | None = None) -> list[Candidate]:
+    def _fetch_watch_later(
+        self, max_per_source: int, notes: list[str] | None = None, user_id: str | None = None
+    ) -> list[Candidate]:
         resp = _data_api_request(
             self.valves,
             "playlistItems.list",
             {"part": "contentDetails", "playlistId": "WL", "maxResults": str(max_per_source)},
+            user_id=user_id,
         )
         video_ids: list[str] = []
         for it in resp.get("items") or []:
             vid = (it.get("contentDetails") or {}).get("videoId")
             if vid:
                 video_ids.append(vid)
-        details = self._video_details(video_ids)
+        details = self._video_details(video_ids, user_id=user_id)
         resolved = [details[vid] for vid in video_ids if vid in details]
         if not video_ids:
             _note_watch_later_zero(notes)
         _note_details_unavailable(notes, video_ids, resolved)
         return candidates_from_api(resolved, "watch_later")
 
-    async def _watch_later_probe(self) -> str:
+    async def _watch_later_probe(self, user_id: str | None = None) -> str:
         try:
             _data_api_request(
                 self.valves,
                 "playlistItems.list",
                 {"part": "contentDetails", "playlistId": "WL", "maxResults": "1"},
+                user_id=user_id,
             )
         except Exception as err:
             return f"CHECK FAILED - {_failure_reason(err)}"
         return "ok (playlist checked)"
 
-    async def _subscriptions_probe(self) -> str:
+    async def _subscriptions_probe(self, user_id: str | None = None) -> str:
         try:
             listing = _data_api_request(
                 self.valves,
                 "subscriptions.list",
                 {"part": "snippet", "mine": "true", "maxResults": "1"},
+                user_id=user_id,
             )
             items = listing.get("items") or []
             if not items:
                 return "ok (0 subscriptions)"
             channel_id = (items[0].get("snippet") or {}).get("channelId") or ""
-            uploads = self._channel_uploads(channel_id)
-            self._uploads_items(uploads or "", 1)
+            uploads = self._channel_uploads(channel_id, user_id)
+            self._uploads_items(uploads or "", 1, user_id)
             return "ok (subscription feed checked)"
         except Exception as err:
             return f"CHECK FAILED - {_failure_reason(err)}"
 
-    def _list_subscription_channels(self) -> list[dict]:
+    def _list_subscription_channels(self, user_id: str | None = None) -> list[dict]:
         channels: list[dict] = []
         page_token: str | None = None
         while len(channels) < SUBSCRIPTION_CHANNEL_CAP:
             params: dict[str, object] = {"part": "snippet", "mine": "true", "maxResults": 50}
             if page_token:
                 params["pageToken"] = page_token
-            resp = _data_api_request(self.valves, "subscriptions.list", params)
+            resp = _data_api_request(self.valves, "subscriptions.list", params, user_id=user_id)
             channels.extend(resp.get("items") or [])
             page_token = resp.get("nextPageToken")
             if not page_token:
@@ -1385,9 +1412,11 @@ class Tools:
         channels.sort(key=lambda item: (item.get("snippet") or {}).get("publishedAt") or "", reverse=True)
         return channels[:SUBSCRIPTION_CHANNEL_CAP]
 
-    def _fetch_subscriptions(self, max_per_source: int, notes: list[str]) -> list[Candidate]:
+    def _fetch_subscriptions(
+        self, max_per_source: int, notes: list[str], user_id: str | None = None
+    ) -> list[Candidate]:
         try:
-            channels = self._list_subscription_channels()
+            channels = self._list_subscription_channels(user_id)
         except HttpError as err:
             if _http_status(err) != 404:
                 raise
@@ -1398,7 +1427,7 @@ class Tools:
         ok = 0
         drop_counts: dict[str, int] = {}
         for channel in channels:
-            result = self._collect_channel(channel, entries, max_per_source, drop_counts)
+            result = self._collect_channel(channel, entries, max_per_source, drop_counts, user_id)
             if result is None:
                 ok += 1
             else:
@@ -1424,8 +1453,10 @@ class Tools:
             for channel_id, reason in failures:
                 notes.append(f"channel {channel_id} → {reason}")
 
-    def _channel_uploads(self, channel_id: str) -> str | None:
-        resp = _data_api_request(self.valves, "channels.list", {"part": "contentDetails", "id": channel_id})
+    def _channel_uploads(self, channel_id: str, user_id: str | None = None) -> str | None:
+        resp = _data_api_request(
+            self.valves, "channels.list", {"part": "contentDetails", "id": channel_id}, user_id=user_id
+        )
         items = resp.get("items") or []
         if not items:
             return None
@@ -1433,11 +1464,12 @@ class Tools:
         related = content.get("relatedPlaylists") or {}
         return related.get("uploads")
 
-    def _uploads_items(self, uploads: str, max_per_source: int) -> list[dict]:
+    def _uploads_items(self, uploads: str, max_per_source: int, user_id: str | None = None) -> list[dict]:
         resp = _data_api_request(
             self.valves,
             "playlistItems.list",
             {"part": "snippet", "playlistId": uploads, "maxResults": str(max(1, max_per_source))},
+            user_id=user_id,
         )
         return resp.get("items") or []
 
@@ -1447,17 +1479,20 @@ class Tools:
         entries: list[dict],
         max_per_source: int,
         drop_counts: dict[str, int] | None = None,
+        user_id: str | None = None,
     ) -> tuple[str, str] | None:
         snippet = channel.get("snippet") or {}
         channel_id = snippet.get("channelId") or ""
         items: list[dict] = []
         channel_entries: list[dict] = []
         try:
-            uploads = self._channel_uploads(channel_id)
+            uploads = self._channel_uploads(channel_id, user_id)
             if uploads is None:
                 return (channel_id, "channel not found")
-            items = self._uploads_items(uploads, max_per_source)
-            details = self._video_details(_upload_video_ids(items), part="snippet,contentDetails,statistics")
+            items = self._uploads_items(uploads, max_per_source, user_id)
+            details = self._video_details(
+                _upload_video_ids(items), part="snippet,contentDetails,statistics", user_id=user_id
+            )
             channel_entries = _upload_entries(items, details, channel_id, drop_counts)
         except Exception as err:  # per-channel isolation: one bad Data API channel must not sink the rest
             return (channel_id, _failure_reason(err))
@@ -1516,17 +1551,19 @@ class Tools:
             notes.append(f"skipped {len(failures)} unavailable: {', '.join(video_id for video_id, _ in failures)}")
         return candidates_from_ytdlp(entries, "search")
 
-    def _gather_one(self, source: str, max_per_source: int, search_query: str, notes: list[str]) -> list[Candidate]:
+    def _gather_one(
+        self, source: str, max_per_source: int, search_query: str, notes: list[str], user_id: str | None = None
+    ) -> list[Candidate]:
         if source == "watch_later":
-            if not _oauth_set(self.valves):
+            if not _oauth_set(self.valves, user_id):
                 notes.append("watch_later skipped: OAuth not configured")
                 return []
-            return self._fetch_watch_later(max_per_source, notes)
+            return self._fetch_watch_later(max_per_source, notes, user_id)
         if source == "subscriptions":
-            if not _oauth_set(self.valves):
+            if not _oauth_set(self.valves, user_id):
                 notes.append("subscriptions skipped: OAuth not configured")
                 return []
-            return self._fetch_subscriptions(max_per_source, notes)
+            return self._fetch_subscriptions(max_per_source, notes, user_id)
         return self._search_candidates(search_query, max_per_source, notes)
 
     def _gather_isolated(
@@ -1537,9 +1574,10 @@ class Tools:
         notes: list[str],
         reauth_reasons: set[str],
         failures: list[str],
+        user_id: str | None = None,
     ) -> tuple[list[Candidate], bool]:
         try:
-            return self._gather_one(source, max_per_source, search_query, notes), True
+            return self._gather_one(source, max_per_source, search_query, notes, user_id), True
         except ReauthNeeded:
             reauth_reasons.add("reauth")
             notes.append(f"{source} failed: reauth")
@@ -1563,7 +1601,12 @@ class Tools:
         return _candidates_payload(merged, notes)
 
     def _gather_all(
-        self, parsed: list[str], max_per_source: int, search_query: str, initial_notes: list[str] | None = None
+        self,
+        parsed: list[str],
+        max_per_source: int,
+        search_query: str,
+        initial_notes: list[str] | None = None,
+        user_id: str | None = None,
     ) -> str:
         notes: list[str] = list(initial_notes) if initial_notes is not None else []
         reauth_reasons: set[str] = set()
@@ -1571,7 +1614,9 @@ class Tools:
         batches: list[list[Candidate]] = []
         usable = 0
         for source in parsed:
-            batch, ok = self._gather_isolated(source, max_per_source, search_query, notes, reauth_reasons, failures)
+            batch, ok = self._gather_isolated(
+                source, max_per_source, search_query, notes, reauth_reasons, failures, user_id
+            )
             if ok:
                 usable += 1
             if batch:
@@ -1579,7 +1624,11 @@ class Tools:
         return self._compose_gather(merge_candidates(batches), notes, reauth_reasons, failures, usable)
 
     async def gather_candidates(
-        self, sources: str = "search", max_per_source: int = MAX_PER_SOURCE, search_query: str = ""
+        self,
+        sources: str = "search",
+        max_per_source: int = MAX_PER_SOURCE,
+        search_query: str = "",
+        __user__: dict | None = None,
     ) -> str:
         """Gather candidate videos from the given sources (comma-separated: watch_later, subscriptions, search).
 
@@ -1593,18 +1642,20 @@ class Tools:
         if "search" in valid and not search_query.strip():
             return "Error: search needs search_query (e.g. search_query='rust async')"
         notes = [f"{token} skipped: unknown source (valid sources: {', '.join(SOURCES)})" for token in unknown]
-        return self._gather_all(valid, max_per_source, search_query, notes)
+        return self._gather_all(valid, max_per_source, search_query, notes, _user_id_from(__user__))
 
-    def _digest_sources(self, taste: TasteProfile) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
+    def _digest_sources(
+        self, taste: TasteProfile, user_id: str | None = None
+    ) -> tuple[list[list[Candidate]], dict[str, int], list[str], set[str]]:
         """Watch_later + subscriptions: (batches, pre-merge source counts, notes, reauth reasons)."""
         notes: list[str] = []
         reauth_reasons: set[str] = set()
         source_counts: dict[str, int] = {}
         batches: list[list[Candidate]] = []
-        if _oauth_set(self.valves):
+        if _oauth_set(self.valves, user_id):
             gated = (
-                ("watch_later", lambda: self._fetch_watch_later(MAX_PER_SOURCE)),
-                ("subscriptions", lambda: self._fetch_subscriptions(MAX_PER_SOURCE, notes)),
+                ("watch_later", lambda: self._fetch_watch_later(MAX_PER_SOURCE, None, user_id)),
+                ("subscriptions", lambda: self._fetch_subscriptions(MAX_PER_SOURCE, notes, user_id)),
             )
             for source, fetch in gated:
                 candidates = _fetch_gated(source, fetch, notes, reauth_reasons)
@@ -1616,16 +1667,17 @@ class Tools:
             notes.append("subscriptions skipped: OAuth not configured")
         return batches, source_counts, notes, reauth_reasons
 
-    async def digest(self) -> str:
+    async def digest(self, __user__: dict | None = None) -> str:
         """Aggregate candidates, feedback stats, and source status into the LLM-facing digest.
 
         The taste profile is read at call time: a save_taste_profile that completes before this digest call is visible; Open WebUI does not guarantee intra-batch ordering, so a save that lands mid-run is surfaced with a Notice (no per-batch snapshotting).
         """
-        store = _state_store(None)
+        user_id = _user_id_from(__user__)
+        store = _state_store(None, user_id)
         taste_raw = _read_doc(store, NOTE_TASTE)
         taste = parse_taste_profile(taste_raw)
         rows = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
-        batches, source_counts, notes, reauth_reasons = self._digest_sources(taste)
+        batches, source_counts, notes, reauth_reasons = self._digest_sources(taste, user_id)
         merged = merge_candidates(batches)
         kept, _ = filter_disliked(merged, taste.disliked)
         stats = aggregate_feedback(rows, kept)
@@ -1636,7 +1688,7 @@ class Tools:
             notes.append(TASTE_CHANGED_NOTICE)
         return _with_notes(payload, notes)
 
-    async def save_taste_profile(self, md: str) -> str:
+    async def save_taste_profile(self, md: str, __user__: dict | None = None) -> str:
         """Save the markdown taste-profile document.
 
         Takes effect for digest calls that read the profile after this save (e.g. the next digest call, or a same-batch digest that runs after this save).
@@ -1644,7 +1696,7 @@ class Tools:
         if not (md or "").strip():
             return "Error: cannot save an empty taste profile"
         try:
-            _state_store(None).write(NOTE_TASTE, md)
+            _state_store(None, _user_id_from(__user__)).write(NOTE_TASTE, md)
         except Exception as err:
             return _error_return(err, self.valves.verbose)
         first_line = next((line for line in md.splitlines() if line.strip()), "")[:80]
@@ -1682,52 +1734,54 @@ class Tools:
             video_id, primary_reason, title, channel, language, info=info, max_lines=max_lines, offset=offset
         )
 
-    async def add_to_playlist(self, video_id: str) -> str:
+    async def add_to_playlist(self, video_id: str, __user__: dict | None = None) -> str:
         """Idempotent add to the custom digest playlist (resolve-or-create by title), record tool-added items in digest-state."""
         if not self.valves.digest_playlist_title.strip():
             return "Error: set the digest_playlist_title valve first"
         if not video_id:
             return "Error: video_id is required"
         try:
-            return self._add_to_playlist_core(video_id)
+            return self._add_to_playlist_core(video_id, _user_id_from(__user__))
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
             return f"Error: {_clean_exception(err)}"
 
-    def _add_to_playlist_core(self, video_id: str) -> str:
+    def _add_to_playlist_core(self, video_id: str, user_id: str | None = None) -> str:
         notes: list[str] = []
-        store = _state_store(None)
+        store = _state_store(None, user_id)
         state = parse_digest_state(_read_doc(store, NOTE_STATE) or "")
-        playlist_id, _created = self._resolve_digest_playlist(store, state, notes)
-        if video_id in self._playlist_video_ids(playlist_id):
+        playlist_id, _created = self._resolve_digest_playlist(store, state, notes, user_id)
+        if video_id in self._playlist_video_ids(playlist_id, user_id):
             return self._present_message(video_id, state)
-        title = self._insert_into_playlist(playlist_id, video_id)
+        title = self._insert_into_playlist(playlist_id, video_id, user_id)
         self._record_tool_added(store, state, video_id, title, notes)
         return "\n".join(
             [f'OK — added {title or video_id} to "{self.valves.digest_playlist_title}" ({playlist_id})', *notes]
         )
 
-    def _resolve_digest_playlist(self, store, state: dict, notes: list[str]) -> tuple[str, bool]:
+    def _resolve_digest_playlist(
+        self, store, state: dict, notes: list[str], user_id: str | None = None
+    ) -> tuple[str, bool]:
         """Digest playlist id: cached in digest-state, else exact-title match, else create. Returns (id, created)."""
         title = self.valves.digest_playlist_title
         cached = state.get("playlist_id") or ""
         if cached:
             return cached, False
-        playlist_id = self._find_playlist_by_title(title)
+        playlist_id = self._find_playlist_by_title(title, user_id)
         if not playlist_id:
-            playlist_id = self._create_digest_playlist(title)
+            playlist_id = self._create_digest_playlist(title, user_id)
         state["playlist_id"] = playlist_id
         self._persist_state(store, state, notes)
         return playlist_id, True
 
-    def _find_playlist_by_title(self, title: str) -> str | None:
+    def _find_playlist_by_title(self, title: str, user_id: str | None = None) -> str | None:
         token = ""
         while True:
             params: dict = {"part": "snippet", "mine": True, "maxResults": 100}
             if token:
                 params["pageToken"] = token
-            resp = _data_api_request(self.valves, "playlists.list", params)
+            resp = _data_api_request(self.valves, "playlists.list", params, user_id=user_id)
             for item in resp.get("items") or []:
                 if (item.get("snippet") or {}).get("title") == title:
                     return item.get("id") or None
@@ -1735,19 +1789,19 @@ class Tools:
             if not token:
                 return None
 
-    def _create_digest_playlist(self, title: str) -> str:
+    def _create_digest_playlist(self, title: str, user_id: str | None = None) -> str:
         body = {"snippet": {"title": title}}
-        resp = _data_api_request(self.valves, "playlists.insert", {"part": "snippet", "body": body})
+        resp = _data_api_request(self.valves, "playlists.insert", {"part": "snippet", "body": body}, user_id=user_id)
         return (resp or {}).get("id") or ""
 
-    def _playlist_video_ids(self, playlist_id: str) -> list[str]:
+    def _playlist_video_ids(self, playlist_id: str, user_id: str | None = None) -> list[str]:
         video_ids: list[str] = []
         token = ""
         while True:
             params: dict = {"part": "contentDetails", "playlistId": playlist_id, "maxResults": 5000}
             if token:
                 params["pageToken"] = token
-            resp = _data_api_request(self.valves, "playlistItems.list", params)
+            resp = _data_api_request(self.valves, "playlistItems.list", params, user_id=user_id)
             video_ids.extend(self._item_video_ids(resp))
             token = resp.get("nextPageToken") or ""
             if not token:
@@ -1768,9 +1822,11 @@ class Tools:
         suffix = "tracked; no change" if tracked else "not tool-managed; left untracked"
         return f'OK — {video_id} already in "{self.valves.digest_playlist_title}" ({suffix})'
 
-    def _insert_into_playlist(self, playlist_id: str, video_id: str) -> str:
+    def _insert_into_playlist(self, playlist_id: str, video_id: str, user_id: str | None = None) -> str:
         body = {"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
-        resp = _data_api_request(self.valves, "playlistItems.insert", {"part": "snippet", "body": body})
+        resp = _data_api_request(
+            self.valves, "playlistItems.insert", {"part": "snippet", "body": body}, user_id=user_id
+        )
         snippet = (resp or {}).get("snippet") or {}
         return snippet.get("title") or ""
 
@@ -1790,7 +1846,11 @@ class Tools:
         return True
 
     async def record_feedback(
-        self, video_id: str, decision: Literal["watched", "listened", "skipped"], reason: str = ""
+        self,
+        video_id: str,
+        decision: Literal["watched", "listened", "skipped"],
+        reason: str = "",
+        __user__: dict | None = None,
     ) -> str:
         """Append a validated feedback row to the feedback-log document.
 
@@ -1811,7 +1871,7 @@ class Tools:
             source="digest",
             reason=reason,
         )
-        store = _state_store(None)
+        store = _state_store(None, _user_id_from(__user__))
         prior = parse_feedback_log(_read_doc(store, NOTE_FEEDBACK) or "")
         try:
             store.write(NOTE_FEEDBACK, _feedback_doc([*prior, entry]))
@@ -1821,19 +1881,19 @@ class Tools:
             return f"OK — recorded {decision} for {video_id}"
         return f"OK — recorded {decision} for {video_id}\nNotice: video_id is not the standard 11-character format"
 
-    async def prune_playlist(self) -> str:
+    async def prune_playlist(self, __user__: dict | None = None) -> str:
         """Remove policy-stale tool-added items from the custom digest playlist and report the removals."""
         if not self.valves.digest_playlist_title.strip():
             return "Error: set the digest_playlist_title valve first"
         try:
-            return self._prune_core()
+            return self._prune_core(_user_id_from(__user__))
         except ReauthNeeded as err:
             return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
         except Exception as err:
             return f"Error: {_clean_exception(err)}"
 
-    def _prune_core(self) -> str:
-        store = _state_store(None)
+    def _prune_core(self, user_id: str | None = None) -> str:
+        store = _state_store(None, user_id)
         state = parse_digest_state(_read_doc(store, NOTE_STATE) or "")
         tool_added = state.get("tool_added") or {}
         if not tool_added:
@@ -1842,19 +1902,19 @@ class Tools:
         playlist_id = state.get("playlist_id") or ""
         if not playlist_id:
             return "Error: no resolved playlist id in digest-state (run add_to_playlist first)"
-        listed = self._listed_items(playlist_id, tool_added)
+        listed = self._listed_items(playlist_id, tool_added, user_id)
         stale = len(tool_added) - len({item.video_id for item in listed})
         plan = _removal_plan(listed, rows, self.valves.digest_max_items, self.valves.digest_max_age_days)
         notes: list[str] = []
-        removed, failure = self._delete_planned(plan, notes)
+        removed, failure = self._delete_planned(plan, notes, user_id)
         if removed or stale:
             self._write_pruned_state(store, state, listed, removed, stale, notes)
         kept = len(tool_added) - stale - len(removed)
         return _prune_report(removed, kept, failure, notes)
 
-    def _listed_items(self, playlist_id: str, tool_added: dict) -> list[PruneItem]:
+    def _listed_items(self, playlist_id: str, tool_added: dict, user_id: str | None = None) -> list[PruneItem]:
         items: list[PruneItem] = []
-        for raw in self._playlist_items(playlist_id):
+        for raw in self._playlist_items(playlist_id, user_id):
             video_id = (raw.get("contentDetails") or {}).get("videoId") or ""
             entry = tool_added.get(video_id)
             if entry is None:
@@ -1863,14 +1923,14 @@ class Tools:
             items.append(PruneItem(raw.get("id", ""), video_id, title, entry.get("added_at", "")))
         return items
 
-    def _playlist_items(self, playlist_id: str) -> list[dict]:
+    def _playlist_items(self, playlist_id: str, user_id: str | None = None) -> list[dict]:
         items: list[dict] = []
         token = ""
         while True:
             params: dict = {"part": "snippet,contentDetails", "playlistId": playlist_id, "maxResults": 5000}
             if token:
                 params["pageToken"] = token
-            resp = _data_api_request(self.valves, "playlistItems.list", params)
+            resp = _data_api_request(self.valves, "playlistItems.list", params, user_id=user_id)
             items.extend(resp.get("items") or [])
             token = resp.get("nextPageToken") or ""
             if not token:
@@ -1878,12 +1938,15 @@ class Tools:
         return items
 
     def _delete_planned(
-        self, plan: list[tuple[PruneItem, str]], notes: list[str] | None = None
+        self,
+        plan: list[tuple[PruneItem, str]],
+        notes: list[str] | None = None,
+        user_id: str | None = None,
     ) -> tuple[list[tuple[PruneItem, str]], Exception | None]:
         removed: list[tuple[PruneItem, str]] = []
         for item, reason in plan:
             try:
-                raw = _data_api_execute(self.valves, "playlistItems.delete", {"id": item.item_id})
+                raw = _data_api_execute(self.valves, "playlistItems.delete", {"id": item.item_id}, user_id)
                 _parse_delete_response(raw)
                 _note_non_json_delete(raw, notes)
             except ReauthNeeded:

@@ -67,7 +67,7 @@ def _api_fake(monkeypatch, video_ids, raise_on: str | None = None):
         for vid in video_ids
     }
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         calls.append(method)
         if raise_on is not None and method == raise_on:
             raise ReauthNeeded("Google credential rejected by the Data API")

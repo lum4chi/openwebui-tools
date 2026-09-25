@@ -111,7 +111,7 @@ def _api_fake(monkeypatch, video_ids=("wl1",)):
         },
     }
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlistItems.list":

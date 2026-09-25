@@ -206,7 +206,7 @@ class TestGatherPartialSources:
     # And the result starts with "=== Candidates (1) ===" and lists the subscriptions candidate
     # And the result carries the per-source note "search unavailable: bot_check"
     async def test_search_fails_subscriptions_returns_results(self, tools, monkeypatch):
-        def gather_one(self, source, max_per_source, search_query, notes):
+        def gather_one(self, source, max_per_source, search_query, notes, user_id=None):
             if source == "search":
                 raise _AllUnavailable("bot_check")
             return sample_candidates(1)
@@ -229,7 +229,7 @@ class TestGatherPartialSources:
     # And the result starts with "=== Candidates (0) ==="
     # And the result carries the per-source note "search unavailable: bot_check"
     async def test_search_fails_subscriptions_empty_still_partial_payload(self, tools, monkeypatch):
-        def gather_one(self, source, max_per_source, search_query, notes):
+        def gather_one(self, source, max_per_source, search_query, notes, user_id=None):
             if source == "search":
                 raise _AllUnavailable("bot_check")
             return []
@@ -249,7 +249,7 @@ class TestGatherPartialSources:
     # When the agent calls gather_candidates
     # Then the result IS an error (starts with "Error:")
     async def test_all_sources_fail_returns_error(self, tools, monkeypatch):
-        def gather_one(self, source, max_per_source, search_query, notes):
+        def gather_one(self, source, max_per_source, search_query, notes, user_id=None):
             if source == "search":
                 raise _AllUnavailable("bot_check")
             raise urllib.error.HTTPError(

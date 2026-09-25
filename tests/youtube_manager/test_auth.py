@@ -67,7 +67,7 @@ class TestAuth:
     #     And a fresh DATA_DIR with no credential file
     #   When finish_auth is called with a valid authorization code (bare code or redirect URL)
     #   Then the token seam receives the parsed code
-    #     And DATA_DIR contains google-refresh-token.md containing exactly "new-refresh"
+    #     And DATA_DIR/default contains google-refresh-token.md containing exactly "new-refresh"
     #     And the credential file mode is 0600
     #     And the response is exactly "OK - credential stored; check_setup should now show ok"
     #     And the response does not contain "new-refresh"
@@ -84,7 +84,7 @@ class TestAuth:
         with patch("youtube_manager._oauth_token", return_value=token) as seam:
             result = await tools.finish_auth(pasted)
         assert seam.call_args.kwargs["code"] == "abc123code"
-        cred = Path(os.environ["DATA_DIR"]) / "google-refresh-token.md"
+        cred = Path(os.environ["DATA_DIR"]) / "default" / "google-refresh-token.md"
         assert cred.read_text() == "new-refresh"
         assert (cred.stat().st_mode & 0o777) == 0o600
         assert result == "OK - credential stored; check_setup should now show ok"
@@ -106,7 +106,7 @@ class TestAuth:
             result = await t.finish_auth("some-auth-code")
         assert result.startswith("REAUTH_NEEDED")
         assert "Fix:" in result
-        assert not (Path(os.environ["DATA_DIR"]) / "google-refresh-token.md").exists()
+        assert not (Path(os.environ["DATA_DIR"]) / "default" / "google-refresh-token.md").exists()
 
     # T0-5 (edge): finish_auth without a code errors without calling the token seam
     async def test_finish_auth_without_code(self, tools):
@@ -159,7 +159,7 @@ class TestAuth:
         else:
             assert result == expected
             assert "refresh-token" not in result
-        assert not (Path(os.environ["DATA_DIR"]) / "google-refresh-token.md").exists()
+        assert not (Path(os.environ["DATA_DIR"]) / "default" / "google-refresh-token.md").exists()
 
 
 def _http_error(status: int) -> HttpError:

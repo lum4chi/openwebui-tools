@@ -72,7 +72,7 @@ class TestStateStore:
         for title in TITLES:
             md = f"# {title}\nbody"
             store.write(title, md)
-            path = data_dir / f"{title}.md"
+            path = data_dir / "default" / f"{title}.md"
             assert path.exists()
             assert path.read_text() == md
             assert store.read(title) == md

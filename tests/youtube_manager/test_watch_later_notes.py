@@ -36,7 +36,7 @@ def _wl_api_fake(monkeypatch, *, playlist_items: list[dict], video_details: dict
     """Route _data_api_request for the watch_later path (literal WL); record (method, params) calls."""
     calls: list[tuple[str, dict]] = []
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
@@ -65,7 +65,7 @@ class TestWatchLaterNotes:
     #   When gather_candidates runs with sources="watch_later"
     #   Then the result is exactly "Error: watch_later: HTTP 404: Not Found"
     async def test_watch_later_api_failure_404(self, tools, monkeypatch):
-        def api(valves, method, params):
+        def api(valves, method, params, user_id=None):
             if method == "channels.list":
                 raise AssertionError("channels.list must never be called on the watch_later path")
             if method == "playlistItems.list":
@@ -143,7 +143,7 @@ class TestWatchLaterNotes:
         _clear_oauth(tools)
         calls: list[str] = []
 
-        def api(valves, method, params):
+        def api(valves, method, params, user_id=None):
             calls.append(method)
             raise AssertionError("no Data API I/O for a skipped watch_later")
 
@@ -168,7 +168,7 @@ class TestWatchLaterProbe:
     async def test_probe_success_reports_ok(self, tools, monkeypatch):
         calls: list[tuple[str, dict]] = []
 
-        def api(valves, method, params):
+        def api(valves, method, params, user_id=None):
             calls.append((method, dict(params)))
             if method == "channels.list":
                 raise AssertionError("channels.list must never be called on the watch_later path")
@@ -189,7 +189,7 @@ class TestWatchLaterProbe:
     #   Then the watch_later line is exactly "watch_later: CHECK FAILED - reauth"
     #   And the final line is exactly "NOT READY"
     async def test_probe_reauth_reports_check_failed(self, tools, monkeypatch):
-        def api(valves, method, params):
+        def api(valves, method, params, user_id=None):
             if method == "channels.list":
                 raise AssertionError("channels.list must never be called on the watch_later path")
             if method == "playlistItems.list":
@@ -229,7 +229,9 @@ class TestWatchLaterZeroNote:
     # And the result carries the note "watch_later: playlist ok, 0 items"
     async def test_empty_watch_later_multi_source_carries_zero_note(self, tools, monkeypatch):
         _wl_api_fake(monkeypatch, playlist_items=[], video_details={})
-        monkeypatch.setattr(Tools, "_fetch_subscriptions", lambda self, max_per_source, notes: sample_candidates(1))
+        monkeypatch.setattr(
+            Tools, "_fetch_subscriptions", lambda self, max_per_source, notes, user_id=None: sample_candidates(1)
+        )
 
         payload = await tools.gather_candidates(sources="watch_later,subscriptions")
 

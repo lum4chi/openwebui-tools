@@ -26,7 +26,7 @@ def _set_case(tools, case):
 
 
 def _probe_return(value: str):
-    async def probe(self):
+    async def probe(self, user_id=None):
         return value
 
     return probe
@@ -72,15 +72,15 @@ class TestCheckSetup:
 
     # @unit
     # Scenario: S5 check_setup READY from file
-    #   Given DATA_DIR contains the credential file with "file-rt"
+    #   Given DATA_DIR/default contains the credential file with "file-rt"
     #     And a Tools with client_id and client_secret set and an EMPTY valve google_refresh_token
     #     And a successful token refresh
     #   When check_setup is called
     #   Then the response reports READY
     async def test_ready_from_credential_file_with_empty_valve(self, tools):
         data_dir = Path(os.environ["DATA_DIR"])
-        data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / "google-refresh-token.md").write_text("file-rt")
+        (data_dir / "default").mkdir(parents=True, exist_ok=True)
+        (data_dir / "default" / "google-refresh-token.md").write_text("file-rt")
         tools.valves.google_refresh_token = ""
         with (
             patch(

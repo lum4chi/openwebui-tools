@@ -47,7 +47,7 @@ class TestDigestProfileNotice:
         #   And the output contains no "taste profile changed" text
         _clear_oauth(tools)
         store = FakeStateStore({NOTE_TASTE: PROFILE_A})
-        monkeypatch.setattr(youtube_manager, "_state_store", lambda request: store)
+        monkeypatch.setattr(youtube_manager, "_state_store", lambda request, user_id=None: store)
 
         payload = await tools.digest()
 
@@ -65,7 +65,7 @@ class TestDigestProfileNotice:
         #     "Notice: taste profile changed during this digest run; this output reflects the profile as of digest start."
         _clear_oauth(tools)
         store = _ChangingTasteStore(PROFILE_A, PROFILE_B)
-        monkeypatch.setattr(youtube_manager, "_state_store", lambda request: store)
+        monkeypatch.setattr(youtube_manager, "_state_store", lambda request, user_id=None: store)
 
         payload = await tools.digest()
 
@@ -84,7 +84,7 @@ class TestDigestProfileNotice:
         #   # documents the ordering: digest reads the profile as of its own call
         _clear_oauth(tools)
         store = FakeStateStore()
-        monkeypatch.setattr(youtube_manager, "_state_store", lambda request: store)
+        monkeypatch.setattr(youtube_manager, "_state_store", lambda request, user_id=None: store)
 
         saved = await tools.save_taste_profile(PROFILE_A)
         payload = await tools.digest()

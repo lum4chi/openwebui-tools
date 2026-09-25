@@ -100,7 +100,8 @@ class TestTaste:
             raise RuntimeError("state store down")
 
         monkeypatch.setattr(
-            "youtube_manager._state_store", lambda request: type("S", (), {"write": staticmethod(_boom)})()
+            "youtube_manager._state_store",
+            lambda request, user_id=None: type("S", (), {"write": staticmethod(_boom)})(),
         )
 
         result = await tools.save_taste_profile(DOC)  # no exception propagates

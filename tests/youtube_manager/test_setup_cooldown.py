@@ -7,7 +7,7 @@ from youtube_manager import Tools
 
 
 def _probe_return(value: str):
-    async def probe(self):
+    async def probe(self, user_id=None):
         return value
 
     return probe

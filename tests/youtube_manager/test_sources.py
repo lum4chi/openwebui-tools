@@ -51,7 +51,7 @@ def _api_fake(details, playlist_items):
     """Route _data_api_request by method (literal WL); record calls as (method, params) pairs."""
     calls: list[tuple[str, dict]] = []
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
@@ -238,7 +238,7 @@ class TestSourcesArg:
         ytdlp_calls = _ytdlp_fake(monkeypatch, {}, {})
         api_calls: list[str] = []
 
-        def api(valves, method, params):
+        def api(valves, method, params, user_id=None):
             api_calls.append(method)
             raise AssertionError("no I/O seam may be called for the invalid request")
 
@@ -269,7 +269,7 @@ class TestSourcesArg:
         )
         api_calls: list[str] = []
 
-        def api(valves, method, params):
+        def api(valves, method, params, user_id=None):
             api_calls.append(method)
             raise AssertionError("no Data API I/O for a skipped watch_later")
 

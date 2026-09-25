@@ -159,7 +159,7 @@ class TestPruneApiDecodeGuard:
     #   Then it returns "OK — nothing to prune (no tracked items)"
     #   And no Data API call is made
     async def test_no_prior_state_clean_early_return(self, tools, monkeypatch, fake_store):
-        def boom(valves, method, params):
+        def boom(valves, method, params, user_id=None):
             raise AssertionError("no Data API call expected in the empty-state early return")
 
         monkeypatch.setattr("youtube_manager._data_api_execute", boom)
@@ -177,7 +177,7 @@ class TestPruneApiDecodeGuard:
     #   And the message does NOT surface the raw "Expecting value" JSON decode detail
     async def test_transient_empty_api_clean_error(self, tools, monkeypatch, fake_store):
         seed_state(fake_store, {VID_A: (days_ago(10), "Video A")}, playlist_id=PL)
-        monkeypatch.setattr("youtube_manager._data_api_execute", lambda valves, method, params: b"")
+        monkeypatch.setattr("youtube_manager._data_api_execute", lambda valves, method, params, user_id=None: b"")
 
         result = await tools.prune_playlist()
 

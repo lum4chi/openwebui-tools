@@ -17,7 +17,7 @@ def _delete_api_fake(monkeypatch, items, delete_outcome):
     """Patch _data_api_execute: playlistItems.list -> one page of items; playlistItems.delete -> raw body (or raise)."""
     calls: list[tuple[str, dict]] = []
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if method == "playlistItems.list":
             return {"items": items}

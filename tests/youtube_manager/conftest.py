@@ -107,7 +107,7 @@ class FakeStateStore:
 def fake_store(monkeypatch):
     """Patch youtube_manager._state_store to a per-test in-memory FakeStateStore."""
     store = FakeStateStore()
-    monkeypatch.setattr("youtube_manager._state_store", lambda request: store)
+    monkeypatch.setattr("youtube_manager._state_store", lambda request, user_id=None: store)
     return store
 
 
@@ -181,7 +181,7 @@ def api_fake(
     delete_index = {"n": 0}
     subscription_page_index = {"n": 0}
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if raise_for is not None and method in raise_for:
             raise raise_for[method]

@@ -15,7 +15,7 @@ CREDENTIAL_FILE = "google-refresh-token.md"
 
 
 def _credential_path() -> Path:
-    return Path(os.environ["DATA_DIR"]) / CREDENTIAL_FILE
+    return Path(os.environ["DATA_DIR"]) / "default" / CREDENTIAL_FILE
 
 
 class _BoomStore:
@@ -26,14 +26,14 @@ class _BoomStore:
 
 
 class TestFinishAuthFileStore:
-    """finish_auth persists the exchanged refresh token to DATA_DIR/google-refresh-token.md (0600)."""
+    """finish_auth persists the exchanged refresh token to DATA_DIR/default/google-refresh-token.md (0600)."""
 
     # @unit
     # Scenario: S1 finish_auth success
     #   Given a Tools whose token exchange returns refresh token "new-refresh-token"
     #     And a fresh DATA_DIR with no credential file
     #   When finish_auth is called with a valid authorization code
-    #   Then DATA_DIR contains google-refresh-token.md containing exactly "new-refresh-token"
+    #   Then DATA_DIR/default contains google-refresh-token.md containing exactly "new-refresh-token"
     #     And the credential file mode is 0600
     #     And the response is exactly "OK - credential stored; check_setup should now show ok"
     #     And the response does not contain "new-refresh-token"
@@ -58,7 +58,7 @@ class TestFinishAuthFileStore:
     async def test_write_failure_after_exchange_reports_retry_without_raw_token(self, tools):
         with (
             patch("youtube_manager._oauth_token", return_value=TOKEN),
-            patch("youtube_manager._state_store", lambda request: _BoomStore()),
+            patch("youtube_manager._state_store", lambda request, user_id=None: _BoomStore()),
         ):
             result = await tools.finish_auth("code123")
         expected = (
@@ -82,8 +82,8 @@ class TestEffectiveRefreshToken:
     #   Then it is exactly "file-rt"
     def test_file_precedence_over_valve(self, tools):
         data_dir = Path(os.environ["DATA_DIR"])
-        data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / CREDENTIAL_FILE).write_text("file-rt")
+        (data_dir / "default").mkdir(parents=True, exist_ok=True)
+        (data_dir / "default" / CREDENTIAL_FILE).write_text("file-rt")
         tools.valves.google_refresh_token = "valve-rt"
         assert youtube_manager._effective_refresh_token(tools.valves) == "file-rt"
 
@@ -100,8 +100,8 @@ class TestEffectiveRefreshToken:
     def test_valve_fallback_when_file_absent(self, tools, content):
         if content is not None:
             data_dir = Path(os.environ["DATA_DIR"])
-            data_dir.mkdir(parents=True, exist_ok=True)
-            (data_dir / CREDENTIAL_FILE).write_text(content)
+            (data_dir / "default").mkdir(parents=True, exist_ok=True)
+            (data_dir / "default" / CREDENTIAL_FILE).write_text(content)
         tools.valves.google_refresh_token = "valve-rt"
         assert youtube_manager._effective_refresh_token(tools.valves) == "valve-rt"
 

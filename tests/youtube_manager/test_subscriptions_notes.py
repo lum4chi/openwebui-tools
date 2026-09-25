@@ -25,7 +25,7 @@ def _stub_api(
 ) -> None:
     """Stateless _data_api_request responder for the per-channel subscriptions Data API path."""
 
-    def fake(valves, method, params):
+    def fake(valves, method, params, user_id=None):
         if method == "subscriptions.list":
             return {"items": channels}
         if method == "channels.list":
@@ -95,7 +95,7 @@ class TestSubscriptionNotes:
             monkeypatch.setattr(
                 youtube_manager,
                 "_data_api_request",
-                lambda valves, method, params: {"items": [raw[i] for i in order]},
+                lambda valves, method, params, user_id=None: {"items": [raw[i] for i in order]},
             )
 
         serve(list(range(len(raw))))

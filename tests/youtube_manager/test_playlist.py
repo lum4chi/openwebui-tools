@@ -181,7 +181,7 @@ class TestAddToPlaylist:
         }
         if layout == "paginated":
             list_params = [params for method, params in calls if method == "playlists.list"]
-            assert list_params[1] == {"part": "snippet", "mine": True, "maxResults": 100, "pageToken": "tok2"}
+            assert list_params[1] == {"part": "snippet", "mine": True, "maxResults": 50, "pageToken": "tok2"}
         state = parse_digest_state(fake_store.docs[NOTE_STATE])
         assert state["playlist_id"] == PL_LISTED
 

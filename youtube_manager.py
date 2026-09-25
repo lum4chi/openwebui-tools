@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 2.0.0
+version: 2.1.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -1747,6 +1747,46 @@ class Tools:
         except Exception as err:
             return f"Error: {_clean_exception(err)}"
 
+    async def list_playlists(self) -> str:
+        """Enumerate the user's playlists (mine=true, all pages) as one line each: title, id, privacyStatus.
+
+        Scope: youtube.readonly suffices (mine=true enumeration; no write scopes needed; the tool's full
+        youtube scope is unchanged). Each page costs 1 quota unit/page; follows nextPageToken until exhausted.
+        Live API verification NOT performed at design time (no credentials in the design environment); the known
+        live contradiction — playlistItems.list with playlistId='WL' works live — is noted because the documented
+        special-playlist empty-list note may apply only to playlists.list?id=WL. A synthesized, labeled
+        "Watch Later (WL)" row is always appended last.
+        """
+        try:
+            return self._list_playlists_core()
+        except ReauthNeeded as err:
+            return f"REAUTH_NEEDED\n{err}\nFix: run start_auth, open the URL, then finish_auth with the new code."
+        except Exception as err:
+            return f"Error: {_clean_exception(err)}"
+
+    def _list_playlists_core(self) -> str:
+        lines: list[str] = ["=== Playlists (mine=true) ==="]
+        token = ""
+        while True:
+            params: dict = {"part": "snippet,status", "mine": True, "maxResults": 50}
+            if token:
+                params["pageToken"] = token
+            resp = _data_api_request(self.valves, "playlists.list", params)
+            for item in resp.get("items") or []:
+                lines.append(self._playlist_line(item))
+            token = resp.get("nextPageToken") or ""
+            if not token:
+                break
+        lines.append('Watch Later (WL) — alias "WL" (synthesized row; not a playlists.list result)')
+        return "\n".join(lines)
+
+    @staticmethod
+    def _playlist_line(item: dict) -> str:
+        title = (item.get("snippet") or {}).get("title")
+        playlist_id = item.get("id")
+        privacy = (item.get("status") or {}).get("privacyStatus") or "unknown"
+        return f"{title} — id: {playlist_id} — privacy: {privacy}"
+
     def _add_to_playlist_core(self, video_id: str, user_id: str | None = None) -> str:
         notes: list[str] = []
         store = _state_store(None, user_id)
@@ -1778,7 +1818,7 @@ class Tools:
     def _find_playlist_by_title(self, title: str, user_id: str | None = None) -> str | None:
         token = ""
         while True:
-            params: dict = {"part": "snippet", "mine": True, "maxResults": 100}
+            params: dict = {"part": "snippet", "mine": True, "maxResults": 50}
             if token:
                 params["pageToken"] = token
             resp = _data_api_request(self.valves, "playlists.list", params, user_id=user_id)

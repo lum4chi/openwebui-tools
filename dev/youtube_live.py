@@ -104,13 +104,26 @@ def _item_count(result: object) -> int:
     return len(items) if isinstance(items, list) else 0
 
 
+def _failure_detail(err: BaseException) -> dict:
+    """Failure evidence for the instrumentation log: exception class + HTTP status (when present) + cleaned reason (no raw secrets)."""
+    return {"class": type(err).__name__, "status": ym._http_status(err), "reason": ym._clean_exception(err)}
+
+
 def instrument() -> list[dict]:
-    """Wrap ym._data_api_execute (resolved now — late binding, so a test patch is wrapped, not bypassed)."""
+    """Wrap ym._data_api_execute (resolved now — late binding, so a test patch is wrapped, not bypassed).
+
+    Every call is logged: a success entry ({method, params, user_id, items}) or, when the delegate
+    raises, a failure entry ({method, params, user_id, error}) carrying the cleaned reason — then the
+    exception is re-raised unchanged."""
     log: list[dict] = []
     delegate = ym._data_api_execute
 
     def wrapper(valves, method: str, params: dict, user_id: str | None = None):
-        result = delegate(valves, method, params, user_id)
+        try:
+            result = delegate(valves, method, params, user_id)
+        except Exception as err:
+            log.append({"method": method, "params": dict(params), "user_id": user_id, "error": _failure_detail(err)})
+            raise
         log.append({"method": method, "params": dict(params), "user_id": user_id, "items": _item_count(result)})
         return result
 
@@ -118,23 +131,27 @@ def instrument() -> list[dict]:
     return log
 
 
-def probe_identity(tools: Tools, user_id: str) -> dict | None:
-    """Resolve the authenticated account via channels.list (evidence: WHICH account); None on any error."""
+def probe_identity(tools: Tools, user_id: str) -> tuple[dict | None, str | None]:
+    """Resolve the authenticated account via channels.list (evidence: WHICH account).
+
+    Returns (identity, reason): identity is the account dict (or None on failure); reason carries
+    the cleaned error when the API call raised (None for an empty reply)."""
     try:
         resp = ym._data_api_request(tools.valves, "channels.list", {"part": "snippet", "mine": True}, user_id=user_id)
-    except Exception:
-        return None
+    except Exception as err:
+        return None, ym._clean_exception(err)
     items = resp.get("items") or []
     if not items:
-        return None
+        return None, None
     item = items[0]
-    return {"channel_id": item.get("id"), "title": (item.get("snippet") or {}).get("title")}
+    return {"channel_id": item.get("id"), "title": (item.get("snippet") or {}).get("title")}, None
 
 
 async def _step_identity(tools: Tools, user_id: str) -> tuple[str, bool, str]:
-    identity = probe_identity(tools, user_id)
+    identity, reason = probe_identity(tools, user_id)
     if identity is None:
-        return ("identity", False, "no channel resolved (channels.list mine=true empty or errored)")
+        detail = f"no channel resolved: {reason}" if reason else "no channel resolved (channels.list mine=true empty)"
+        return ("identity", False, detail)
     return ("identity", True, f"channel_id={identity['channel_id']} title={identity['title']!r}")
 
 
@@ -157,7 +174,7 @@ def _wl_raw_items(log: list[dict]) -> int:
     counts = [
         entry["items"]
         for entry in log
-        if entry["method"] == "playlistItems.list" and entry["params"].get("playlistId") == "WL"
+        if "items" in entry and entry["method"] == "playlistItems.list" and entry["params"].get("playlistId") == "WL"
     ]
     return max(counts) if counts else 0
 
@@ -165,7 +182,7 @@ def _wl_raw_items(log: list[dict]) -> int:
 def _feed_counts(log: list[dict]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for entry in log:
-        if entry["method"] != "playlistItems.list":
+        if "items" not in entry or entry["method"] != "playlistItems.list":
             continue
         playlist_id = entry["params"].get("playlistId")
         if playlist_id in (None, "WL"):
@@ -200,12 +217,18 @@ async def run_acceptance(tools: Tools, env: dict[str, str], log: list[dict]) -> 
     return results
 
 
+def _render_api_line(entry: dict) -> str:
+    base = f"api: {entry['method']} user_id={entry['user_id']}"
+    if "items" in entry:
+        return f"{base} items={entry['items']} params={entry['params']}"
+    error = entry["error"]
+    status = "" if error["status"] is None else f" status={error['status']}"
+    return f"{base} FAILED class={error['class']}{status} reason={error['reason']} params={entry['params']}"
+
+
 def _render_report(results: list[tuple[str, bool, str]], log: list[dict]) -> str:
     lines = [f"{'PASS' if ok else 'FAIL'}  {name}  {detail}" for name, ok, detail in results]
-    api_lines = [
-        f"api: {entry['method']} user_id={entry['user_id']} items={entry['items']} params={entry['params']}"
-        for entry in log
-    ]
+    api_lines = [_render_api_line(entry) for entry in log]
     return "\n".join(lines + api_lines) + "\n"
 
 

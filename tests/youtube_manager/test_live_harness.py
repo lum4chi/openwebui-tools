@@ -168,7 +168,7 @@ class TestLoadEnv:
 
 
 class TestProbeIdentity:
-    """probe_identity units: canned account, empty reply, errored API."""
+    """probe_identity units: canned account, empty reply, errored API (reason carried)."""
 
     def test_success_returns_channel_and_title(self, tools, monkeypatch):
         api_fake(
@@ -177,17 +177,26 @@ class TestProbeIdentity:
             channels={"items": [{"id": "ch-self", "snippet": {"title": "Self Channel"}}]},
         )
 
-        assert hl.probe_identity(tools, "u1") == {"channel_id": "ch-self", "title": "Self Channel"}
+        identity, reason = hl.probe_identity(tools, "u1")
 
-    def test_empty_items_returns_none(self, tools, monkeypatch):
+        assert identity == {"channel_id": "ch-self", "title": "Self Channel"}
+        assert reason is None
+
+    def test_empty_items_returns_none_and_no_reason(self, tools, monkeypatch):
         api_fake(monkeypatch, pages={}, channels={"items": []})
 
-        assert hl.probe_identity(tools, "u1") is None
+        identity, reason = hl.probe_identity(tools, "u1")
 
-    def test_api_error_returns_none(self, tools, monkeypatch):
+        assert identity is None
+        assert reason is None
+
+    def test_api_error_returns_cleaned_reason(self, tools, monkeypatch):
         api_fake(monkeypatch, pages={}, raise_for={"channels.list": RuntimeError("boom")})
 
-        assert hl.probe_identity(tools, "u1") is None
+        identity, reason = hl.probe_identity(tools, "u1")
+
+        assert identity is None
+        assert reason == "unexpected error"
 
 
 class TestItemCount:

@@ -2,7 +2,7 @@
 
 Reproduces the PRODUCTION credential topology (STALE valve token + FRESH per-user file
 token), runs the bug's acceptance sequence against the real Google API with the user's
-credentials (loaded from a root `.env`; see `.env.template`), and logs raw API evidence
+credentials (loaded from a root `.env`; see `env.template`), and logs raw API evidence
 (identity, WL raw response, per-feed counts). The tool code is untouched: this module
 only WRAPS `youtube_manager._data_api_execute` for instrumentation and threads the Open
 WebUI `__user__` exactly as OWUI would (only where a tool method declares it).
@@ -50,7 +50,7 @@ def load_env(path: str = ".env") -> dict[str, str]:
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(
-            f"no {path!r} — cp .env.template .env and fill in the YTM_* values (keep .env uncommitted)"
+            f"no {path!r} — cp env.template .env and fill in the YTM_* values (keep .env uncommitted)"
         )
     file_env = {key: (value or "").strip() for key, value in dotenv_values(str(file_path)).items()}
     env: dict[str, str] = dict(OPTIONAL_DEFAULTS)

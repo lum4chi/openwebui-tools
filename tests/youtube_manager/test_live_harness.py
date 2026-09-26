@@ -45,7 +45,7 @@ TEMPLATE_SLOTS = [
 class TestEnvTemplate:
     # @unit
     # Scenario: T0-1-S1 (unit): template carries every valve slot plus harness slots
-    #   Given the committed .env.template
+    #   Given the committed env.template
     #   When it is parsed as dotenv
     #   Then it exposes an env slot for every Valves field (google_client_id, google_client_secret,
     #     google_refresh_token as YTM_GOOGLE_REFRESH_TOKEN_STALE, digest_playlist_title,
@@ -53,7 +53,7 @@ class TestEnvTemplate:
     #     (YTM_GOOGLE_REFRESH_TOKEN_FRESH, YTM_USER_ID, YTM_DATA_DIR)
     #   And no value in the template is a secret (placeholders are empty or defaults)
     def test_template_exposes_every_valve_and_harness_slot_with_no_secrets(self):
-        parsed = dotenv_values(str(_REPO_ROOT / ".env.template"))
+        parsed = dotenv_values(str(_REPO_ROOT / "env.template"))
 
         for slot in TEMPLATE_SLOTS:
             assert slot in parsed
@@ -66,10 +66,10 @@ class TestEnvHygiene:
     # Scenario: T0-1-S2 (unit): env hygiene
     #   Given the repository .gitignore
     #   When checked
-    #   Then .env is ignored, .env.template is not ignored (committable), and .data-live/ is ignored
+    #   Then .env is ignored, env.template is not ignored (committable), and .data-live/ is ignored
     @pytest.mark.parametrize(
         ("path", "expected_ignored"),
-        [(".env", True), (".env.template", False), (".data-live/live-run.log", True)],
+        [(".env", True), ("env.template", False), (".data-live/live-run.log", True)],
         ids=["env_ignored", "template_committable", "data_dir_ignored"],
     )
     def test_gitignore_hygiene(self, path, expected_ignored):
@@ -139,7 +139,7 @@ class TestLoadEnv:
     """load_env units: missing file, missing required keys, defaults + stripping."""
 
     def test_missing_file_raises_pointing_at_template(self, tmp_path):
-        with pytest.raises(FileNotFoundError, match=r"\.env\.template"):
+        with pytest.raises(FileNotFoundError, match=r"env\.template"):
             hl.load_env(str(tmp_path / "absent"))
 
     def test_missing_required_key_is_named(self, tmp_path):

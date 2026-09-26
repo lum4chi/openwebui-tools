@@ -131,7 +131,7 @@ class TestMain:
 
         assert hl.main() == 1
 
-        assert ".env.template" in capsys.readouterr().out
+        assert "env.template" in capsys.readouterr().out
 
     def test_all_pass_returns_0(self, monkeypatch, tmp_path):
         (tmp_path / ".env").write_text(_env_text(tmp_path / "data-live"))

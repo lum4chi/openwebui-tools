@@ -57,7 +57,11 @@ def _canned() -> dict:
             "up1": [listing_page([playlist_item("vid-up1", "Up video 1", "Channel 1", "2026-01-01T00:00:00Z")])],
             "up2": [listing_page([playlist_item("vid-up2", "Up video 2", "Channel 2", "2026-01-02T00:00:00Z")])],
         },
-        playlist_pages=[listing_page([playlist_row("PL1", "Playlist One"), playlist_row("PL2", "Playlist Two")])],
+        playlist_pages=[
+            listing_page([playlist_row("PL1", "Playlist One"), playlist_row("PL2", "Playlist Two")]),
+            listing_page([]),
+            listing_page([]),
+        ],
         subscription_pages=[
             {"items": []},
             {"items": [sub_channel("ch1", "Channel 1"), sub_channel("ch2", "Channel 2")]},

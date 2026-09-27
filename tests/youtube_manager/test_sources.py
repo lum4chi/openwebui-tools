@@ -5,6 +5,8 @@ import pytest
 import youtube_manager
 from youtube_manager import SOURCES
 
+from .conftest import playlist_row
+
 
 def _entry(video_id):
     return {
@@ -48,13 +50,15 @@ def _playlist_item(video_id):
 
 
 def _api_fake(details, playlist_items):
-    """Route _data_api_request by method (literal WL); record calls as (method, params) pairs."""
+    """Route _data_api_request by method (Watch Later title lookup + literal WL); record (method, params)."""
     calls: list[tuple[str, dict]] = []
 
     def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
+        if method == "playlists.list":
+            return {"items": [playlist_row("PL-mine", "Not Watch Later")]}
         if method == "playlistItems.list":
             return {"items": playlist_items}
         if method == "videos.list":
@@ -100,9 +104,11 @@ class TestWatchLater:
     #   And items already present from other sources are deduped, not duplicated
     # Scenario: T9-1 S1 Watch Later reads the canonical WL playlist directly
     #   Given OAuth is configured
+    #   And the Data API seam serves playlists.list with no "Watch Later" or "View later" match
     #   And the Data API seam serves playlistItems.list for playlistId "WL"
     #   When _fetch_watch_later runs
-    #   Then playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
+    #   Then the Watch Later title lookup sweeps playlists.list once per exact title
+    #     And playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
     #     And channels.list is never called
     #     And the returned candidates are labelled "watch_later"
     @pytest.mark.parametrize(
@@ -168,7 +174,11 @@ class TestWatchLater:
             assert video_calls[0]["ids"] == ",".join(expected_ids[:50])
             assert video_calls[1]["ids"] == expected_ids[50]
         if not playlist_ids:
-            assert calls == [("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "51"})]
+            assert calls == [
+                ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
+                ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
+                ("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "51"}),
+            ]
         assert not any(method == "channels.list" for method, _ in calls)
         for method, params in calls:
             if method == "playlistItems.list":

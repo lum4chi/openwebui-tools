@@ -1207,6 +1207,12 @@ def _note_watch_later_zero(notes: list[str] | None) -> None:
         notes.append("watch_later: playlist ok, 0 items")
 
 
+def _note_watch_later_title(notes: list[str] | None, detail: str) -> None:
+    """Append a ``watch_later: {detail}`` title-resolution diagnostic note (None-safe for the digest path)."""
+    if notes is not None:
+        notes.append(f"watch_later: {detail}")
+
+
 def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], resolved: list[dict]) -> None:
     """Note when the playlist listed items but none resolved in the videos.list details."""
     if video_ids and not resolved:
@@ -1345,13 +1351,29 @@ class Tools:
                 details[item["id"]] = item
         return details
 
+    def _watch_later_playlist_id(self, notes: list[str] | None, user_id: str | None) -> str | None:
+        """Resolve the real Watch Later playlist id by exact title match; None = fall back to the legacy "WL" alias."""
+        for title in ("Watch Later", "View later"):
+            try:
+                playlist_id = self._find_playlist_by_title(title, user_id)
+            except Exception as err:
+                _note_watch_later_title(
+                    notes, f'"{title}" title lookup failed ({_clean_exception(err)}); using legacy "WL" alias'
+                )
+                return None
+            if playlist_id:
+                return playlist_id
+        _note_watch_later_title(notes, 'no "Watch Later" or "View later" playlist found; using legacy "WL" alias')
+        return None
+
     def _fetch_watch_later(
         self, max_per_source: int, notes: list[str] | None = None, user_id: str | None = None
     ) -> list[Candidate]:
+        playlist_id = self._watch_later_playlist_id(notes, user_id) or "WL"
         resp = _data_api_request(
             self.valves,
             "playlistItems.list",
-            {"part": "contentDetails", "playlistId": "WL", "maxResults": str(max_per_source)},
+            {"part": "contentDetails", "playlistId": playlist_id, "maxResults": str(max_per_source)},
             user_id=user_id,
         )
         video_ids: list[str] = []

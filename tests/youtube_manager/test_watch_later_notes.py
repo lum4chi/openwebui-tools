@@ -9,7 +9,7 @@ import urllib.error
 import youtube_manager
 from youtube_manager import ReauthNeeded, Tools
 
-from .conftest import sample_candidates
+from .conftest import playlist_row, sample_candidates
 
 
 def _playlist_item(video_id: str) -> dict:
@@ -33,13 +33,15 @@ def _detail(video_id: str) -> dict:
 
 
 def _wl_api_fake(monkeypatch, *, playlist_items: list[dict], video_details: dict):
-    """Route _data_api_request for the watch_later path (literal WL); record (method, params) calls."""
+    """Route _data_api_request for the watch_later path (title lookup + literal WL); record (method, params)."""
     calls: list[tuple[str, dict]] = []
 
     def fake(valves, method, params, user_id=None):
         calls.append((method, dict(params)))
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
+        if method == "playlists.list":
+            return {"items": [playlist_row("PL-mine", "Not Watch Later")]}
         if method == "playlistItems.list":
             return {"items": playlist_items}
         if method == "videos.list":
@@ -113,9 +115,11 @@ class TestWatchLaterNotes:
     #   And no "watch_later skipped" line is emitted
     # Scenario: T9-1 S1 Watch Later reads the canonical WL playlist directly
     #   Given OAuth is configured
+    #   And the Data API seam serves playlists.list with no "Watch Later" or "View later" match
     #   And the Data API seam serves playlistItems.list for playlistId "WL"
     #   When _fetch_watch_later runs
-    #   Then playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
+    #   Then the Watch Later title lookup sweeps playlists.list once per exact title
+    #     And playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
     #     And channels.list is never called
     #     And the returned candidates are labelled "watch_later"
     async def test_happy_path_no_note(self, tools, monkeypatch):
@@ -127,7 +131,9 @@ class TestWatchLaterNotes:
 
         payload = await tools.gather_candidates(sources="watch_later")
 
-        assert calls[0] == ("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "20"})
+        assert calls[0] == ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50})
+        assert calls[1] == ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50})
+        assert calls[2] == ("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "20"})
         assert not any(method == "channels.list" for method, _ in calls)
         assert "=== Candidates (2) ===" in payload
         assert "Detail title v1" in payload

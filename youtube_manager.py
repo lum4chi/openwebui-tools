@@ -1422,7 +1422,7 @@ class Tools:
         channels: list[dict] = []
         page_token: str | None = None
         while len(channels) < SUBSCRIPTION_CHANNEL_CAP:
-            params: dict[str, object] = {"part": "snippet", "mine": "true", "maxResults": 50}
+            params: dict[str, object] = {"part": "snippet,contentDetails", "mine": "true", "maxResults": 50}
             if page_token:
                 params["pageToken"] = page_token
             resp = _data_api_request(self.valves, "subscriptions.list", params, user_id=user_id)
@@ -1504,7 +1504,7 @@ class Tools:
         user_id: str | None = None,
     ) -> tuple[str, str] | None:
         snippet = channel.get("snippet") or {}
-        channel_id = snippet.get("channelId") or ""
+        channel_id = (channel.get("contentDetails") or {}).get("channelId") or snippet.get("channelId") or ""
         items: list[dict] = []
         channel_entries: list[dict] = []
         try:

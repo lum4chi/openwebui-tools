@@ -116,7 +116,7 @@ class TestGatherSubscriptions:
         assert all("subscriptions" in c.sources for c in captured[0])
         method, params = calls[0]
         assert method == "subscriptions.list"
-        assert params["mine"] == "true" and params["part"] == "snippet"
+        assert params["mine"] == "true" and params["part"] == "snippet,contentDetails"
 
     # T2-2 Given same video id in watch_later and subscriptions; When gather both; Then one candidate, union sources, first-seen wins
     async def test_cross_source_dedupe_union(self, tools, monkeypatch):

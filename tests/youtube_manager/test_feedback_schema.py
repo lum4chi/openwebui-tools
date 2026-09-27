@@ -86,14 +86,14 @@ class TestFeedbackEntryDecisionEnum:
         assert [e.decision for e in entries] == ["watched", "listened", "skipped"]
 
     # @unit
-    # Scenario: T0-1 S-version module version is bumped to 2.1.0
+    # Scenario: T0-1 S-version module version is bumped to 2.1.1
     #   Given the module docstring
     #   When read
-    #   Then it contains "2.1.0"
+    #   Then it contains "2.1.1"
     #   And it does not contain "2.0.0"
-    def test_version_bumped_to_2_1_0(self):
+    def test_version_bumped_to_2_1_1(self):
         doc = youtube_manager.__doc__ or ""
-        assert "2.1.0" in doc
+        assert "2.1.1" in doc
         assert "2.0.0" not in doc
 
 

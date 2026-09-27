@@ -1,10 +1,13 @@
 """T7-1 list_playlists(): public playlist enumeration (mine=true, all pages, maxResults 50)."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
+import youtube_manager as ym
 from youtube_manager import ReauthNeeded, Tools
 
-from .conftest import api_fake
+from .conftest import FakeStateStore, api_fake, guard_urlopen, playlist_row
 
 VIDEO_ID = "vid-list-001"
 HEADER = "=== Playlists (mine=true) ==="
@@ -157,12 +160,12 @@ class TestListPlaylists:
     # Scenario: T7-1-S6 the docstring states readonly-scope sufficiency and the live-verify flag (unit)
     #   Given Tools.list_playlists
     #   Then its docstring contains "youtube.readonly suffices"
-    #   And its docstring contains "Live API verification NOT performed at design time"
+    #   And its docstring contains "Live API verification WAS performed via the dev-only harness (dev/youtube_live.py)"
     #   And its docstring contains "1 quota unit/page"
     async def test_docstring_scope_and_live_flag(self):
         doc = Tools.list_playlists.__doc__ or ""
         assert "youtube.readonly suffices" in doc
-        assert "Live API verification NOT performed at design time" in doc
+        assert "Live API verification WAS performed via the dev-only harness (dev/youtube_live.py)" in doc
         assert "1 quota unit/page" in doc
 
     # @unit
@@ -192,3 +195,98 @@ class TestListPlaylists:
 
         assert list_result == add_result
         assert list_result.startswith(prefix)
+
+
+def _per_user_store(monkeypatch) -> dict:
+    """Patch _state_store to a per-user-id FakeStateStore (models data/<user_id>/ isolation)."""
+    stores: dict[str, FakeStateStore] = {}
+
+    def factory(request, user_id=None):
+        uid = user_id or "default"
+        return stores.setdefault(uid, FakeStateStore())
+
+    monkeypatch.setattr("youtube_manager._state_store", factory)
+    return stores
+
+
+def _real_path(monkeypatch, pages: list[dict]) -> list:
+    """Run the real _data_api_request/_data_api_execute path with leaf I/O faked (no network).
+
+    Fakes _oauth_token (records (user_id, resolved refresh token) per call) and discovery.build
+    (a MagicMock service whose playlists.list serves pages in order). guard_urlopen is active.
+    """
+    calls: list[tuple] = []
+    idx = {"n": 0}
+
+    def api_method(**params):
+        page = pages[idx["n"]]
+        idx["n"] += 1
+        return MagicMock(execute=lambda: page)
+
+    def fake_oauth(valves, code=None, user_id=None):
+        calls.append((user_id, ym._effective_refresh_token(valves, user_id)))
+        return {"access_token": "AT"}
+
+    service = MagicMock()
+    service.playlists.list = api_method
+    monkeypatch.setattr("youtube_manager._oauth_token", fake_oauth)
+    monkeypatch.setattr("youtube_manager.discovery.build", lambda *a, **k: service)
+    guard_urlopen(monkeypatch)
+    return calls
+
+
+class TestListPlaylistsUser:
+    """list_playlists __user__ threading: per-user credential resolution (T1-1 S1-S3)."""
+
+    # @unit
+    # Scenario: T1-1-S1 per-user credential resolution with pagination
+    #   Given a tool whose valve holds the documented non-empty DUMMY refresh token and whose per-user store for u1 holds FRESH
+    #   When list_playlists is called with __user__={"id": "u1"}
+    #   Then the playlists.list calls (page 1 and page 2 via nextPageToken) are all made with user_id "u1"
+    #   And the playlists are enumerated
+    async def test_s1_per_user_credential_resolution_with_pagination(self, tools, monkeypatch):
+        stores = _per_user_store(monkeypatch)
+        stores.setdefault("u1", FakeStateStore()).docs[ym.CREDENTIAL_TITLE] = "fresh-token"
+        pages = [
+            {"items": [playlist_row("PL1", "Rust")], "nextPageToken": "t2"},
+            {"items": [playlist_row("PL2", "Go")]},
+        ]
+        calls = _real_path(monkeypatch, pages)
+
+        result = await tools.list_playlists(__user__={"id": "u1"})
+
+        assert calls == [("u1", "fresh-token"), ("u1", "fresh-token")]
+        lines = result.split("\n")
+        assert "Rust — id: PL1 — privacy: unknown" in lines
+        assert "Go — id: PL2 — privacy: unknown" in lines
+
+    # @unit
+    # Scenario: T1-1-S2 anonymous fallback unchanged
+    #   Given the same setup
+    #   When list_playlists is called without __user__
+    #   Then the requests are made with user_id "default" (anonymous namespace; behavior unchanged)
+    async def test_s2_anonymous_fallback_unchanged(self, tools, monkeypatch):
+        _per_user_store(monkeypatch)
+        pages = [{"items": [playlist_row("PL1", "Rust")]}]
+        calls = _real_path(monkeypatch, pages)
+
+        result = await tools.list_playlists()
+
+        assert calls == [("default", "refresh-token")]
+        assert "Rust — id: PL1 — privacy: unknown" in result.split("\n")
+
+    # @unit
+    # Scenario: T1-1-S3 threading survives the full internal path
+    #   Given the real _data_api_execute path with _oauth_token and discovery.build faked (no network, guard_urlopen active)
+    #   When list_playlists is called with __user__={"id": "u1"}
+    #   Then _oauth_token is invoked with user_id "u1"
+    async def test_s3_threading_survives_full_internal_path(self, tools, monkeypatch):
+        stores = _per_user_store(monkeypatch)
+        stores.setdefault("u1", FakeStateStore()).docs[ym.CREDENTIAL_TITLE] = "fresh-token"
+        pages = [{"items": [playlist_row("PL1", "Rust")]}]
+        calls = _real_path(monkeypatch, pages)
+
+        result = await tools.list_playlists(__user__={"id": "u1"})
+
+        assert [uid for uid, _ in calls] == ["u1"]
+        assert "Rust — id: PL1 — privacy: unknown" in result.split("\n")

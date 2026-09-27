@@ -1,11 +1,13 @@
 """Dev-only LIVE acceptance harness for the youtube_manager tool (T0-1).
 
-Reproduces the PRODUCTION credential topology (STALE valve token + FRESH per-user file
-token), runs the bug's acceptance sequence against the real Google API with the user's
-credentials (loaded from a root `.env`; see `env.template`), and logs raw API evidence
-(identity, WL raw response, per-feed counts). The tool code is untouched: this module
-only WRAPS `youtube_manager._data_api_execute` for instrumentation and threads the Open
-WebUI `__user__` exactly as OWUI would (only where a tool method declares it).
+Reproduces the INITIAL OWUI credential condition (a documented non-empty DUMMY valve token +
+a browser-acquired per-user FILE token), acquires that FILE credential itself via the tool's
+own start_auth/finish_auth browser flow (ONE auth; re-runs reuse the token file), runs the
+bug's acceptance sequence against the real Google API with the user's credentials (loaded
+from a root `.env`; see `env.template`), and logs raw API evidence (identity, WL raw response,
+per-feed counts). The tool code is untouched: this module only WRAPS
+`youtube_manager._data_api_execute` for instrumentation and threads the Open WebUI `__user__`
+exactly as OWUI would (only where a tool method declares it).
 
 Live run (human, real credentials, opt-in, NOT in CI):
     uv run python dev/youtube_live.py
@@ -28,11 +30,16 @@ from youtube_manager import CREDENTIAL_TITLE, Tools  # noqa: E402
 
 REQUIRED_KEYS = (
     "YTM_GOOGLE_CLIENT_ID",
-    "YTM_GOOGLE_REFRESH_TOKEN_STALE",
     "YTM_GOOGLE_CLIENT_SECRET",
-    "YTM_GOOGLE_REFRESH_TOKEN_FRESH",
     "YTM_USER_ID",
 )
+DUMMY_REFRESH_TOKEN = "live-harness-dummy-refresh-token"
+# Valve dummy, NOT env: the .env carries no refresh-token slot (initial condition only). The
+# documented non-empty dummy is what makes pre-fix list_playlists resolve the valve token (not the
+# file token) and reproduce the EXACT production ReauthNeeded: _effective_refresh_token has NO
+# emptiness/format pre-check, so the dummy REACHES the token endpoint POST -> HTTP 400/401 ->
+# ReauthNeeded("Google rejected the grant - stored credential is stale"). Any non-empty string
+# works; this fixed value is the smallest such choice (KISS).
 OPTIONAL_DEFAULTS = {
     "YTM_DATA_DIR": ".data-live",
     "YTM_VERBOSE": "false",
@@ -64,17 +71,12 @@ def load_env(path: str = ".env") -> dict[str, str]:
 
 
 def build_tools(env: dict[str, str], data_dir: Path) -> Tools:
-    """Tools with the STALE valve token; the FRESH token is written to <data_dir>/<user_id>/ (production topology)."""
+    """Tools with the DUMMY valve token and NO token file (initial condition: run_auth acquires the file credential)."""
     os.environ["DATA_DIR"] = str(data_dir)
-    user_dir = data_dir / env["YTM_USER_ID"]
-    user_dir.mkdir(parents=True, exist_ok=True)
-    token_path = user_dir / f"{CREDENTIAL_TITLE}.md"
-    token_path.write_text(env["YTM_GOOGLE_REFRESH_TOKEN_FRESH"])
-    token_path.chmod(0o600)
     tools = Tools()
     tools.valves.google_client_id = env["YTM_GOOGLE_CLIENT_ID"]
     tools.valves.google_client_secret = env["YTM_GOOGLE_CLIENT_SECRET"]
-    tools.valves.google_refresh_token = env["YTM_GOOGLE_REFRESH_TOKEN_STALE"]
+    tools.valves.google_refresh_token = DUMMY_REFRESH_TOKEN
     tools.valves.digest_playlist_title = env["YTM_DIGEST_PLAYLIST_TITLE"]
     tools.valves.digest_max_items = int(env["YTM_DIGEST_MAX_ITEMS"])
     tools.valves.digest_max_age_days = int(env["YTM_DIGEST_MAX_AGE_DAYS"])
@@ -129,6 +131,19 @@ def instrument() -> list[dict]:
 
     ym._data_api_execute = wrapper
     return log
+
+
+async def run_auth(tools, user_id: str, data_dir: Path, input_fn=input) -> None:
+    """Acquire the per-user credential via the tool's ONE browser auth (token-reuse guard first).
+
+    Prints only the start_auth instructions (consent URL) and the finish_auth result line; the
+    pasted code/URL is NEVER printed or logged (secret invariant — S7 pins this)."""
+    token_path = data_dir / user_id / f"{CREDENTIAL_TITLE}.md"
+    if token_path.exists():
+        return
+    print(await tools.start_auth())
+    paste = input_fn("Paste the redirected URL (or just the code): ")
+    print(await owui_call(tools.finish_auth, user_id, paste))
 
 
 def probe_identity(tools: Tools, user_id: str) -> tuple[dict | None, str | None]:
@@ -242,6 +257,7 @@ def main(argv=None) -> int:
     data_dir = Path(env["YTM_DATA_DIR"])
     tools = build_tools(env, data_dir)
     log = instrument()
+    asyncio.run(run_auth(tools, env["YTM_USER_ID"], data_dir))
     results = asyncio.run(run_acceptance(tools, env, log))
     report = _render_report(results, log)
     print(report)

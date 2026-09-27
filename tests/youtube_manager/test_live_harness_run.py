@@ -7,6 +7,7 @@ the thin live-runner orchestration: exit 0 iff all steps PASS, else 1; missing .
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -86,18 +87,26 @@ def _env_text(data_dir: Path) -> str:
     return (
         "YTM_GOOGLE_CLIENT_ID=client-id\n"
         "YTM_GOOGLE_CLIENT_SECRET=client-secret\n"
-        "YTM_GOOGLE_REFRESH_TOKEN_STALE=stale-token\n"
-        "YTM_GOOGLE_REFRESH_TOKEN_FRESH=fresh-token\n"
         "YTM_USER_ID=u1\n"
         f"YTM_DATA_DIR={data_dir}\n"
     )
+
+
+def _seed_token(data_dir: Path, user_id: str = "u1", token: str = "fresh-token") -> Path:
+    """Pre-create the post-run_auth token file so run_auth's reuse guard skips the browser flow."""
+    token_path = data_dir / user_id / f"{ym.CREDENTIAL_TITLE}.md"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(token)
+    return token_path
 
 
 class TestAcceptanceRun:
     # @unit
     # Scenario: T0-1-S5 (unit, mocked seams, no network): acceptance run with canned responses
     #   Given a harness run against mocked seams (youtube_manager._data_api_execute / _oauth_token fakes,
-    #     guard_urlopen active) with canned responses (2 playlists, non-empty WL, non-empty feeds)
+    #     guard_urlopen active) with canned responses (2 playlists, non-empty WL, non-empty feeds) and the
+    #     token file already present (post-run_auth: the browser flow was faked; the token sits in
+    #     <DATA_DIR>/u1/google-refresh-token.md)
     #   When run_acceptance executes the 5 steps
     #   Then identity resolves the canned account, check_setup is READY, list_playlists enumerates,
     #     watch_later returns items, subscriptions return candidates
@@ -107,6 +116,7 @@ class TestAcceptanceRun:
     @pytest.mark.parametrize("shape", ["dict", "bytes"])
     async def test_all_five_steps_pass_with_evidence(self, tools, monkeypatch, shape):
         _patch_seams(monkeypatch, shape)
+        _seed_token(Path(os.environ["DATA_DIR"]))
         log = hl.instrument()
 
         results = await hl.run_acceptance(tools, {"YTM_USER_ID": "u1"}, log)
@@ -134,14 +144,18 @@ class TestMain:
         assert "env.template" in capsys.readouterr().out
 
     def test_all_pass_returns_0(self, monkeypatch, tmp_path):
-        (tmp_path / ".env").write_text(_env_text(tmp_path / "data-live"))
+        data_dir = tmp_path / "data-live"
+        (tmp_path / ".env").write_text(_env_text(data_dir))
+        _seed_token(data_dir)
         monkeypatch.chdir(tmp_path)
         _patch_seams(monkeypatch, "dict")
 
         assert hl.main() == 0
 
     def test_identity_fail_returns_1(self, monkeypatch, tmp_path):
-        (tmp_path / ".env").write_text(_env_text(tmp_path / "data-live"))
+        data_dir = tmp_path / "data-live"
+        (tmp_path / ".env").write_text(_env_text(data_dir))
+        _seed_token(data_dir)
         monkeypatch.chdir(tmp_path)
         _patch_seams(monkeypatch, "dict", empty_identity=True)
 

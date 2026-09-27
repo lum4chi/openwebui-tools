@@ -11,7 +11,7 @@ from dotenv import dotenv_values
 import youtube_manager as ym
 from youtube_manager import CREDENTIAL_TITLE
 
-from .conftest import api_fake
+from .conftest import api_fake, guard_urlopen
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HARNESS = _REPO_ROOT / "dev" / "youtube_live.py"
@@ -31,34 +31,27 @@ hl = _load_harness()
 TEMPLATE_SLOTS = [
     "YTM_GOOGLE_CLIENT_ID",
     "YTM_GOOGLE_CLIENT_SECRET",
-    "YTM_GOOGLE_REFRESH_TOKEN_STALE",
-    "YTM_GOOGLE_REFRESH_TOKEN_FRESH",
     "YTM_USER_ID",
     "YTM_DATA_DIR",
-    "YTM_VERBOSE",
-    "YTM_DIGEST_PLAYLIST_TITLE",
-    "YTM_DIGEST_MAX_ITEMS",
-    "YTM_DIGEST_MAX_AGE_DAYS",
 ]
 
 
 class TestEnvTemplate:
     # @unit
-    # Scenario: T0-1-S1 (unit): template carries every valve slot plus harness slots
+    # Scenario: T0-1-S1 (unit): template carries exactly the initial-condition slots
     #   Given the committed env.template
     #   When it is parsed as dotenv
-    #   Then it exposes an env slot for every Valves field (google_client_id, google_client_secret,
-    #     google_refresh_token as YTM_GOOGLE_REFRESH_TOKEN_STALE, digest_playlist_title,
-    #     digest_max_items, digest_max_age_days, verbose) plus harness slots
-    #     (YTM_GOOGLE_REFRESH_TOKEN_FRESH, YTM_USER_ID, YTM_DATA_DIR)
-    #   And no value in the template is a secret (placeholders are empty or defaults)
-    def test_template_exposes_every_valve_and_harness_slot_with_no_secrets(self):
+    #   Then it exposes exactly these env slots: YTM_GOOGLE_CLIENT_ID, YTM_GOOGLE_CLIENT_SECRET,
+    #     YTM_USER_ID (all required) and YTM_DATA_DIR (optional, default .data-live)
+    #   And no refresh-token slot exists (the credential is acquired by the harness's browser auth,
+    #     never pasted from a token file)
+    #   And no value in the template is a secret (placeholders are empty or the DATA_DIR default)
+    def test_template_carries_exactly_the_initial_condition_slots(self):
         parsed = dotenv_values(str(_REPO_ROOT / "env.template"))
 
-        for slot in TEMPLATE_SLOTS:
-            assert slot in parsed
-        non_secret = {"", ".data-live", "false", "Open WebUI Digest", "50", "30"}
-        assert all(value in non_secret for value in parsed.values())
+        assert sorted(parsed) == sorted(TEMPLATE_SLOTS)
+        assert not any("REFRESH_TOKEN" in key for key in parsed)
+        assert all(value in {"", ".data-live"} for value in parsed.values())
 
 
 class TestEnvHygiene:
@@ -79,19 +72,18 @@ class TestEnvHygiene:
 
 class TestProductionTopology:
     # @unit
-    # Scenario: T0-1-S3 (unit): production credential topology
-    #   Given a filled .env in a tmp dir (STALE + FRESH tokens, user id u1, tmp DATA_DIR)
+    # Scenario: T0-1-S3 (unit): initial-condition credential topology (dummy valve, no file token yet)
+    #   Given a filled .env in a tmp dir (client id/secret, user id u1, tmp DATA_DIR — NO tokens)
     #   When the harness builds the tool
-    #   Then valves are set from env (google_refresh_token == STALE, client id/secret, digest settings)
-    #   And the FRESH token is written to <DATA_DIR>/u1/google-refresh-token.md
-    #   And the topology holds: file token FRESH, valve token STALE
-    def test_build_tools_stale_valve_and_fresh_file_token(self, monkeypatch, tmp_path):
+    #   Then valves are set from env (google_refresh_token == DUMMY_REFRESH_TOKEN — non-empty,
+    #     client id/secret, digest settings)
+    #   And no token file is written (<DATA_DIR>/u1/google-refresh-token.md does NOT exist yet)
+    #   And the topology holds: valve token = the documented non-empty dummy, per-user file token = absent
+    def test_build_tools_dummy_valve_and_no_file_token(self, monkeypatch, tmp_path):
         env_file = tmp_path / ".env"
         env_file.write_text(
             "YTM_GOOGLE_CLIENT_ID=client-id\n"
             "YTM_GOOGLE_CLIENT_SECRET=client-secret\n"
-            "YTM_GOOGLE_REFRESH_TOKEN_STALE=stale-token\n"
-            "YTM_GOOGLE_REFRESH_TOKEN_FRESH=fresh-token\n"
             "YTM_USER_ID=u1\n"
             f"YTM_DATA_DIR={tmp_path / 'data-live'}\n"
         )
@@ -100,17 +92,16 @@ class TestProductionTopology:
         env = hl.load_env(str(env_file))
         tools = hl.build_tools(env, tmp_path / "data-live")
 
-        assert tools.valves.google_refresh_token == "stale-token"
+        assert tools.valves.google_refresh_token == hl.DUMMY_REFRESH_TOKEN
         assert tools.valves.google_client_id == "client-id"
         assert tools.valves.google_client_secret == "client-secret"
         assert tools.valves.digest_playlist_title == "Open WebUI Digest"
         assert tools.valves.digest_max_items == 50
         assert tools.valves.digest_max_age_days == 30
         token_path = tmp_path / "data-live" / "u1" / f"{CREDENTIAL_TITLE}.md"
-        assert token_path.read_text() == "fresh-token"
-        assert oct(token_path.stat().st_mode & 0o777) == "0o600"
+        assert not token_path.exists()
         assert os.environ["DATA_DIR"] == str(tmp_path / "data-live")
-        assert ym._file_refresh_token("u1") == "fresh-token"
+        assert ym._file_refresh_token("u1") is None
 
 
 class TestOwuiCall:
@@ -154,8 +145,6 @@ class TestLoadEnv:
         env_file.write_text(
             "YTM_GOOGLE_CLIENT_ID=client-id\n"
             "YTM_GOOGLE_CLIENT_SECRET=client-secret\n"
-            "YTM_GOOGLE_REFRESH_TOKEN_STALE=stale\n"
-            "YTM_GOOGLE_REFRESH_TOKEN_FRESH=fresh\n"
             "YTM_USER_ID=u1\n"
             "YTM_DATA_DIR= custom-dir \n"
         )
@@ -216,3 +205,65 @@ class TestItemCount:
     )
     def test_item_count(self, payload, expected):
         assert hl._item_count(payload) == expected
+
+
+class TestRunAuth:
+    # @unit
+    # Scenario: T0-1-S7 (unit, mocked seams, no network): interactive auth acquires the credential
+    #   Given a harness with NO token file for user id u1 and an injected input_fn (no real input(),
+    #     no network: _oauth_token / urllib.request.urlopen faked, guard_urlopen active)
+    #   When run_auth performs the browser flow and input_fn returns
+    #     [parametrize] the bare code OR the full redirect URL (http://127.0.0.1:8085/oauth2callback?code=…)
+    #   Then start_auth is called WITHOUT __user__ (it declares none) and finish_auth is called
+    #     with the pasted value
+    #   And the token file <DATA_DIR>/u1/google-refresh-token.md exists afterwards (0600)
+    #   And the pasted code/URL appears in NEITHER stdout NOR the run log (secret invariant)
+    @pytest.mark.parametrize("paste", ["code-abc", "http://127.0.0.1:8085/oauth2callback?code=code-abc"])
+    async def test_interactive_auth_acquires_credential(self, tools, monkeypatch, capsys, paste):
+        captured: dict = {}
+
+        def fake_oauth(valves, code=None, user_id=None):
+            captured["code"] = code
+            captured["user_id"] = user_id
+            return {"refresh_token": "fresh-token", "access_token": "tok"}
+
+        monkeypatch.setattr("youtube_manager._oauth_token", fake_oauth)
+        guard_urlopen(monkeypatch)
+        data_dir = Path(os.environ["DATA_DIR"])
+
+        def input_fn(prompt: str) -> str:
+            return paste
+
+        await hl.run_auth(tools, "u1", data_dir, input_fn=input_fn)
+
+        token_path = data_dir / "u1" / f"{CREDENTIAL_TITLE}.md"
+        assert token_path.exists()
+        assert token_path.read_text() == "fresh-token"
+        assert oct(token_path.stat().st_mode & 0o777) == "0o600"
+        assert captured["code"] == "code-abc"
+        assert captured["user_id"] == "u1"
+        out = capsys.readouterr().out
+        assert paste not in out
+        assert "code-abc" not in out
+
+    # @unit
+    # Scenario: T0-1-S8 (unit, mocked seams, no network): token reuse skips the browser flow
+    #   Given the token file <DATA_DIR>/u1/google-refresh-token.md already present
+    #   When run_auth runs
+    #   Then start_auth is NOT called and input_fn is NOT called (no browser, no pause)
+    #   And the existing token file is untouched
+    async def test_token_reuse_skips_browser_flow(self, tools, monkeypatch, capsys):
+        guard_urlopen(monkeypatch)
+        data_dir = Path(os.environ["DATA_DIR"])
+        token_path = data_dir / "u1" / f"{CREDENTIAL_TITLE}.md"
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("existing-token")
+        token_path.chmod(0o600)
+
+        def input_fn(prompt: str) -> str:
+            raise AssertionError("input_fn must not be called when the token file exists")
+
+        await hl.run_auth(tools, "u1", data_dir, input_fn=input_fn)
+
+        assert token_path.read_text() == "existing-token"
+        assert capsys.readouterr().out == ""

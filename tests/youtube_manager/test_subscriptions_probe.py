@@ -23,10 +23,10 @@ class TestCheckSetupSubscriptionsProbe:
     #   Then the subscriptions line is "subscriptions: ok (subscription feed checked)"
     #   And the overall line is "READY"
     async def test_probe_reports_subscription_feed_capability(self, tools, monkeypatch):
-        api_fake(
+        calls = api_fake(
             monkeypatch,
             pages={"PU0000": [listing_page([])], "WL": [listing_page([])]},
-            subscription_pages=[{"items": [sub_channel("UC0000")]}],
+            subscription_pages=[{"items": [sub_channel("UC0000", own_channel_id="UCown0000")]}],
             channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
         )
         guard_urlopen(monkeypatch)
@@ -38,6 +38,8 @@ class TestCheckSetupSubscriptionsProbe:
             "watch_later: ok (playlist checked)",
             "READY",
         ]
+        channel_calls = [params for method, params in calls if method == "channels.list"]
+        assert channel_calls == [{"part": "contentDetails", "id": "UC0000"}]
 
     # S10 [unit] — AC suggestion 2 (the report's exact scenario: "token has youtube scope" true, "can actually list subscription videos" false)
     # Scenario: check_setup distinguishes token scope from listing capability
@@ -51,7 +53,7 @@ class TestCheckSetupSubscriptionsProbe:
         api_fake(
             monkeypatch,
             pages={"WL": [listing_page([])]},
-            subscription_pages=[{"items": [sub_channel("UC0000")]}],
+            subscription_pages=[{"items": [sub_channel("UC0000", own_channel_id="UCown0000")]}],
             channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
             raise_for_playlist={"PU0000": _quota_error()},
         )

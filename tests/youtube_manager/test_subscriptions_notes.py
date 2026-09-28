@@ -87,7 +87,14 @@ class TestSubscriptionNotes:
     def test_channel_order_deterministic_tiebreak(self, tools, monkeypatch):
         published = "2026-01-01T00:00:00Z"
         raw = [
-            {"id": f"UC{i:04d}", "snippet": {"channelId": f"UC{i:04d}", "publishedAt": published}}
+            {
+                "id": f"UC{i:04d}",
+                "snippet": {
+                    "channelId": f"UC{i:04d}",
+                    "publishedAt": published,
+                    "resourceId": {"channelId": f"UC{i:04d}"},
+                },
+            }
             for i in range(SUBSCRIPTION_CHANNEL_CAP + 5)
         ]
 

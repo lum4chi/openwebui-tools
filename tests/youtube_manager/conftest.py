@@ -248,11 +248,21 @@ def guard_urlopen(monkeypatch) -> None:
     monkeypatch.setattr("youtube_manager.urllib.request.urlopen", blocked)
 
 
-def sub_channel(channel_id: str, title: str = "", published: str = "2026-01-01T00:00:00Z") -> dict:
-    """One subscriptions.list item keyed by channelId."""
+def sub_channel(
+    channel_id: str, title: str = "", published: str = "2026-01-01T00:00:00Z", own_channel_id: str | None = None
+) -> dict:
+    """One real-shape subscriptions.list item: the feed id lives in snippet.resourceId.channelId.
+
+    The subscriber's own snippet.channelId defaults to the feed id; pass own_channel_id to model own != feed.
+    """
     return {
         "id": channel_id,
-        "snippet": {"channelId": channel_id, "title": title, "publishedAt": published},
+        "snippet": {
+            "channelId": own_channel_id or channel_id,
+            "resourceId": {"channelId": channel_id},
+            "title": title,
+            "publishedAt": published,
+        },
     }
 
 

@@ -88,7 +88,7 @@ class TestFetchSubscriptions:
     # S2 [unit] — per-channel fetch uses the authenticated Data API call sequence, not RSS.
     #   Given the S1 happy-path mocks
     #   When gather_candidates(sources="subscriptions") runs
-    #   Then the recorded API calls include subscriptions.list(part=snippet,contentDetails, mine=true, maxResults=50)
+    #   Then the recorded API calls include subscriptions.list(part=snippet, mine=true, maxResults=50)
     #   And for each channel: channels.list(part=contentDetails, id=<channel_id>)
     #   And playlistItems.list(part=snippet, playlistId=<uploads>, maxResults="20")
     #   And videos.list(part="snippet,contentDetails,statistics") with the channel's video ids
@@ -99,7 +99,7 @@ class TestFetchSubscriptions:
 
         tools._fetch_subscriptions(20, [])
 
-        assert calls[0] == ("subscriptions.list", {"part": "snippet,contentDetails", "mine": "true", "maxResults": 50})
+        assert calls[0] == ("subscriptions.list", {"part": "snippet", "mine": "true", "maxResults": 50})
         channel_calls = [params for method, params in calls if method == "channels.list"]
         assert channel_calls == [
             {"part": "contentDetails", "id": "UC1"},
@@ -296,9 +296,9 @@ class TestFetchSubscriptions:
 
         assert [(ch.get("snippet") or {}).get("channelId") for ch in channels] == ["UC1", "UC2"]
         sub_calls = [params for method, params in calls if method == "subscriptions.list"]
-        assert sub_calls[0] == {"part": "snippet,contentDetails", "mine": "true", "maxResults": 50}
+        assert sub_calls[0] == {"part": "snippet", "mine": "true", "maxResults": 50}
         assert sub_calls[1] == {
-            "part": "snippet,contentDetails",
+            "part": "snippet",
             "mine": "true",
             "maxResults": 50,
             "pageToken": "page-2",

@@ -1411,7 +1411,7 @@ class Tools:
             items = listing.get("items") or []
             if not items:
                 return "ok (0 subscriptions)"
-            channel_id = (items[0].get("snippet") or {}).get("channelId") or ""
+            channel_id = ((items[0].get("snippet") or {}).get("resourceId") or {}).get("channelId") or ""
             uploads = self._channel_uploads(channel_id, user_id)
             self._uploads_items(uploads or "", 1, user_id)
             return "ok (subscription feed checked)"
@@ -1422,7 +1422,7 @@ class Tools:
         channels: list[dict] = []
         page_token: str | None = None
         while len(channels) < SUBSCRIPTION_CHANNEL_CAP:
-            params: dict[str, object] = {"part": "snippet,contentDetails", "mine": "true", "maxResults": 50}
+            params: dict[str, object] = {"part": "snippet", "mine": "true", "maxResults": 50}
             if page_token:
                 params["pageToken"] = page_token
             resp = _data_api_request(self.valves, "subscriptions.list", params, user_id=user_id)
@@ -1430,7 +1430,7 @@ class Tools:
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
-        channels.sort(key=lambda item: (item.get("snippet") or {}).get("channelId") or "")
+        channels.sort(key=lambda item: ((item.get("snippet") or {}).get("resourceId") or {}).get("channelId") or "")
         channels.sort(key=lambda item: (item.get("snippet") or {}).get("publishedAt") or "", reverse=True)
         return channels[:SUBSCRIPTION_CHANNEL_CAP]
 
@@ -1504,7 +1504,9 @@ class Tools:
         user_id: str | None = None,
     ) -> tuple[str, str] | None:
         snippet = channel.get("snippet") or {}
-        channel_id = (channel.get("contentDetails") or {}).get("channelId") or snippet.get("channelId") or ""
+        channel_id = (snippet.get("resourceId") or {}).get("channelId") or ""
+        if not channel_id:
+            return ("", "channel not found")
         items: list[dict] = []
         channel_entries: list[dict] = []
         try:

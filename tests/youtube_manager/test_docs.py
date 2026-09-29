@@ -5,7 +5,7 @@ Scenario T2-1-S1 (unit): docs are current
   Given the repository documentation
   When checked
   Then AGENTS.md "Existing tools" lists youtube_manager.py with a one-line capability summary
-  And README.md has a "YouTube Manager" section with the features list, a table covering all 7 valves,
+  And README.md has a "YouTube Manager" section with the features list, a table covering all 8 valves,
     usage examples, and the live-harness section naming `uv run python dev/youtube_live.py`
      plus the "tool reads Valves, not env vars" note
      and the re-auth note (delete `.data-live/<user_id>/google-refresh-token.md` to force a new browser auth)
@@ -48,6 +48,7 @@ VALVE_DEFAULTS = {
     "google_client_secret": '""',
     "google_refresh_token": '""',
     "digest_playlist_title": "Open WebUI Digest",
+    "watch_later_playlist_title": "Watch Later",
     "digest_max_items": "50",
     "digest_max_age_days": "30",
     "verbose": "False",
@@ -97,7 +98,7 @@ class TestAgentsExistingTools:
 
 class TestReadmeYouTubeManager:
     # Scenario T2-1-S1 (unit): docs are current
-    #   And README.md has a "YouTube Manager" section with the features list, a table covering all 7 valves,
+    #   And README.md has a "YouTube Manager" section with the features list, a table covering all 8 valves,
     #     usage examples, and the live-harness section naming `uv run python dev/youtube_live.py`
     #      plus the "tool reads Valves, not env vars" note
     #      and the re-auth note (delete `.data-live/<user_id>/google-refresh-token.md` to force a new browser auth)
@@ -110,7 +111,7 @@ class TestReadmeYouTubeManager:
         assert feature in _section(), f"feature {feature!r} missing from the YouTube Manager section"
 
     @pytest.mark.parametrize("valve, default", list(VALVE_DEFAULTS.items()))
-    def test_valves_table_covers_all_7_with_defaults(self, valve, default):
+    def test_valves_table_covers_all_8_with_defaults(self, valve, default):
         rows = [line for line in _section().split("\n") if line.lstrip().startswith("|")]
         for line in rows:
             cells = [cell.strip() for cell in line.split("|")]

@@ -50,7 +50,7 @@ def _canned() -> dict:
     }
     return dict(
         pages={
-            "WL": [
+            "PLWL": [
                 listing_page([]),
                 listing_page([item_row("it-wl-1", "vid-wl-1"), item_row("it-wl-2", "vid-wl-2")]),
             ],
@@ -58,9 +58,9 @@ def _canned() -> dict:
             "up2": [listing_page([playlist_item("vid-up2", "Up video 2", "Channel 2", "2026-01-02T00:00:00Z")])],
         },
         playlist_pages=[
+            listing_page([playlist_row("PLWL", "Watch Later")]),
             listing_page([playlist_row("PL1", "Playlist One"), playlist_row("PL2", "Playlist Two")]),
-            listing_page([]),
-            listing_page([]),
+            listing_page([playlist_row("PLWL", "Watch Later")]),
         ],
         subscription_pages=[
             {"items": []},
@@ -133,8 +133,9 @@ class TestAcceptanceRun:
         assert log
         for entry in log:
             assert set(entry) == {"method", "params", "user_id", "items"}
-        assert hl._wl_raw_items(log) == 2
-        assert hl._feed_counts(log) == {"up1": 1, "up2": 1}
+        title = tools.valves.watch_later_playlist_title
+        assert hl._wl_raw_items(log, title) == 2
+        assert hl._feed_counts(log, title) == {"up1": 1, "up2": 1}
 
 
 class TestMain:

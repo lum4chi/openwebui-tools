@@ -49,8 +49,10 @@ def _playlist_item(video_id):
     return {"contentDetails": {"videoId": video_id}} if video_id else {"id": "item-without-video"}
 
 
-def _api_fake(details, playlist_items):
-    """Route _data_api_request by method (Watch Later title lookup + literal WL); record (method, params)."""
+def _api_fake(details, playlist_items, found: bool | None = None):
+    """Route _data_api_request by method (Watch Later valve-title resolution); record (method, params)."""
+    if found is None:
+        found = bool(playlist_items)
     calls: list[tuple[str, dict]] = []
 
     def fake(valves, method, params, user_id=None):
@@ -58,8 +60,10 @@ def _api_fake(details, playlist_items):
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlists.list":
-            return {"items": [playlist_row("PL-mine", "Not Watch Later")]}
+            rows = [playlist_row("PLWL", "Watch Later")] if found else [playlist_row("PL-mine", "Not Watch Later")]
+            return {"items": rows}
         if method == "playlistItems.list":
+            assert params.get("playlistId") == "PLWL"
             return {"items": playlist_items}
         if method == "videos.list":
             return {"items": [details[i] for i in params["ids"].split(",")]}
@@ -102,15 +106,15 @@ class TestWatchLater:
     #   Then watch-later items appear as candidates
     #   And their duration/views come from the batched videos enrichment
     #   And items already present from other sources are deduped, not duplicated
-    # Scenario: T9-1 S1 Watch Later reads the canonical WL playlist directly
-    #   Given OAuth is configured
-    #   And the Data API seam serves playlists.list with no "Watch Later" or "View later" match
-    #   And the Data API seam serves playlistItems.list for playlistId "WL"
+    # Scenario: T9-1 S1 Watch Later reads the valve-title playlist resolved via playlists.list
+    #   Given OAuth is configured and the valve title playlist resolves to a real playlist id
+    #   And the Data API seam serves playlistItems.list for that resolved playlist id
     #   When _fetch_watch_later runs
-    #   Then the Watch Later title lookup sweeps playlists.list once per exact title
-    #     And playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
+    #   Then the Watch Later title lookup sweeps playlists.list once
+    #     And playlistItems.list is called with part "contentDetails", the resolved playlist id, and maxResults str(max_per_source)
     #     And channels.list is never called
     #     And the returned candidates are labelled "watch_later"
+    #   And when the valve title playlist is absent, the sweep still runs once and no playlistItems.list call is made
     @pytest.mark.parametrize(
         ("playlist_ids", "expected_ids", "search_overlap", "expected_video_calls", "detail_overrides"),
         [
@@ -134,7 +138,7 @@ class TestWatchLater:
                 {"wl-25": _detail("wl-25", duration="P9Y")},
             ),
             (
-                # no watch_later items -> one playlistItems.list call, no videos.list
+                # no watch_later items -> no playlistItems.list call, no videos.list
                 [],
                 [],
                 False,
@@ -176,13 +180,11 @@ class TestWatchLater:
         if not playlist_ids:
             assert calls == [
                 ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
-                ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
-                ("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "51"}),
             ]
         assert not any(method == "channels.list" for method, _ in calls)
         for method, params in calls:
             if method == "playlistItems.list":
-                assert params["playlistId"] == "WL"
+                assert params["playlistId"] == "PLWL"
                 assert params["maxResults"] == "51"
         if search_overlap:
             # first-seen (search) candidate wins the dedupe; watch-later copy dropped

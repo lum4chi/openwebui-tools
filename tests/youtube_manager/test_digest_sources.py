@@ -6,7 +6,7 @@ from googleapiclient.errors import HttpError
 
 from youtube_manager import TasteProfile, Tools
 
-from .conftest import api_fake, guard_urlopen, sub_channel, uploads_channel_reply
+from .conftest import api_fake, guard_urlopen, playlist_row, sub_channel, uploads_channel_reply
 
 
 def _http_error(code: int, reason: str) -> HttpError:
@@ -63,7 +63,8 @@ class TestDigestErrorSurface:
         tools.valves.verbose = True
         api_fake(
             monkeypatch,
-            pages={"WL": [{"items": []}]},
+            pages={"PLWL": [{"items": []}]},
+            playlist_pages=[{"items": [playlist_row("PLWL", "Watch Later")]}],
             subscription_pages=[{"items": [sub_channel("UC0000", "Chan 0", "2026-01-01T00:00:00Z")]}],
             channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
             raise_for_playlist={"PU0000": _http_error(404, "Not Found")},

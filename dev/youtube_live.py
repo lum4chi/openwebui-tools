@@ -46,6 +46,7 @@ OPTIONAL_DEFAULTS = {
     "YTM_DIGEST_PLAYLIST_TITLE": "Open WebUI Digest",
     "YTM_DIGEST_MAX_ITEMS": "50",
     "YTM_DIGEST_MAX_AGE_DAYS": "30",
+    "YTM_WATCH_LATER_PLAYLIST_TITLE": "Watch Later",
 }
 PLAYLISTS_HEADER = "=== Playlists (mine=true) ==="
 SYNTHESIZED_WL_ROW = 'Watch Later (WL) — alias "WL" (synthesized row; not a playlists.list result)'
@@ -80,6 +81,7 @@ def build_tools(env: dict[str, str], data_dir: Path) -> Tools:
     tools.valves.digest_playlist_title = env["YTM_DIGEST_PLAYLIST_TITLE"]
     tools.valves.digest_max_items = int(env["YTM_DIGEST_MAX_ITEMS"])
     tools.valves.digest_max_age_days = int(env["YTM_DIGEST_MAX_AGE_DAYS"])
+    tools.valves.watch_later_playlist_title = env["YTM_WATCH_LATER_PLAYLIST_TITLE"]
     tools.valves.verbose = env["YTM_VERBOSE"].lower() in ("1", "true", "yes")
     return tools
 
@@ -91,19 +93,24 @@ async def owui_call(fn, user_id: str, *args, **kwargs):
     return await fn(*args, **kwargs)
 
 
-def _item_count(result: object) -> int:
-    """Item count across both response shapes: raw bytes (real API path) or dict (api_fake convention)."""
+def _playlist_rows(result: object) -> list:
+    """Playlist rows across both response shapes: raw bytes (real API path) or dict (api_fake convention)."""
     if isinstance(result, (bytes, bytearray)):
         try:
             payload = json.loads(bytes(result).decode("utf-8"))
         except ValueError:
-            return 0
+            return []
     elif isinstance(result, dict):
         payload = result
     else:
-        return 0
+        return []
     items = payload.get("items") if isinstance(payload, dict) else None
-    return len(items) if isinstance(items, list) else 0
+    return items if isinstance(items, list) else []
+
+
+def _item_count(result: object) -> int:
+    """Item count across both response shapes: raw bytes (real API path) or dict (api_fake convention)."""
+    return len(_playlist_rows(result))
 
 
 def _failure_detail(err: BaseException) -> dict:
@@ -126,7 +133,8 @@ def instrument() -> list[dict]:
         except Exception as err:
             log.append({"method": method, "params": dict(params), "user_id": user_id, "error": _failure_detail(err)})
             raise
-        log.append({"method": method, "params": dict(params), "user_id": user_id, "items": _item_count(result)})
+        items = _playlist_rows(result) if method == "playlists.list" else _item_count(result)
+        log.append({"method": method, "params": dict(params), "user_id": user_id, "items": items})
         return result
 
     ym._data_api_execute = wrapper
@@ -185,57 +193,77 @@ async def _step_list_playlists(tools: Tools, user_id: str) -> tuple[str, bool, s
     return ("list_playlists", False, lines[0] if lines else out)
 
 
-def _wl_raw_items(log: list[dict]) -> int:
+def _resolved_wl_id(log: list[dict], title: str) -> str | None:
+    """The valve playlist id derived from logged playlists.list rows (trimmed exact title match, first match)."""
+    for entry in log:
+        if entry["method"] != "playlists.list" or "items" not in entry:
+            continue
+        for row in entry["items"]:
+            if ((row.get("snippet") or {}).get("title") or "").strip() == title.strip():
+                return row.get("id") or None
+    return None
+
+
+def _wl_raw_items(log: list[dict], title: str) -> int:
+    playlist_id = _resolved_wl_id(log, title)
+    if not playlist_id:
+        return 0
     counts = [
         entry["items"]
         for entry in log
-        if "items" in entry and entry["method"] == "playlistItems.list" and entry["params"].get("playlistId") == "WL"
+        if "items" in entry
+        and entry["method"] == "playlistItems.list"
+        and entry["params"].get("playlistId") == playlist_id
     ]
     return max(counts) if counts else 0
 
 
-def _feed_counts(log: list[dict]) -> dict[str, int]:
+def _feed_counts(log: list[dict], title: str) -> dict[str, int]:
+    excluded = _resolved_wl_id(log, title)
     counts: dict[str, int] = {}
     for entry in log:
         if "items" not in entry or entry["method"] != "playlistItems.list":
             continue
         playlist_id = entry["params"].get("playlistId")
-        if playlist_id in (None, "WL"):
+        if playlist_id in (None, excluded):
             continue
         counts[str(playlist_id)] = entry["items"]
     return counts
 
 
-def _evidence(source: str, log: list[dict]) -> str:
+def _evidence(source: str, log: list[dict], title: str) -> str:
     if source == "watch_later":
-        return f"wl_raw_items={_wl_raw_items(log)}"
-    feeds = ", ".join(f"{playlist_id}={items}" for playlist_id, items in sorted(_feed_counts(log).items()))
+        return f"wl_raw_items={_wl_raw_items(log, title)}"
+    feeds = ", ".join(f"{playlist_id}={items}" for playlist_id, items in sorted(_feed_counts(log, title).items()))
     return f"feeds={feeds}" if feeds else "feeds=(none)"
 
 
-async def _step_gather(tools: Tools, user_id: str, source: str, log: list[dict]) -> tuple[str, bool, str]:
+async def _step_gather(tools: Tools, user_id: str, source: str, log: list[dict], title: str) -> tuple[str, bool, str]:
     out = await owui_call(tools.gather_candidates, user_id, source)
     match = CANDIDATES_RE.search(out)
     count = int(match.group(1)) if match else 0
-    return (source, count > 0, f"candidates={count}; {_evidence(source, log)}")
+    return (source, count > 0, f"candidates={count}; {_evidence(source, log, title)}")
 
 
 async def run_acceptance(tools: Tools, env: dict[str, str], log: list[dict]) -> list[tuple[str, bool, str]]:
     """The 5 acceptance steps (exception-safe: tool methods return error strings; probe_identity catches)."""
     user_id = env["YTM_USER_ID"]
+    title = tools.valves.watch_later_playlist_title
     results: list[tuple[str, bool, str]] = []
     results.append(await _step_identity(tools, user_id))
     results.append(await _step_check_setup(tools, user_id))
     results.append(await _step_list_playlists(tools, user_id))
-    results.append(await _step_gather(tools, user_id, "watch_later", log))
-    results.append(await _step_gather(tools, user_id, "subscriptions", log))
+    results.append(await _step_gather(tools, user_id, "watch_later", log, title))
+    results.append(await _step_gather(tools, user_id, "subscriptions", log, title))
     return results
 
 
 def _render_api_line(entry: dict) -> str:
     base = f"api: {entry['method']} user_id={entry['user_id']}"
     if "items" in entry:
-        return f"{base} items={entry['items']} params={entry['params']}"
+        items = entry["items"]
+        count = len(items) if isinstance(items, list) else items
+        return f"{base} items={count} params={entry['params']}"
     error = entry["error"]
     status = "" if error["status"] is None else f" status={error['status']}"
     return f"{base} FAILED class={error['class']}{status} reason={error['reason']} params={entry['params']}"

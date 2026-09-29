@@ -1,4 +1,4 @@
-"""Watch Later notes: literal WL path, details-unavailable note, API failure surfacing, readiness probe.
+"""Watch Later notes: valve-title path, details-unavailable note, API failure surfacing, readiness probe.
 
 T3-1 (youtube-manager-bugfixes): watch_later zero-candidates note.
 """
@@ -33,7 +33,7 @@ def _detail(video_id: str) -> dict:
 
 
 def _wl_api_fake(monkeypatch, *, playlist_items: list[dict], video_details: dict):
-    """Route _data_api_request for the watch_later path (title lookup + literal WL); record (method, params)."""
+    """Route _data_api_request for the watch_later path (valve-title resolution); record (method, params)."""
     calls: list[tuple[str, dict]] = []
 
     def fake(valves, method, params, user_id=None):
@@ -41,12 +41,34 @@ def _wl_api_fake(monkeypatch, *, playlist_items: list[dict], video_details: dict
         if method == "channels.list":
             raise AssertionError("channels.list must never be called on the watch_later path")
         if method == "playlists.list":
-            return {"items": [playlist_row("PL-mine", "Not Watch Later")]}
+            return {"items": [playlist_row("PLwl", "Watch Later")]}
         if method == "playlistItems.list":
+            assert params.get("playlistId") == "PLwl"
             return {"items": playlist_items}
         if method == "videos.list":
             wanted = params["ids"].split(",")
             return {"items": [video_details[i] for i in wanted if i in video_details]}
+        raise AssertionError(f"unexpected API method {method}")
+
+    monkeypatch.setattr(youtube_manager, "_data_api_request", fake)
+    return calls
+
+
+def _probe_api_fake(monkeypatch, found: bool, raise_on: str | None = None) -> list[tuple[str, dict]]:
+    """Route _data_api_request for _watch_later_probe (valve-title sweep + optional resolved-id check)."""
+    calls: list[tuple[str, dict]] = []
+
+    def fake(valves, method, params, user_id=None):
+        calls.append((method, dict(params)))
+        if method == "channels.list":
+            raise AssertionError("channels.list must never be called on the watch_later path")
+        if method == "playlists.list":
+            if raise_on == "playlists.list":
+                raise ReauthNeeded("Google credential rejected by the Data API")
+            rows = [playlist_row("PLwl", "Watch Later")] if found else [playlist_row("PLother", "Not Watch Later")]
+            return {"items": rows}
+        if method == "playlistItems.list":
+            return {"items": []}
         raise AssertionError(f"unexpected API method {method}")
 
     monkeypatch.setattr(youtube_manager, "_data_api_request", fake)
@@ -63,15 +85,17 @@ class TestWatchLaterNotes:
     # @unit
     # Scenario: T9-1 S4 a Watch Later API failure surfaces through gather_candidates
     #   Given OAuth is configured
-    #   And playlistItems.list raises an HTTP 404 error for playlistId "WL"
+    #   And playlistItems.list raises an HTTP 404 error for the resolved id "PLwl"
     #   When gather_candidates runs with sources="watch_later"
     #   Then the result is exactly "Error: watch_later: HTTP 404: Not Found"
     async def test_watch_later_api_failure_404(self, tools, monkeypatch):
         def api(valves, method, params, user_id=None):
             if method == "channels.list":
                 raise AssertionError("channels.list must never be called on the watch_later path")
+            if method == "playlists.list":
+                return {"items": [playlist_row("PLwl", "Watch Later")]}
             if method == "playlistItems.list":
-                assert params == {"part": "contentDetails", "playlistId": "WL", "maxResults": "20"}
+                assert params == {"part": "contentDetails", "playlistId": "PLwl", "maxResults": "20"}
                 raise urllib.error.HTTPError(
                     "https://www.googleapis.com/youtube/v3/playlistItems",
                     404,
@@ -113,13 +137,13 @@ class TestWatchLaterNotes:
     #   When gather_candidates runs with watch_later
     #   Then N candidates are returned
     #   And no "watch_later skipped" line is emitted
-    # Scenario: T9-1 S1 Watch Later reads the canonical WL playlist directly
-    #   Given OAuth is configured
-    #   And the Data API seam serves playlists.list with no "Watch Later" or "View later" match
-    #   And the Data API seam serves playlistItems.list for playlistId "WL"
+    # Scenario: T9-1 S1 Watch Later reads the valve-title playlist resolved via playlists.list
+    #   Given OAuth is configured and the valve title playlist resolves to a real playlist id
+    #   And the Data API seam serves playlistItems.list for that resolved playlist id
     #   When _fetch_watch_later runs
-    #   Then the Watch Later title lookup sweeps playlists.list once per exact title
-    #     And playlistItems.list is called with part "contentDetails", playlistId "WL", and maxResults str(max_per_source)
+    #   Then the Watch Later title lookup sweeps playlists.list once
+    #     And playlistItems.list is called with the resolved playlist id and maxResults str(max_per_source)
+    #     And videos.list enriches the fetched items
     #     And channels.list is never called
     #     And the returned candidates are labelled "watch_later"
     async def test_happy_path_no_note(self, tools, monkeypatch):
@@ -131,9 +155,11 @@ class TestWatchLaterNotes:
 
         payload = await tools.gather_candidates(sources="watch_later")
 
-        assert calls[0] == ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50})
-        assert calls[1] == ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50})
-        assert calls[2] == ("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "20"})
+        assert calls == [
+            ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
+            ("playlistItems.list", {"part": "contentDetails", "playlistId": "PLwl", "maxResults": "20"}),
+            ("videos.list", {"part": "snippet,contentDetails", "ids": "v1,v2"}),
+        ]
         assert not any(method == "channels.list" for method, _ in calls)
         assert "=== Candidates (2) ===" in payload
         assert "Detail title v1" in payload
@@ -163,46 +189,42 @@ class TestWatchLaterNotes:
 
 
 class TestWatchLaterProbe:
-    """T9-1: Tools._watch_later_probe readiness probe (literal WL; no candidates, no notes)."""
+    """T9-1: Tools._watch_later_probe readiness probe (valve-title surrogate; no candidates, no notes)."""
 
     # @unit
-    # Scenario: T9-1 S2 check_setup is READY only when the WL probe succeeds
-    #   Given the OAuth fields are complete and the token status is valid
-    #   And Tools._watch_later_probe returns "ok (playlist checked)"
-    #   When check_setup runs
-    #   Then the result lines are exactly "search: ok", "subscriptions: ok", "watch_later: ok (playlist checked)", "READY"
-    async def test_probe_success_reports_ok(self, tools, monkeypatch):
-        calls: list[tuple[str, dict]] = []
+    # Scenario: T9-1 S2 check_setup is READY when the surrogate playlist is found and checkable
+    #   Given the OAuth fields are complete and the valve title playlist resolves to a real playlist id
+    #   When Tools._watch_later_probe runs
+    #   Then it returns "ok (surrogate playlist checked)"
+    #     And it swept playlists.list once and checked playlistItems.list with the resolved id, maxResults "1"
+    async def test_probe_found_reports_ok(self, tools, monkeypatch):
+        calls = _probe_api_fake(monkeypatch, found=True)
 
-        def api(valves, method, params, user_id=None):
-            calls.append((method, dict(params)))
-            if method == "channels.list":
-                raise AssertionError("channels.list must never be called on the watch_later path")
-            if method == "playlistItems.list":
-                return {"items": []}
-            raise AssertionError(f"unexpected API method {method}")
+        assert await tools._watch_later_probe() == "ok (surrogate playlist checked)"
+        assert calls == [
+            ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
+            ("playlistItems.list", {"part": "contentDetails", "playlistId": "PLwl", "maxResults": "1"}),
+        ]
 
-        monkeypatch.setattr(youtube_manager, "_data_api_request", api)
+    # @unit
+    # Scenario: T9-1 S2b check_setup is READY when the surrogate playlist is absent
+    #   Given the OAuth fields are complete and the valve title playlist does not resolve
+    #   When Tools._watch_later_probe runs
+    #   Then it returns "ok (surrogate playlist not found)"
+    #     And it swept playlists.list once and made NO playlistItems.list call
+    async def test_probe_not_found_reports_ok(self, tools, monkeypatch):
+        calls = _probe_api_fake(monkeypatch, found=False)
 
-        assert await tools._watch_later_probe() == "ok (playlist checked)"
-        assert calls == [("playlistItems.list", {"part": "contentDetails", "playlistId": "WL", "maxResults": "1"})]
+        assert await tools._watch_later_probe() == "ok (surrogate playlist not found)"
+        assert calls == [("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50})]
 
     # @unit
     # Scenario: T9-1 S3 check_setup is NOT READY when the WL probe fails
-    #   Given the OAuth fields are complete and the token status is valid
-    #   And Tools._watch_later_probe returns "CHECK FAILED - reauth"
-    #   When check_setup runs
-    #   Then the watch_later line is exactly "watch_later: CHECK FAILED - reauth"
-    #   And the final line is exactly "NOT READY"
+    #   Given the OAuth fields are complete and the playlists.list sweep raises ReauthNeeded
+    #   When Tools._watch_later_probe runs
+    #   Then the result is exactly "CHECK FAILED - reauth"
     async def test_probe_reauth_reports_check_failed(self, tools, monkeypatch):
-        def api(valves, method, params, user_id=None):
-            if method == "channels.list":
-                raise AssertionError("channels.list must never be called on the watch_later path")
-            if method == "playlistItems.list":
-                raise ReauthNeeded("Google credential rejected by the Data API")
-            raise AssertionError(f"unexpected API method {method}")
-
-        monkeypatch.setattr(youtube_manager, "_data_api_request", api)
+        _probe_api_fake(monkeypatch, found=True, raise_on="playlists.list")
 
         assert await tools._watch_later_probe() == "CHECK FAILED - reauth"
 

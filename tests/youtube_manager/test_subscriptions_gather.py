@@ -3,7 +3,7 @@
 import youtube_manager
 from youtube_manager import NOTE_TASTE, ReauthNeeded
 
-from .conftest import guard_urlopen, sample_taste_profile
+from .conftest import guard_urlopen, playlist_row, sample_taste_profile
 from .conftest import playlist_item as pi
 from .conftest import sub_channel as sc
 from .conftest import video_detail as vd
@@ -30,8 +30,10 @@ def _api_fake(
         if method == "channels.list":
             uploads = (uploads_by_channel or {}).get(params.get("id"))
             return {"items": [{"contentDetails": {"relatedPlaylists": {"uploads": uploads}}}] if uploads else []}
+        if method == "playlists.list":
+            return {"items": [playlist_row("PLWL", "Watch Later")]}
         if method == "playlistItems.list":
-            if params.get("playlistId") == "WL":
+            if params.get("playlistId") == "PLWL":
                 return {"items": watch_later_items or []}
             return {"items": (uploads_pages or {}).get(params.get("playlistId"), [])}
         if method == "videos.list":

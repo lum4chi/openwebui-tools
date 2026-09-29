@@ -89,23 +89,36 @@ class TestCountsGuards:
     # @unit
     # Scenario: T0-1-S5 (failure evidence): the WL/feed counters ignore failure entries
     #   Given an instrumentation log mixing success entries (items) and failure entries (error)
-    #   When _wl_raw_items / _feed_counts scan the log
+    #   And a playlists.list success entry whose row resolves the valve playlist id
+    #   When _wl_raw_items / _feed_counts scan the log (deriving the valve id from the logged row)
     #   Then they count only success entries (a failure entry carries no items and is skipped)
     def test_wl_raw_items_ignores_failure_entries(self):
         log = [
-            {"method": "playlistItems.list", "params": {"playlistId": "WL"}, "user_id": "u1", "items": 3},
+            {
+                "method": "playlists.list",
+                "params": {},
+                "user_id": "u1",
+                "items": [{"id": "PLWL", "snippet": {"title": "Watch Later"}}],
+            },
+            {"method": "playlistItems.list", "params": {"playlistId": "PLWL"}, "user_id": "u1", "items": 3},
             {
                 "method": "playlistItems.list",
-                "params": {"playlistId": "WL"},
+                "params": {"playlistId": "PLWL"},
                 "user_id": "u1",
                 "error": {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required"},
             },
         ]
 
-        assert hl._wl_raw_items(log) == 3
+        assert hl._wl_raw_items(log, "Watch Later") == 3
 
     def test_feed_counts_ignores_failure_entries(self):
         log = [
+            {
+                "method": "playlists.list",
+                "params": {},
+                "user_id": "u1",
+                "items": [{"id": "PLWL", "snippet": {"title": "Watch Later"}}],
+            },
             {"method": "playlistItems.list", "params": {"playlistId": "up1"}, "user_id": "u1", "items": 2},
             {
                 "method": "playlistItems.list",
@@ -115,7 +128,7 @@ class TestCountsGuards:
             },
         ]
 
-        assert hl._feed_counts(log) == {"up1": 2}
+        assert hl._feed_counts(log, "Watch Later") == {"up1": 2}
 
 
 class TestRenderApiLine:

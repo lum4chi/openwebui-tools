@@ -18,7 +18,7 @@ class TestCheckSetupCooldown:
 
     # @unit
     # Scenario: T1-1.S1 check_setup shows the bot-check cooldown clause on the search line
-    # Given a working OAuth setup (healthy token via _oauth_token, watch_later probe returns "ok (playlist checked)")
+    # Given a working OAuth setup (healthy token via _oauth_token, watch_later probe returns "ok (surrogate playlist checked)")
     # And the search bot-check cooldown is active (the injected _now clock is within SEARCH_BOT_CHECK_COOLDOWN_SECONDS of tools._search_bot_check_at)
     # When the agent calls check_setup
     # Then the first line is exactly "search: ok (bot-check cooldown active)"
@@ -36,7 +36,7 @@ class TestCheckSetupCooldown:
                 "youtube_manager._oauth_token",
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
-            patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_watch_later_probe", _probe_return("ok (surrogate playlist checked)")),
             patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()
@@ -46,7 +46,7 @@ class TestCheckSetupCooldown:
 
     # @unit
     # Scenario: T1-1.S2 regression guard: check_setup shows the plain search line when no cooldown is active
-    # Given a working OAuth setup (healthy token via _oauth_token, watch_later probe returns "ok (playlist checked)")
+    # Given a working OAuth setup (healthy token via _oauth_token, watch_later probe returns "ok (surrogate playlist checked)")
     # And no bot-check cooldown is active (tools._search_bot_check_at is None)
     # When the agent calls check_setup
     # Then the first line is exactly "search: ok"
@@ -58,7 +58,7 @@ class TestCheckSetupCooldown:
                 "youtube_manager._oauth_token",
                 return_value={"access_token": "tok", "refresh_token": "r", "expires_in": 3600},
             ),
-            patch.object(Tools, "_watch_later_probe", _probe_return("ok (playlist checked)")),
+            patch.object(Tools, "_watch_later_probe", _probe_return("ok (surrogate playlist checked)")),
             patch.object(Tools, "_subscriptions_probe", _probe_return("ok (subscription feed checked)")),
         ):
             result = await tools.check_setup()

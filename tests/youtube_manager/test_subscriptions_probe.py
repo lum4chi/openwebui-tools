@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from googleapiclient.errors import HttpError
 
-from .conftest import api_fake, guard_urlopen, listing_page, sub_channel, uploads_channel_reply
+from .conftest import api_fake, guard_urlopen, listing_page, playlist_row, sub_channel, uploads_channel_reply
 
 
 def _quota_error() -> HttpError:
@@ -25,7 +25,8 @@ class TestCheckSetupSubscriptionsProbe:
     async def test_probe_reports_subscription_feed_capability(self, tools, monkeypatch):
         calls = api_fake(
             monkeypatch,
-            pages={"PU0000": [listing_page([])], "WL": [listing_page([])]},
+            pages={"PU0000": [listing_page([])], "PLWL": [listing_page([])]},
+            playlist_pages=[{"items": [playlist_row("PLWL", "Watch Later")]}],
             subscription_pages=[{"items": [sub_channel("UC0000", own_channel_id="UCown0000")]}],
             channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
         )
@@ -35,7 +36,7 @@ class TestCheckSetupSubscriptionsProbe:
         assert result.splitlines() == [
             "search: ok",
             "subscriptions: ok (subscription feed checked)",
-            "watch_later: ok (playlist checked)",
+            "watch_later: ok (surrogate playlist checked)",
             "READY",
         ]
         channel_calls = [params for method, params in calls if method == "channels.list"]
@@ -47,12 +48,13 @@ class TestCheckSetupSubscriptionsProbe:
     #   And playlistItems.list raising HttpError 403 during the probe
     #   When check_setup runs
     #   Then the subscriptions line is "subscriptions: CHECK FAILED - HTTP 403: …"
-    #   And the watch_later line is still "watch_later: ok (playlist checked)"
+    #   And the watch_later line is still "watch_later: ok (surrogate playlist checked)"
     #   And the overall line is "NOT READY"
     async def test_probe_surfaces_http_403_during_listing(self, tools, monkeypatch):
         api_fake(
             monkeypatch,
-            pages={"WL": [listing_page([])]},
+            pages={"PLWL": [listing_page([])]},
+            playlist_pages=[{"items": [playlist_row("PLWL", "Watch Later")]}],
             subscription_pages=[{"items": [sub_channel("UC0000", own_channel_id="UCown0000")]}],
             channels_by_id={"UC0000": uploads_channel_reply("PU0000")},
             raise_for_playlist={"PU0000": _quota_error()},
@@ -63,7 +65,7 @@ class TestCheckSetupSubscriptionsProbe:
         assert result.splitlines() == [
             "search: ok",
             "subscriptions: CHECK FAILED - HTTP 403: You have exceeded your quota. (quotaExceeded)",
-            "watch_later: ok (playlist checked)",
+            "watch_later: ok (surrogate playlist checked)",
             "NOT READY",
         ]
 
@@ -77,7 +79,8 @@ class TestCheckSetupSubscriptionsProbe:
     async def test_probe_zero_subscriptions(self, tools, monkeypatch):
         api_fake(
             monkeypatch,
-            pages={"WL": [listing_page([])]},
+            pages={"PLWL": [listing_page([])]},
+            playlist_pages=[{"items": [playlist_row("PLWL", "Watch Later")]}],
             subscription_pages=[{"items": []}],
         )
         guard_urlopen(monkeypatch)
@@ -86,6 +89,6 @@ class TestCheckSetupSubscriptionsProbe:
         assert result.splitlines() == [
             "search: ok",
             "subscriptions: ok (0 subscriptions)",
-            "watch_later: ok (playlist checked)",
+            "watch_later: ok (surrogate playlist checked)",
             "READY",
         ]

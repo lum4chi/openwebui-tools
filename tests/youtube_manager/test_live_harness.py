@@ -98,10 +98,32 @@ class TestProductionTopology:
         assert tools.valves.digest_playlist_title == "Open WebUI Digest"
         assert tools.valves.digest_max_items == 50
         assert tools.valves.digest_max_age_days == 30
+        assert tools.valves.watch_later_playlist_title == "Watch Later"
         token_path = tmp_path / "data-live" / "u1" / f"{CREDENTIAL_TITLE}.md"
         assert not token_path.exists()
         assert os.environ["DATA_DIR"] == str(tmp_path / "data-live")
         assert ym._file_refresh_token("u1") is None
+
+    # @unit
+    # Scenario T1-2-C-S8 (unit): harness env drives the watch_later_playlist_title valve
+    #   Given a filled .env with YTM_WATCH_LATER_PLAYLIST_TITLE="My Later"
+    #   When the harness builds the tool
+    #   Then the watch_later_playlist_title valve equals "My Later"
+    #   # provenance: user instruction "the live harness must be able to set the new valve from the env"
+    def test_build_tools_watch_later_valve_from_env(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "YTM_GOOGLE_CLIENT_ID=client-id\n"
+            "YTM_GOOGLE_CLIENT_SECRET=client-secret\n"
+            "YTM_USER_ID=u1\n"
+            "YTM_WATCH_LATER_PLAYLIST_TITLE=My Later\n"
+        )
+        monkeypatch.setenv("DATA_DIR", str(tmp_path / "pre"))
+
+        env = hl.load_env(str(env_file))
+        tools = hl.build_tools(env, tmp_path / "data-live")
+
+        assert tools.valves.watch_later_playlist_title == "My Later"
 
 
 class TestOwuiCall:

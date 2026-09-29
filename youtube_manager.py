@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 2.1.1
+version: 2.2.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -1271,6 +1271,10 @@ class Tools:
             default="Open WebUI Digest",
             description="Title of the managed custom digest playlist (resolved by exact title match; created if absent; id cached in digest-state). The default Watch Later is never touched.",
         )
+        watch_later_playlist_title: str = Field(
+            default="Watch Later",
+            description="User-maintained playlist used as the Watch Later digest source; resolved by exact trimmed title match against playlists.list. If absent, Watch Later contributes 0 candidates.",
+        )
         digest_max_items: int = Field(
             default=50, ge=1, description="Policy cap: keep at most the newest N tool-added items"
         )
@@ -1352,24 +1356,24 @@ class Tools:
         return details
 
     def _watch_later_playlist_id(self, notes: list[str] | None, user_id: str | None) -> str | None:
-        """Resolve the real Watch Later playlist id by exact title match; None = fall back to the legacy "WL" alias."""
-        for title in ("Watch Later", "View later"):
-            try:
-                playlist_id = self._find_playlist_by_title(title, user_id)
-            except Exception as err:
-                _note_watch_later_title(
-                    notes, f'"{title}" title lookup failed ({_clean_exception(err)}); using legacy "WL" alias'
-                )
-                return None
-            if playlist_id:
-                return playlist_id
-        _note_watch_later_title(notes, 'no "Watch Later" or "View later" playlist found; using legacy "WL" alias')
+        """Resolve the real Watch Later playlist id from the valve title; None = absent or lookup failed."""
+        title = self.valves.watch_later_playlist_title
+        try:
+            playlist_id = self._find_playlist_by_title(title, user_id)
+        except Exception as err:
+            _note_watch_later_title(notes, f'"{title}" title lookup failed ({_clean_exception(err)})')
+            return None
+        if playlist_id:
+            return playlist_id
+        _note_watch_later_title(notes, f'no playlist titled "{title}" found')
         return None
 
     def _fetch_watch_later(
         self, max_per_source: int, notes: list[str] | None = None, user_id: str | None = None
     ) -> list[Candidate]:
-        playlist_id = self._watch_later_playlist_id(notes, user_id) or "WL"
+        playlist_id = self._watch_later_playlist_id(notes, user_id)
+        if not playlist_id:
+            return []
         resp = _data_api_request(
             self.valves,
             "playlistItems.list",
@@ -1390,15 +1394,18 @@ class Tools:
 
     async def _watch_later_probe(self, user_id: str | None = None) -> str:
         try:
+            playlist_id = self._find_playlist_by_title(self.valves.watch_later_playlist_title, user_id)
+            if not playlist_id:
+                return "ok (surrogate playlist not found)"
             _data_api_request(
                 self.valves,
                 "playlistItems.list",
-                {"part": "contentDetails", "playlistId": "WL", "maxResults": "1"},
+                {"part": "contentDetails", "playlistId": playlist_id, "maxResults": "1"},
                 user_id=user_id,
             )
         except Exception as err:
             return f"CHECK FAILED - {_failure_reason(err)}"
-        return "ok (playlist checked)"
+        return "ok (surrogate playlist checked)"
 
     async def _subscriptions_probe(self, user_id: str | None = None) -> str:
         try:
@@ -1840,6 +1847,7 @@ class Tools:
         return playlist_id, True
 
     def _find_playlist_by_title(self, title: str, user_id: str | None = None) -> str | None:
+        expected = title.strip()
         token = ""
         while True:
             params: dict = {"part": "snippet", "mine": True, "maxResults": 50}
@@ -1847,7 +1855,7 @@ class Tools:
                 params["pageToken"] = token
             resp = _data_api_request(self.valves, "playlists.list", params, user_id=user_id)
             for item in resp.get("items") or []:
-                if (item.get("snippet") or {}).get("title") == title:
+                if ((item.get("snippet") or {}).get("title") or "").strip() == expected:
                     return item.get("id") or None
             token = resp.get("nextPageToken") or ""
             if not token:

@@ -138,6 +138,7 @@ Personal YouTube digest: gathers candidates from Watch Later and subscribed chan
 - **Start auth** - `start_auth` prints the Google consent URL for the youtube scope
 - **Finish auth** - `finish_auth` exchanges the pasted code/redirect URL and stores the refresh token to a local credential file (automatic; no manual storage)
 - **Gather candidates** - `gather_candidates` from `watch_later`, `search`, or `subscriptions` sources (comma-separated)
+- **Watch Later source** - `watch_later` gathers from the user-maintained playlist named by the `watch_later_playlist_title` valve (default `Watch Later`), not the hidden system playlist
 - **Digest** - `digest` aggregates candidates, feedback stats, and source status into the LLM-facing digest
 - **List playlists** - `list_playlists` enumerates the channel's playlists
 - **Add to playlist** - `add_to_playlist` inserts a video into the managed digest playlist
@@ -160,6 +161,7 @@ Personal YouTube digest: gathers candidates from Watch Later and subscribed chan
    | `google_client_secret` | `""` | Google OAuth client secret |
    | `google_refresh_token` | `""` | Stored OAuth refresh token (scope: `https://www.googleapis.com/auth/youtube`) |
    | `digest_playlist_title` | `Open WebUI Digest` | Title of the managed digest playlist (resolved by exact title match; created if absent) |
+   | `watch_later_playlist_title` | `Watch Later` | User-maintained playlist used as the Watch Later source (resolved by exact trimmed title match; 0 candidates if absent) |
    | `digest_max_items` | `50` | Policy cap: keep at most the newest N tool-added items |
    | `digest_max_age_days` | `30` | Policy cap: drop tool-added items older than D days |
    | `verbose` | `False` | Include raw HTTP error detail in source notes |

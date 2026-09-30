@@ -33,6 +33,7 @@ TEMPLATE_SLOTS = [
     "YTM_GOOGLE_CLIENT_SECRET",
     "YTM_USER_ID",
     "YTM_DATA_DIR",
+    "YTM_WATCH_LATER_PLAYLIST_TITLE",
 ]
 
 
@@ -46,6 +47,11 @@ class TestEnvTemplate:
     #   And no refresh-token slot exists (the credential is acquired by the harness's browser auth,
     #     never pasted from a token file)
     #   And no value in the template is a secret (placeholders are empty or the DATA_DIR default)
+    # @unit
+    # Scenario: T1-5a-S1 (unit): env.template carries the watch-later playlist title slot
+    #   Given the committed env.template
+    #   When it is parsed as dotenv
+    #   Then the slots are exactly the initial-condition slots plus YTM_WATCH_LATER_PLAYLIST_TITLE
     def test_template_carries_exactly_the_initial_condition_slots(self):
         parsed = dotenv_values(str(_REPO_ROOT / "env.template"))
 

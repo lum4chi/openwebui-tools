@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # script-mode: make the repo root importable
@@ -51,6 +52,13 @@ OPTIONAL_DEFAULTS = {
 PLAYLISTS_HEADER = "=== Playlists (mine=true) ==="
 SYNTHESIZED_WL_ROW = 'Watch Later (WL) — alias "WL" (synthesized row; not a playlists.list result)'
 CANDIDATES_RE = re.compile(r"=== Candidates \((\d+)\) ===")
+
+
+def _clock() -> str:
+    """Local wall time, ISO-8601 with seconds precision (T1-5).
+
+    Module-level seam: tests monkeypatch this for deterministic timestamp pins."""
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def load_env(path: str = ".env") -> dict[str, str]:
@@ -114,27 +122,36 @@ def _item_count(result: object) -> int:
 
 
 def _failure_detail(err: BaseException) -> dict:
-    """Failure evidence for the instrumentation log: exception class + HTTP status (when present) + cleaned reason (no raw secrets)."""
-    return {"class": type(err).__name__, "status": ym._http_status(err), "reason": ym._clean_exception(err)}
+    """Failure evidence for the instrumentation log: exception class + HTTP status (when present) + cleaned reason (no raw secrets)
+    + str(err) capped at 200 chars so the report carries the exception message (T1-5)."""
+    return {
+        "class": type(err).__name__,
+        "status": ym._http_status(err),
+        "reason": ym._clean_exception(err),
+        "detail": str(err)[:200],
+    }
 
 
 def instrument() -> list[dict]:
     """Wrap ym._data_api_execute (resolved now — late binding, so a test patch is wrapped, not bypassed).
 
-    Every call is logged: a success entry ({method, params, user_id, items}) or, when the delegate
-    raises, a failure entry ({method, params, user_id, error}) carrying the cleaned reason — then the
-    exception is re-raised unchanged."""
+    Every call is logged WITH A CALL-TIME TIMESTAMP (T1-5): a success entry ({method, params, user_id,
+    ts, items}) or, when the delegate raises, a failure entry ({method, params, user_id, ts, error})
+    carrying the cleaned reason + str(err) detail — then the exception is re-raised unchanged."""
     log: list[dict] = []
     delegate = ym._data_api_execute
 
     def wrapper(valves, method: str, params: dict, user_id: str | None = None):
+        ts = _clock()
         try:
             result = delegate(valves, method, params, user_id)
         except Exception as err:
-            log.append({"method": method, "params": dict(params), "user_id": user_id, "error": _failure_detail(err)})
+            log.append(
+                {"method": method, "params": dict(params), "user_id": user_id, "ts": ts, "error": _failure_detail(err)}
+            )
             raise
         items = _playlist_rows(result) if method == "playlists.list" else _item_count(result)
-        log.append({"method": method, "params": dict(params), "user_id": user_id, "items": items})
+        log.append({"method": method, "params": dict(params), "user_id": user_id, "ts": ts, "items": items})
         return result
 
     ym._data_api_execute = wrapper
@@ -245,34 +262,41 @@ async def _step_gather(tools: Tools, user_id: str, source: str, log: list[dict],
     return (source, count > 0, f"candidates={count}; {_evidence(source, log, title)}")
 
 
-async def run_acceptance(tools: Tools, env: dict[str, str], log: list[dict]) -> list[tuple[str, bool, str]]:
-    """The 5 acceptance steps (exception-safe: tool methods return error strings; probe_identity catches)."""
+async def run_acceptance(tools: Tools, env: dict[str, str], log: list[dict]) -> list[tuple[str, bool, str, str]]:
+    """The 5 acceptance steps (exception-safe: tool methods return error strings; probe_identity catches).
+
+    Each result is (name, ok, detail, ts) with ts captured at step completion (T1-5)."""
     user_id = env["YTM_USER_ID"]
     title = tools.valves.watch_later_playlist_title
-    results: list[tuple[str, bool, str]] = []
-    results.append(await _step_identity(tools, user_id))
-    results.append(await _step_check_setup(tools, user_id))
-    results.append(await _step_list_playlists(tools, user_id))
-    results.append(await _step_gather(tools, user_id, "watch_later", log, title))
-    results.append(await _step_gather(tools, user_id, "subscriptions", log, title))
+    steps = [
+        _step_identity(tools, user_id),
+        _step_check_setup(tools, user_id),
+        _step_list_playlists(tools, user_id),
+        _step_gather(tools, user_id, "watch_later", log, title),
+        _step_gather(tools, user_id, "subscriptions", log, title),
+    ]
+    results: list[tuple[str, bool, str, str]] = []
+    for step in steps:
+        name, ok, detail = await step
+        results.append((name, ok, detail, _clock()))
     return results
 
 
 def _render_api_line(entry: dict) -> str:
-    base = f"api: {entry['method']} user_id={entry['user_id']}"
+    base = f"[{entry['ts']}] api: {entry['method']} user_id={entry['user_id']}"
     if "items" in entry:
         items = entry["items"]
         count = len(items) if isinstance(items, list) else items
         return f"{base} items={count} params={entry['params']}"
     error = entry["error"]
     status = "" if error["status"] is None else f" status={error['status']}"
-    return f"{base} FAILED class={error['class']}{status} reason={error['reason']} params={entry['params']}"
+    return f"{base} FAILED class={error['class']}{status} reason={error['reason']} detail={error['detail']} params={entry['params']}"
 
 
-def _render_report(results: list[tuple[str, bool, str]], log: list[dict]) -> str:
-    lines = [f"{'PASS' if ok else 'FAIL'}  {name}  {detail}" for name, ok, detail in results]
+def _render_report(results: list[tuple[str, bool, str, str]], log: list[dict], started: str) -> str:
+    step_lines = [f"[{ts}] {'PASS' if ok else 'FAIL'}  {name}  {detail}" for name, ok, detail, ts in results]
     api_lines = [_render_api_line(entry) for entry in log]
-    return "\n".join(lines + api_lines) + "\n"
+    return f"live-run started {started}\n" + "\n".join(step_lines + api_lines) + "\n"
 
 
 def main(argv=None) -> int:
@@ -282,15 +306,16 @@ def main(argv=None) -> int:
     except (FileNotFoundError, ValueError) as err:
         print(f"live harness: {err}")
         return 1
+    started = _clock()
     data_dir = Path(env["YTM_DATA_DIR"])
     tools = build_tools(env, data_dir)
     log = instrument()
     asyncio.run(run_auth(tools, env["YTM_USER_ID"], data_dir))
     results = asyncio.run(run_acceptance(tools, env, log))
-    report = _render_report(results, log)
+    report = _render_report(results, log, started)
     print(report)
     (data_dir / "live-run.log").write_text(report)
-    return 0 if all(ok for _, ok, _ in results) else 1
+    return 0 if all(ok for _, ok, _, _ in results) else 1
 
 
 if __name__ == "__main__":

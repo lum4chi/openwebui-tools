@@ -44,9 +44,15 @@ class TestFailureDetail:
     @pytest.mark.parametrize(
         ("err", "expected"),
         [
-            (ReauthNeeded("boom"), {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required"}),
-            (QuotaError("boom"), {"class": "QuotaError", "status": None, "reason": "quota reached"}),
-            (RuntimeError("boom"), {"class": "RuntimeError", "status": None, "reason": "unexpected error"}),
+            (
+                ReauthNeeded("boom"),
+                {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required", "detail": "boom"},
+            ),
+            (QuotaError("boom"), {"class": "QuotaError", "status": None, "reason": "quota reached", "detail": "boom"}),
+            (
+                RuntimeError("boom"),
+                {"class": "RuntimeError", "status": None, "reason": "unexpected error", "detail": "boom"},
+            ),
         ],
     )
     def test_failure_detail_reuses_tool_maskers(self, err, expected):
@@ -59,7 +65,46 @@ class TestFailureDetail:
             "class": "HttpError",
             "status": 404,
             "reason": "not found - the resource no longer exists",
+            "detail": str(err)[:200],
         }
+
+
+class TestFailedLineDetail:
+    # @unit
+    # Scenario T1-5-S2 (unit): a failed api line logs the exception message, not only class and the generic reason
+    #   # trace: dispatch task 3 — "FAILED lines must log the exception message (str(exc)), not only class + the generic 'unexpected error'"
+    #   Given an instrumented _data_api_execute that raises TypeError("Got an unexpected keyword argument ids")
+    #   When the api line is rendered for that failure
+    #   Then the line carries class=TypeError and the masked reason from the tool masker
+    #   And the line carries detail= with the exception's str(exc) text
+    #   And a detail longer than 200 characters is truncated
+    #   # clock seam: the injected fixed clock flows into the log entry ts and the rendered [ts] prefix
+    def test_failed_line_carries_str_exc_detail(self, tools, monkeypatch):
+        api_fake(monkeypatch, pages={}, raise_for={"videos.list": TypeError("Got an unexpected keyword argument ids")})
+        monkeypatch.setattr(hl, "_clock", lambda: "2026-09-30T12:00:00")
+        log = hl.instrument()
+
+        with pytest.raises(TypeError):
+            ym._data_api_execute(tools.valves, "videos.list", {"part": "snippet", "id": "v1"}, user_id="u1")
+
+        line = hl._render_api_line(log[0])
+
+        assert line == (
+            "[2026-09-30T12:00:00] api: videos.list user_id=u1 FAILED class=TypeError "
+            "reason=unexpected error detail=Got an unexpected keyword argument ids params={'part': 'snippet', 'id': 'v1'}"
+        )
+
+    def test_failed_line_detail_capped_at_200_chars(self, tools, monkeypatch):
+        api_fake(monkeypatch, pages={}, raise_for={"videos.list": TypeError("x" * 250)})
+        log = hl.instrument()
+
+        with pytest.raises(TypeError):
+            ym._data_api_execute(tools.valves, "videos.list", {"part": "snippet", "id": "v1"}, user_id="u1")
+
+        line = hl._render_api_line(log[0])
+
+        assert f"detail={'x' * 200}" in line
+        assert "x" * 201 not in line
 
 
 class TestInstrumentFailure:
@@ -78,11 +123,17 @@ class TestInstrumentFailure:
 
         assert len(log) == 1
         entry = log[0]
-        assert set(entry) == {"method", "params", "user_id", "error"}
+        assert set(entry) == {"method", "params", "user_id", "ts", "error"}  # T1-5 re-pin: + call-time ts
         assert entry["method"] == "channels.list"
         assert entry["params"] == {"part": "snippet", "mine": True}
         assert entry["user_id"] == "u1"
-        assert entry["error"] == {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required"}
+        assert entry["ts"]
+        assert entry["error"] == {
+            "class": "ReauthNeeded",
+            "status": None,
+            "reason": "reauthentication required",
+            "detail": "boom",  # T1-5: str(err) capped at 200
+        }
 
 
 class TestCountsGuards:
@@ -143,12 +194,18 @@ class TestRenderApiLine:
             "method": "playlists.list",
             "params": {},
             "user_id": "u1",
-            "error": {"class": "HttpError", "status": 404, "reason": "not found - the resource no longer exists"},
+            "ts": "2026-09-30T12:00:00",
+            "error": {
+                "class": "HttpError",
+                "status": 404,
+                "reason": "not found - the resource no longer exists",
+                "detail": "boom",
+            },
         }
 
         assert hl._render_api_line(entry) == (
-            "api: playlists.list user_id=u1 FAILED class=HttpError status=404 "
-            "reason=not found - the resource no longer exists params={}"
+            "[2026-09-30T12:00:00] api: playlists.list user_id=u1 FAILED class=HttpError status=404 "
+            "reason=not found - the resource no longer exists detail=boom params={}"
         )
 
     def test_failure_line_without_status(self):
@@ -156,18 +213,27 @@ class TestRenderApiLine:
             "method": "channels.list",
             "params": {},
             "user_id": "u1",
-            "error": {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required"},
+            "ts": "2026-09-30T12:00:00",
+            "error": {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required", "detail": "boom"},
         }
 
-        assert (
-            hl._render_api_line(entry)
-            == "api: channels.list user_id=u1 FAILED class=ReauthNeeded reason=reauthentication required params={}"
+        assert hl._render_api_line(entry) == (
+            "[2026-09-30T12:00:00] api: channels.list user_id=u1 FAILED class=ReauthNeeded "
+            "reason=reauthentication required detail=boom params={}"
         )
 
-    def test_success_line_unchanged(self):
-        entry = {"method": "playlistItems.list", "params": {"playlistId": "WL"}, "user_id": "u1", "items": 5}
+    def test_success_line_carries_timestamp(self):
+        entry = {
+            "method": "playlistItems.list",
+            "params": {"playlistId": "WL"},
+            "user_id": "u1",
+            "ts": "2026-09-30T12:00:00",
+            "items": 5,
+        }
 
-        assert hl._render_api_line(entry) == "api: playlistItems.list user_id=u1 items=5 params={'playlistId': 'WL'}"
+        assert hl._render_api_line(entry) == (
+            "[2026-09-30T12:00:00] api: playlistItems.list user_id=u1 items=5 params={'playlistId': 'WL'}"
+        )
 
 
 class TestRenderReport:
@@ -177,25 +243,41 @@ class TestRenderReport:
     #   When _render_report renders the report
     #   Then each step is a PASS/FAIL line and each call is an api: line (failure or success)
     def test_render_report_renders_failure_and_success_lines(self):
-        results = [("identity", False, "no channel resolved: reauthentication required")]
+        # T1-5 re-pin: 4-tuple results, ts-carrying entries, run-start line + [ts] prefixes.
+        results = [("identity", False, "no channel resolved: reauthentication required", "2026-09-30T12:00:01")]
         log = [
             {
                 "method": "channels.list",
                 "params": {"part": "snippet"},
                 "user_id": "u1",
-                "error": {"class": "ReauthNeeded", "status": None, "reason": "reauthentication required"},
+                "ts": "2026-09-30T12:00:02",
+                "error": {
+                    "class": "ReauthNeeded",
+                    "status": None,
+                    "reason": "reauthentication required",
+                    "detail": "boom",
+                },
             },
-            {"method": "playlistItems.list", "params": {"playlistId": "WL"}, "user_id": "u1", "items": 2},
+            {
+                "method": "playlistItems.list",
+                "params": {"playlistId": "WL"},
+                "user_id": "u1",
+                "ts": "2026-09-30T12:00:03",
+                "items": 2,
+            },
         ]
 
-        lines = hl._render_report(results, log).splitlines()
+        lines = hl._render_report(results, log, "2026-09-30T12:00:00").splitlines()
 
-        assert lines[0] == "FAIL  identity  no channel resolved: reauthentication required"
-        assert lines[1] == (
-            "api: channels.list user_id=u1 FAILED class=ReauthNeeded "
-            "reason=reauthentication required params={'part': 'snippet'}"
+        assert lines[0] == "live-run started 2026-09-30T12:00:00"
+        assert lines[1] == "[2026-09-30T12:00:01] FAIL  identity  no channel resolved: reauthentication required"
+        assert lines[2] == (
+            "[2026-09-30T12:00:02] api: channels.list user_id=u1 FAILED class=ReauthNeeded "
+            "reason=reauthentication required detail=boom params={'part': 'snippet'}"
         )
-        assert lines[2] == "api: playlistItems.list user_id=u1 items=2 params={'playlistId': 'WL'}"
+        assert (
+            lines[3] == "[2026-09-30T12:00:03] api: playlistItems.list user_id=u1 items=2 params={'playlistId': 'WL'}"
+        )
 
 
 class TestStepIdentity:
@@ -233,15 +315,16 @@ class TestAcceptanceRunFailure:
 
         results = await hl.run_acceptance(tools, {"YTM_USER_ID": "u1"}, log)
 
-        assert [name for name, _, _ in results] == [
+        assert [name for name, _, _, _ in results] == [
             "identity",
             "check_setup",
             "list_playlists",
             "watch_later",
             "subscriptions",
         ]
-        assert all(not ok for _, ok, _ in results)
+        assert all(not ok for _, ok, _, _ in results)
         assert "reauthentication required" in results[0][2]
+        assert all(ts for _, _, _, ts in results)  # T1-5 re-pin: 4-tuple step results
         assert log
         for entry in log:
-            assert set(entry) == {"method", "params", "user_id", "error"}
+            assert set(entry) == {"method", "params", "user_id", "ts", "error"}  # T1-5 re-pin: + call-time ts

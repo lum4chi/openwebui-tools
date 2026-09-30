@@ -128,17 +128,44 @@ class TestAcceptanceRun:
 
         results = await hl.run_acceptance(tools, {"YTM_USER_ID": "u1"}, log)
 
-        names = [name for name, _, _ in results]
+        names = [name for name, _, _, _ in results]
         assert names == ["identity", "check_setup", "list_playlists", "watch_later", "subscriptions"]
-        assert all(ok for _, ok, _ in results)
+        assert all(ok for _, ok, _, _ in results)
         assert "chan-self" in results[0][2]
-
+        assert all(ts for _, _, _, ts in results)  # T1-5 re-pin: every step result carries a completion ts
         assert log
         for entry in log:
-            assert set(entry) == {"method", "params", "user_id", "items"}
+            assert set(entry) == {"method", "params", "user_id", "items", "ts"}  # T1-5 re-pin: + call-time ts
+            assert entry["ts"]
         title = tools.valves.watch_later_playlist_title
         assert hl._wl_raw_items(log, title) == 2
         assert hl._feed_counts(log, title) == {"up1": 1, "up2": 1}
+
+
+class TestTimestampedReport:
+    # @unit
+    # Scenario T1-5-S1 (unit): the run output carries a run-start, per-api-line and per-step timestamp
+    #   # trace: user (b) adopted request — "harness output must carry a run-start timestamp + per-api-line + per-step timestamps so time gaps are assessable in future runs"
+    #   Given a canned 5-step harness run with an injected fixed clock
+    #   When the report is rendered
+    #   Then the first output line is a run-start line carrying the clock timestamp
+    #   And every api line carries a timestamp
+    #   And every step result line carries a timestamp
+    async def test_report_carries_run_start_and_per_line_timestamps(self, tools, monkeypatch):
+        _patch_seams(monkeypatch, "dict")
+        ts = "2026-09-30T12:00:00"
+        monkeypatch.setattr(hl, "_clock", lambda: ts)
+        log = hl.instrument()
+
+        results = await hl.run_acceptance(tools, {"YTM_USER_ID": "u1"}, log)
+        lines = hl._render_report(results, log, ts).splitlines()
+
+        assert lines[0] == f"live-run started {ts}"
+        step_lines = lines[1:6]
+        api_lines = lines[6:]
+        assert len(step_lines) == 5
+        assert all(line.startswith(f"[{ts}] ") for line in step_lines)
+        assert api_lines and all(line.startswith(f"[{ts}] api: ") for line in api_lines)
 
 
 class TestMain:

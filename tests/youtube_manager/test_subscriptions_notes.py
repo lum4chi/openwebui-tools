@@ -40,7 +40,7 @@ def _stub_api(
             return {"items": items_by_uploads.get(playlist_id, [])}
         if method == "videos.list":
             detail_map = details or {}
-            ids = [vid for vid in str(params.get("ids", "")).split(",") if vid]
+            ids = [vid for vid in str(params.get("id", "")).split(",") if vid]
             return {"items": [detail_map[vid] for vid in ids if vid in detail_map]}
         raise AssertionError(f"unexpected API method {method}")
 

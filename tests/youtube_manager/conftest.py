@@ -231,7 +231,7 @@ def api_fake(
         if method == "videos.list":
             if videos is None:
                 raise AssertionError("unexpected videos.list")
-            ids = [vid for vid in str(params.get("ids", "")).split(",") if vid]
+            ids = [vid for vid in str(params.get("id", "")).split(",") if vid]
             return {"items": [videos[vid] for vid in ids if vid in videos]}
         raise AssertionError(f"unexpected API method {method}")
 

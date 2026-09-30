@@ -65,6 +65,14 @@ class TestFetchSubscriptions:
     #   Then 5 candidates are returned, each carrying video_id, title, channel_name, channel_id, published as YYYY-MM-DD, duration_sec, views, description
     #   And candidates are sorted newest-first across channels with sources ["subscriptions"]
     #   And the note line is "subscriptions: 2 ok, 0 failed, 5 candidates"
+    # @unit
+    # Scenario T1-4-S3 (unit): subscription feeds surface candidates from real-shaped videos.list responses
+    #   # trace: user's verbatim live run "FAIL subscriptions candidates=0; feeds=<25 distinct channels, each 17-20 items>"
+    #   Given 3 subscription feeds each yielding 2 uploads via the mocked channels.list and playlistItems.list responses
+    #   And the mocked videos.list response holds one real-shaped item for each of the 6 video ids
+    #   When gather_candidates is called with sources "subscriptions"
+    #   Then no exception escapes gather_candidates
+    #   And 6 candidates are returned across the 3 feeds carrying the per-feed channel ids
     def test_s1_returns_candidates_via_data_api(self, tools, monkeypatch):
         _happy_api(monkeypatch)
         guard_urlopen(monkeypatch)
@@ -115,7 +123,7 @@ class TestFetchSubscriptions:
             "snippet,contentDetails,statistics",
             "snippet,contentDetails,statistics",
         ]
-        assert [p["ids"] for p in video_calls] == ["V1,V2,V3", "V4,V5"]
+        assert [p["id"] for p in video_calls] == ["V1,V2,V3", "V4,V5"]
 
     # S3 [unit] — one failing channel does not sink the rest.
     #   Given 2 channels where U2's playlistItems.list raises HttpError 403

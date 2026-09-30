@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 2.2.0
+version: 2.2.1
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -349,26 +349,37 @@ def _published_from_api(value: object) -> str | None:
     return value[:10]
 
 
-def candidates_from_api(items: list[dict], source: str) -> list[Candidate]:
+def _candidate_from_api_item(item: dict, source: str) -> Candidate:
+    """Map one videos.list item to a Candidate; raises on malformed items (the caller skips and reports)."""
+    video_id = item.get("id")
+    snippet = item.get("snippet") or {}
+    if not isinstance(video_id, str) or not video_id or not snippet:
+        raise ValueError("no usable id or snippet")
+    content = item.get("contentDetails") or {}
+    views = snippet.get("viewCount")
+    return Candidate(
+        video_id=video_id,
+        title=snippet.get("title") or "",
+        channel_name=snippet.get("channelTitle") or "",
+        channel_id=snippet.get("channelId"),
+        duration_sec=_iso_duration_to_sec(content.get("duration")),
+        views=int(views) if views is not None else None,
+        published=_published_from_api(snippet.get("publishedAt")),
+        description=snippet.get("description"),
+        tags=snippet.get("tags") or [],
+        sources=[source],
+    )
+
+
+def candidates_from_api(items: list[dict], source: str, notes: list[str] | None = None) -> list[Candidate]:
     cands: list[Candidate] = []
+    skipped: list[str] = []
     for item in items:
-        snippet = item.get("snippet") or {}
-        content = item.get("contentDetails") or {}
-        views = snippet.get("viewCount")
-        cands.append(
-            Candidate(
-                video_id=item.get("id", ""),
-                title=snippet.get("title") or "",
-                channel_name=snippet.get("channelTitle") or "",
-                channel_id=snippet.get("channelId"),
-                duration_sec=_iso_duration_to_sec(content.get("duration")),
-                views=int(views) if views is not None else None,
-                published=_published_from_api(snippet.get("publishedAt")),
-                description=snippet.get("description"),
-                tags=snippet.get("tags") or [],
-                sources=[source],
-            )
-        )
+        try:
+            cands.append(_candidate_from_api_item(item, source))
+        except Exception as err:
+            skipped.append(f"{item.get('id') or 'unknown'} ({type(err).__name__})")
+    _note_skipped_videos(notes, source, skipped)
     return cands
 
 
@@ -407,21 +418,30 @@ def _upload_entry(item: dict, video_id: str, detail: dict | None, channel_id: st
 
 
 def _upload_entries(
-    items: list[dict], details: dict[str, dict], channel_id: str, drop_counts: dict[str, int] | None = None
+    items: list[dict],
+    details: dict[str, dict],
+    channel_id: str,
+    drop_counts: dict[str, int] | None = None,
+    notes: list[str] | None = None,
 ) -> list[dict]:
     entries: list[dict] = []
     raw_count = 0
     no_video_count = 0
+    skipped: list[str] = []
     for item in items:
         raw_count += 1
         video_id = _upload_video_id(item)
         if video_id is None:
             no_video_count += 1
         else:
-            entries.append(_upload_entry(item, video_id, details.get(video_id), channel_id))
+            try:
+                entries.append(_upload_entry(item, video_id, details.get(video_id), channel_id))
+            except Exception as err:
+                skipped.append(f"{video_id} ({type(err).__name__})")
     if drop_counts is not None:
         drop_counts["raw_entries"] = drop_counts.get("raw_entries", 0) + raw_count
         drop_counts["no_video_id"] = drop_counts.get("no_video_id", 0) + no_video_count
+    _note_skipped_videos(notes, "subscriptions", skipped)
     return entries
 
 
@@ -1219,6 +1239,12 @@ def _note_details_unavailable(notes: list[str] | None, video_ids: list[str], res
         _note_watch_later(notes, "details unavailable")
 
 
+def _note_skipped_videos(notes: list[str] | None, source: str, skipped: list[str]) -> None:
+    """Report skipped (malformed) videos as {source} skipped {n} video(s): {id} ({reason}) entries."""
+    if notes is not None and skipped:
+        notes.append(f"{source} skipped {len(skipped)} video(s): " + ", ".join(skipped))
+
+
 def _subscription_zero_suffix(entries: list[dict], drop_counts: dict[str, int] | None = None) -> str:
     if entries:
         return "capped entries produced no candidates"
@@ -1348,11 +1374,11 @@ class Tools:
         details: dict[str, dict] = {}
         for start in range(0, len(video_ids), 50):
             chunk = video_ids[start : start + 50]
-            resp = _data_api_request(
-                self.valves, "videos.list", {"part": part, "ids": ",".join(chunk)}, user_id=user_id
-            )
+            resp = _data_api_request(self.valves, "videos.list", {"part": part, "id": ",".join(chunk)}, user_id=user_id)
             for item in resp.get("items") or []:
-                details[item["id"]] = item
+                video_id = item.get("id")
+                if isinstance(video_id, str) and video_id:
+                    details[video_id] = item
         return details
 
     def _watch_later_playlist_id(self, notes: list[str] | None, user_id: str | None) -> str | None:
@@ -1390,7 +1416,7 @@ class Tools:
         if not video_ids:
             _note_watch_later_zero(notes)
         _note_details_unavailable(notes, video_ids, resolved)
-        return candidates_from_api(resolved, "watch_later")
+        return candidates_from_api(resolved, "watch_later", notes)
 
     async def _watch_later_probe(self, user_id: str | None = None) -> str:
         try:
@@ -1456,7 +1482,7 @@ class Tools:
         ok = 0
         drop_counts: dict[str, int] = {}
         for channel in channels:
-            result = self._collect_channel(channel, entries, max_per_source, drop_counts, user_id)
+            result = self._collect_channel(channel, entries, max_per_source, drop_counts, user_id, notes)
             if result is None:
                 ok += 1
             else:
@@ -1509,6 +1535,7 @@ class Tools:
         max_per_source: int,
         drop_counts: dict[str, int] | None = None,
         user_id: str | None = None,
+        notes: list[str] | None = None,
     ) -> tuple[str, str] | None:
         snippet = channel.get("snippet") or {}
         channel_id = (snippet.get("resourceId") or {}).get("channelId") or ""
@@ -1524,7 +1551,7 @@ class Tools:
             details = self._video_details(
                 _upload_video_ids(items), part="snippet,contentDetails,statistics", user_id=user_id
             )
-            channel_entries = _upload_entries(items, details, channel_id, drop_counts)
+            channel_entries = _upload_entries(items, details, channel_id, drop_counts, notes)
         except Exception as err:  # per-channel isolation: one bad Data API channel must not sink the rest
             return (channel_id, _failure_reason(err))
         if not items and drop_counts is not None:

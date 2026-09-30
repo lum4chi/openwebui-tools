@@ -38,7 +38,7 @@ def _api_fake(
             return {"items": (uploads_pages or {}).get(params.get("playlistId"), [])}
         if method == "videos.list":
             detail_map = details or {}
-            ids = [vid for vid in str(params.get("ids", "")).split(",") if vid]
+            ids = [vid for vid in str(params.get("id", "")).split(",") if vid]
             return {"items": [detail_map[vid] for vid in ids if vid in detail_map]}
         raise AssertionError(f"unexpected API method {method}")
 
@@ -119,6 +119,36 @@ class TestGatherSubscriptions:
         method, params = calls[0]
         assert method == "subscriptions.list"
         assert params["mine"] == "true" and params["part"] == "snippet"
+
+    # @unit
+    # Scenario T1-4-S5 (unit): a malformed video in a subscription channel batch is skipped within the channel
+    #   Given a subscription channel whose videos.list batch holds one healthy video and one malformed item
+    #   When gather_candidates is called with sources "subscriptions"
+    #   Then no exception escapes gather_candidates
+    #   And the healthy video is still returned as a candidate for that feed
+    #   And the skip is reported via the notes and the per-channel failure reporting for channel-level errors is unchanged
+    async def test_malformed_channel_video_skipped_within_channel(self, tools, monkeypatch):
+        _api_fake(
+            monkeypatch,
+            channels=[sc("UC1", "One")],
+            uploads_by_channel={"UC1": "PU1"},
+            uploads_pages={
+                "PU1": _page(
+                    pi("S1", "S1", "One", "2026-09-12T10:00:00Z"),
+                    pi("S2", "S2", "One", "2026-09-11T09:00:00Z"),
+                )
+            },
+            details={"S1": vd("S1", title="Video S1"), "S2": vd("S2", title="Video S2", views="not-a-number")},
+        )
+        guard_urlopen(monkeypatch)
+        captured = _capture_candidates(monkeypatch)
+
+        payload = await tools.gather_candidates(sources="subscriptions")
+
+        assert not payload.startswith("Error")
+        assert [c.video_id for c in captured[0]] == ["S1"]
+        assert "subscriptions: 1 ok, 0 failed, 1 candidates" in payload
+        assert "subscriptions skipped 1 video(s): S2 (ValueError)" in payload
 
     # T2-2 Given same video id in watch_later and subscriptions; When gather both; Then one candidate, union sources, first-seen wins
     async def test_cross_source_dedupe_union(self, tools, monkeypatch):

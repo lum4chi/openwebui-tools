@@ -119,7 +119,7 @@ def _api_fake(monkeypatch, video_ids=("wl1",)):
         if method == "playlistItems.list":
             return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
         if method == "videos.list":
-            return {"items": [details[i] for i in params["ids"].split(",")]}
+            return {"items": [details[i] for i in params["id"].split(",")]}
         if method == "subscriptions.list":
             return {"items": []}  # no channels -> source attempted, yields 0 candidates
         raise AssertionError(f"unexpected API method {method}")

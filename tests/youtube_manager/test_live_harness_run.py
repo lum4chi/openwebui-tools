@@ -67,7 +67,10 @@ def _canned() -> dict:
             {"items": [sub_channel("ch1", "Channel 1"), sub_channel("ch2", "Channel 2")]},
         ],
         channels_by_id=channels_by_id,
-        videos={vid: video_detail(vid) for vid in ("vid-wl-1", "vid-wl-2", "vid-up1", "vid-up2")},
+        videos={
+            vid: video_detail(vid, duration="PT1M30S", title=f"Video {vid}")
+            for vid in ("vid-wl-1", "vid-wl-2", "vid-up1", "vid-up2")
+        },
     )
 
 

@@ -66,7 +66,7 @@ def _api_fake(details, playlist_items, found: bool | None = None):
             assert params.get("playlistId") == "PLWL"
             return {"items": playlist_items}
         if method == "videos.list":
-            return {"items": [details[i] for i in params["ids"].split(",")]}
+            return {"items": [details[i] for i in params["id"].split(",")]}
         raise AssertionError(f"unexpected API method {method}")
 
     return fake, calls
@@ -175,8 +175,8 @@ class TestWatchLater:
         video_calls = [params for method, params in calls if method == "videos.list"]
         assert len(video_calls) == expected_video_calls
         if expected_video_calls == 2:
-            assert video_calls[0]["ids"] == ",".join(expected_ids[:50])
-            assert video_calls[1]["ids"] == expected_ids[50]
+            assert video_calls[0]["id"] == ",".join(expected_ids[:50])
+            assert video_calls[1]["id"] == expected_ids[50]
         if not playlist_ids:
             assert calls == [
                 ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),

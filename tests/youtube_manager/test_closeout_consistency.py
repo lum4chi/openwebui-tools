@@ -2,7 +2,7 @@
 T8-1 — Close-out: backlog-doc status + final consistency pass.
 
 Scenarios T8-1-S1 (backlog doc marks implemented items DONE), S2 (tool version
-line is exactly the final 2.2.0), S3 (no plan-internal task-ID label leaks into
+line is exactly the final 2.2.1), S3 (no plan-internal task-ID label leaks into
 the tool file). S4 (do-not-regress full suite) is the package acceptance
 command, not a nested test.
 
@@ -66,13 +66,13 @@ class TestCloseoutConsistency:
         assert ITEM6_LINE in lines, "item 6 line changed (must be byte-identical)"
 
     # @unit
-    # Scenario: T8-1-S2 the tool docstring version is exactly the final 2.2.0
+    # Scenario: T8-1-S2 the tool docstring version is exactly the final 2.2.1
     #   Given youtube_manager.py
-    #   Then its docstring contains exactly one line "version: 2.2.0"
+    #   Then its docstring contains exactly one line "version: 2.2.1"
     def test_tool_version_line_final(self):
         doc = youtube_manager.__doc__ or ""
-        version_lines = [line for line in doc.split("\n") if line.strip() == "version: 2.2.0"]
-        assert version_lines == ["version: 2.2.0"], f"expected exactly one 'version: 2.2.0' line, got {version_lines!r}"
+        version_lines = [line for line in doc.split("\n") if line.strip() == "version: 2.2.1"]
+        assert version_lines == ["version: 2.2.1"], f"expected exactly one 'version: 2.2.1' line, got {version_lines!r}"
 
     # @unit
     # Scenario: T8-1-S3 no plan-internal task-ID labels leak into the tool's user-facing strings

@@ -36,12 +36,25 @@ class TestWatchLaterValveResolution:
     #   And no playlistItems.list call uses playlistId "WL"
     #   And the candidates include the saved video
     #   # provenance: user acceptance verbatim 1 and 2
+    # @unit
+    # Scenario T1-4-S1 (unit): the watch-later step surfaces the user's single saved video from a real-shaped videos.list response
+    #   Given the valve title resolves a watch-later playlist holding exactly one item with video id "saved-1"
+    #   And the mocked videos.list response for that id is one item with snippet title/channel and contentDetails.duration (real shape via the video_detail fixture helper)
+    #   When gather_candidates is called with sources "watch_later"
+    #   Then no exception escapes gather_candidates
+    #   And watch_later contributes exactly one candidate for saved-1
+    # @unit
+    # Scenario T1-4-S2 (unit): the videos.list request uses the real API parameter name id
+    #   Given a watch-later source with one saved video
+    #   When gather_candidates is called with sources "watch_later"
+    #   Then the videos.list call is made with parameter id equal to the comma-joined video ids
+    #   And no videos.list call carries an ids parameter
     async def test_valve_resolved_playlist_is_watch_later_source(self, tools, monkeypatch):
         calls = api_fake(
             monkeypatch,
             pages={"PLuser": [{"items": [item_row("item-1", "saved-1")]}]},
             playlist_pages=[{"items": [playlist_row("PLuser", "Watch Later")]}],
-            videos={"saved-1": video_detail("saved-1", title="Saved video")},
+            videos={"saved-1": video_detail("saved-1", duration="PT1M30S", title="Saved video")},
         )
         guard_urlopen(monkeypatch)
 
@@ -50,10 +63,36 @@ class TestWatchLaterValveResolution:
         assert calls == [
             ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
             ("playlistItems.list", {"part": "contentDetails", "playlistId": "PLuser", "maxResults": "20"}),
-            ("videos.list", {"part": "snippet,contentDetails", "ids": "saved-1"}),
+            ("videos.list", {"part": "snippet,contentDetails", "id": "saved-1"}),
         ]
         assert "=== Candidates (1) ===" in payload
         assert "Candidate IDs: saved-1" in payload
+
+    # @unit
+    # Scenario T1-4-S4 (unit): a malformed video in a watch-later batch is skipped, counted and reported without aborting the batch
+    #   Given a watch-later batch holding one healthy video and one malformed item without a usable snippet
+    #   When gather_candidates is called with sources "watch_later"
+    #   Then no exception escapes gather_candidates
+    #   And the healthy video is still returned as a candidate
+    #   And the notes report exactly 1 skipped video with the malformed id and a reason
+    async def test_malformed_watch_later_item_skipped_counted_reported(self, tools, monkeypatch):
+        api_fake(
+            monkeypatch,
+            pages={"PLuser": [{"items": [item_row("item-1", "saved-1"), item_row("item-2", "bad-1")]}]},
+            playlist_pages=[{"items": [playlist_row("PLuser", "Watch Later")]}],
+            videos={
+                "saved-1": video_detail("saved-1", duration="PT1M30S", title="Saved video"),
+                "bad-1": video_detail("bad-1"),
+            },
+        )
+        guard_urlopen(monkeypatch)
+
+        payload = await tools.gather_candidates(sources="watch_later")
+
+        assert "=== Candidates (1) ===" in payload
+        assert "Candidate IDs: saved-1" in payload
+        skip_notes = [line for line in payload.splitlines() if line.startswith("watch_later skipped 1 video(s):")]
+        assert skip_notes == ["watch_later skipped 1 video(s): bad-1 (ValueError)"]
 
     # @unit
     # Scenario T1-2-C-S2 (unit): absent valve playlist returns zero candidates without a WL API call

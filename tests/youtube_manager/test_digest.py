@@ -78,7 +78,7 @@ def _api_fake(monkeypatch, video_ids, raise_on: str | None = None):
         if method == "playlistItems.list":
             return {"items": [{"contentDetails": {"videoId": vid}} for vid in video_ids]}
         if method == "videos.list":
-            return {"items": [details[i] for i in params["ids"].split(",")]}
+            return {"items": [details[i] for i in params["id"].split(",")]}
         raise AssertionError(f"unexpected API method {method}")
 
     monkeypatch.setattr(youtube_manager, "_data_api_request", fake)

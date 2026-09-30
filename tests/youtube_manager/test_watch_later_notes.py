@@ -46,7 +46,7 @@ def _wl_api_fake(monkeypatch, *, playlist_items: list[dict], video_details: dict
             assert params.get("playlistId") == "PLwl"
             return {"items": playlist_items}
         if method == "videos.list":
-            wanted = params["ids"].split(",")
+            wanted = params["id"].split(",")
             return {"items": [video_details[i] for i in wanted if i in video_details]}
         raise AssertionError(f"unexpected API method {method}")
 
@@ -158,7 +158,7 @@ class TestWatchLaterNotes:
         assert calls == [
             ("playlists.list", {"part": "snippet", "mine": True, "maxResults": 50}),
             ("playlistItems.list", {"part": "contentDetails", "playlistId": "PLwl", "maxResults": "20"}),
-            ("videos.list", {"part": "snippet,contentDetails", "ids": "v1,v2"}),
+            ("videos.list", {"part": "snippet,contentDetails", "id": "v1,v2"}),
         ]
         assert not any(method == "channels.list" for method, _ in calls)
         assert "=== Candidates (2) ===" in payload

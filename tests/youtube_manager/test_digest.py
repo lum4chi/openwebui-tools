@@ -45,7 +45,6 @@ def _ytdlp_fake(monkeypatch, by_url, raise_for=None):
 def _clear_oauth(tools):
     tools.valves.google_client_id = ""
     tools.valves.google_client_secret = ""
-    tools.valves.google_refresh_token = ""
 
 
 def _api_fake(monkeypatch, video_ids, raise_on: str | None = None):

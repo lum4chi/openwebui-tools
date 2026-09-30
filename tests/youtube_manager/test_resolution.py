@@ -59,7 +59,6 @@ def _valves():
     v = youtube_manager.Tools().Valves()
     v.google_client_id = "client-id"
     v.google_client_secret = "client-secret"
-    v.google_refresh_token = "refresh-token"
     return v
 
 

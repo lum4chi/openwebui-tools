@@ -74,7 +74,6 @@ def _entry(vid: str) -> dict:
 def _clear_oauth(tools) -> None:
     tools.valves.google_client_id = ""
     tools.valves.google_client_secret = ""
-    tools.valves.google_refresh_token = ""
 
 
 def _capture_candidates(monkeypatch):

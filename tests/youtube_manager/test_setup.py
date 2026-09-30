@@ -2,14 +2,20 @@
 
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
 import pytest
 
+import youtube_manager
 from youtube_manager import ReauthNeeded, Tools
 
-GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
+GOOGLE_FIELDS = ("google_client_id", "google_client_secret")
+
+
+def _no_credential() -> None:
+    """Drop the fixture-seeded credential file (the no-stored-credential condition)."""
+    (Path(os.environ["DATA_DIR"]) / "default" / "google-refresh-token.md").unlink(missing_ok=True)
 
 
 def _set_case(tools, case):
@@ -36,6 +42,15 @@ class TestCheckSetup:
     """check_setup readiness reporting."""
 
     # @unit
+    # Scenario: T4-1-S6 (unit) — trace: "Remove them from the valve" (readiness must not gate on the valve)
+    #   Given client id and secret are set
+    #   When check_setup runs with a credential file present and a healthy probe
+    #   Then the overall status is READY
+    #   And when check_setup runs with no credential file
+    #   Then the overall status is NOT READY
+    #   And the subscriptions and watch_later lines are "MISSING - no stored credential; run start_auth then finish_auth"
+    #   And when client id or secret is missing
+    #   Then the overall status is NOT READY with the existing "OAuth fields incomplete" lines
     # Scenario: T0-1 check_setup ready
     #   Given the valves have a full Google credential set and the token seam returns an access token (no session involved)
     #   When the tool runs check_setup
@@ -71,17 +86,16 @@ class TestCheckSetup:
         assert "username" not in lowered
 
     # @unit
-    # Scenario: S5 check_setup READY from file
+    # Scenario: T4-1-S6 (unit, READY branch) — rescope: ready from credential file with client fields only (the empty-valve concept is gone)
     #   Given DATA_DIR/default contains the credential file with "file-rt"
-    #     And a Tools with client_id and client_secret set and an EMPTY valve google_refresh_token
+    #     And a Tools with client_id and client_secret set (the credential file is the only credential source)
     #     And a successful token refresh
     #   When check_setup is called
     #   Then the response reports READY
-    async def test_ready_from_credential_file_with_empty_valve(self, tools):
+    async def test_ready_from_credential_file_with_client_fields_only(self, tools):
         data_dir = Path(os.environ["DATA_DIR"])
         (data_dir / "default").mkdir(parents=True, exist_ok=True)
         (data_dir / "default" / "google-refresh-token.md").write_text("file-rt")
-        tools.valves.google_refresh_token = ""
         with (
             patch(
                 "youtube_manager._oauth_token",
@@ -134,6 +148,8 @@ class TestCheckSetup:
     #   When the tool runs check_setup
     #   Then the result contains "NOT READY"
     #   And it lists exactly the missing Google items for that case
+    #   (T4-1-S6: the no_token case — client fields set, no credential file — carries the
+    #    no-credential line, NOT the incomplete-fields line)
     #   And each missing item carries a one-line setup instruction
     #   And the result names no session, cookies, or username requirement
     @pytest.mark.parametrize(
@@ -143,6 +159,8 @@ class TestCheckSetup:
     )
     async def test_missing_parts(self, tools, case):
         _set_case(tools, case)
+        if case == "no_token":
+            _no_credential()
         with patch(
             "youtube_manager._oauth_token",
             side_effect=AssertionError("live token check must not run with an incomplete set"),
@@ -150,8 +168,13 @@ class TestCheckSetup:
             result = await tools.check_setup()
         lines = result.splitlines()
         assert lines[0] == "search: ok"
-        assert lines[1] == "subscriptions: MISSING - OAuth fields incomplete"
-        assert lines[2] == "watch_later: MISSING - OAuth fields incomplete"
+        missing = (
+            "MISSING - no stored credential; run start_auth then finish_auth"
+            if case == "no_token"
+            else "MISSING - OAuth fields incomplete"
+        )
+        assert lines[1] == f"subscriptions: {missing}"
+        assert lines[2] == f"watch_later: {missing}"
         assert lines[-1] == "NOT READY"
         lowered = result.lower()
         assert "session" not in lowered
@@ -188,22 +211,60 @@ class TestCheckSetup:
         assert lines[-1] == "NOT READY"
 
     # @unit
-    # Scenario: S6 wiped file + stale valve
+    # Scenario: T4-1-S6 (unit, no-credential branch) — rescope: file absent → the no-credential readiness line (NOT INVALID)
     #   Given a fresh DATA_DIR (no file)
-    #     And a Tools with client_id/client_secret set and a stale valve google_refresh_token
-    #     And a token refresh that fails with ReauthNeeded
+    #     And a Tools with client_id/client_secret set
     #   When check_setup is called
     #   Then the response reports NOT READY
-    #     And the token line is exactly "INVALID - stored refresh token is stale; run start_auth then finish_auth"
-    async def test_stale_valve_with_absent_file_reports_stale(self, tools):
-        with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("invalid_grant")):
+    #     And the subscriptions and watch_later lines are exactly "MISSING - no stored credential; run start_auth then finish_auth"
+    #     And the token check never runs (no INVALID line)
+    async def test_absent_file_reports_no_credential_line(self, tools):
+        _no_credential()
+        with patch(
+            "youtube_manager._oauth_token",
+            side_effect=AssertionError("the token check must not run with no credential file"),
+        ):
             result = await tools.check_setup()
         lines = result.splitlines()
         assert lines[0] == "search: ok"
-        state = "INVALID - stored refresh token is stale; run start_auth then finish_auth"
+        state = "MISSING - no stored credential; run start_auth then finish_auth"
         assert lines[1] == f"subscriptions: {state}"
         assert lines[2] == f"watch_later: {state}"
         assert lines[-1] == "NOT READY"
+
+
+class TestValvesModel:
+    """The Valves model: no token field (S1); legacy config keys construct fine and are dropped (S5)."""
+
+    # @unit
+    # Scenario: T4-1-S1 (unit) — trace: "Remove them from the valve"
+    #   Given a Tools instance constructed from the default Valves model
+    #   When the Valves model fields are inspected
+    #   Then the google_refresh_token field is not present
+    def test_valves_model_has_no_refresh_token_field(self):
+        assert "google_refresh_token" not in Tools().Valves.model_fields
+
+    # @unit
+    # Scenario: T4-1-S5 (unit) — trace: "assure that the tool does not need the valve itself" + work-package scope boundary (legacy OWUI configs)
+    #   Given a legacy config dict still containing google_refresh_token = "legacy-rt" (old saved OWUI config shape)
+    #   When the Valves model is constructed from that dict
+    #   Then construction succeeds and the dumped model fields do not contain google_refresh_token
+    #   And with no credential file, resolution takes the no-credential path and legacy-rt is never sent to the token endpoint
+    def test_legacy_config_token_key_dropped_and_never_used(self, tools, monkeypatch):
+        _no_credential()
+        valves = Tools().Valves(
+            google_client_id="legacy-id",
+            google_client_secret="legacy-sec",
+            google_refresh_token="legacy-rt",
+        )
+        assert "google_refresh_token" not in valves.model_dump()
+        urlopen = MagicMock()
+        monkeypatch.setattr("youtube_manager.urllib.request.urlopen", urlopen)
+        with pytest.raises(ReauthNeeded) as exc_info:
+            youtube_manager._oauth_token(valves, code=None)
+        assert "start_auth" in str(exc_info.value)
+        assert "finish_auth" in str(exc_info.value)
+        urlopen.assert_not_called()
 
 
 class TestCheckSetupPerSource:
@@ -246,6 +307,8 @@ class TestCheckSetupPerSource:
     #   Then the second line is exactly "subscriptions: MISSING - OAuth fields incomplete"
     #   And the third line is exactly "watch_later: MISSING - OAuth fields incomplete"
     #   And the last line is exactly "NOT READY"
+    #   (T4-1-S6: the no_token case — client fields set, no credential file — carries the
+    #    no-credential line, NOT the incomplete-fields line)
     @pytest.mark.parametrize(
         "case",
         ["no_google", "partial_google", "no_token"],
@@ -253,15 +316,20 @@ class TestCheckSetupPerSource:
     )
     async def test_check_setup_oauth_missing_per_source(self, tools, case):
         _set_case(tools, case)
+        if case == "no_token":
+            _no_credential()
         with patch(
             "youtube_manager._oauth_token",
             side_effect=AssertionError("live token check must not run with an incomplete set"),
         ):
             result = await tools.check_setup()
+        missing = (
+            "no stored credential; run start_auth then finish_auth" if case == "no_token" else "OAuth fields incomplete"
+        )
         assert result.splitlines() == [
             "search: ok",
-            "subscriptions: MISSING - OAuth fields incomplete",
-            "watch_later: MISSING - OAuth fields incomplete",
+            f"subscriptions: MISSING - {missing}",
+            f"watch_later: MISSING - {missing}",
             "NOT READY",
         ]
 

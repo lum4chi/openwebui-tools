@@ -1,9 +1,9 @@
-"""T7R-1 B: finish_auth stores the exchanged refresh token in a DATA_DIR file (0600); file-over-valve read precedence."""
+"""T7R-1 B: finish_auth stores the exchanged refresh token in a DATA_DIR file (0600); the credential file is the sole source."""
 
 import os
 import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,11 @@ CREDENTIAL_FILE = "google-refresh-token.md"
 
 def _credential_path() -> Path:
     return Path(os.environ["DATA_DIR"]) / "default" / CREDENTIAL_FILE
+
+
+def _no_credential() -> None:
+    """Drop the fixture-seeded credential file (the no-stored-credential condition)."""
+    _credential_path().unlink(missing_ok=True)
 
 
 class _BoomStore:
@@ -54,7 +59,7 @@ class TestFinishAuthFileStore:
     #   When finish_auth runs
     #   Then the response is exactly the credential-file write failure string with the clean reason
     #     And the response does not contain "new-refresh-token"
-    #     And the valve google_refresh_token is not modified
+    #     And the Valves model has no token field (the credential file is the only source)
     async def test_write_failure_after_exchange_reports_retry_without_raw_token(self, tools):
         with (
             patch("youtube_manager._oauth_token", return_value=TOKEN),
@@ -68,42 +73,62 @@ class TestFinishAuthFileStore:
         )
         assert result == expected
         assert "new-refresh-token" not in result
-        assert tools.valves.google_refresh_token == "refresh-token"
+        assert "google_refresh_token" not in type(tools.valves).model_fields
 
 
-class TestEffectiveRefreshToken:
-    """File-over-valve precedence: the DATA_DIR credential file wins; the valve is the legacy fallback."""
+class TestFileOnlyResolution:
+    """The credential file is the sole source: file present → the file's token; file absent → no credential (no valve fallback)."""
 
     # @unit
-    # Scenario: S3 file precedence
+    # Scenario: T4-1-S3 (unit, rescope) — credential file is the sole source (a legacy valve value is ignored)
     #   Given DATA_DIR contains the credential file with "file-rt"
-    #     And the valve google_refresh_token "valve-rt"
-    #   When the effective refresh token is resolved
+    #   When the refresh token is resolved from the file store
     #   Then it is exactly "file-rt"
-    def test_file_precedence_over_valve(self, tools):
+    def test_credential_file_is_the_sole_source(self, tools):
         data_dir = Path(os.environ["DATA_DIR"])
         (data_dir / "default").mkdir(parents=True, exist_ok=True)
         (data_dir / "default" / CREDENTIAL_FILE).write_text("file-rt")
-        tools.valves.google_refresh_token = "valve-rt"
-        assert youtube_manager._effective_refresh_token(tools.valves) == "file-rt"
+        assert youtube_manager._file_refresh_token() == "file-rt"
 
     # @unit
-    # Scenario: S4 valve fallback
+    # Scenario: T4-1-S4 (unit, rescope) — file absent → no credential (no-credential path, NOT fallback)
     #   Given a fresh DATA_DIR (no file) or a whitespace-only credential file
-    #     And the valve google_refresh_token "valve-rt"
-    #   When the effective refresh token is resolved
-    #   Then it is exactly "valve-rt"
+    #   When the refresh token is resolved from the file store
+    #   Then the resolution is no credential (None when the file is absent; a whitespace-only file is not a token)
+    #     And there is no valve fallback
     @pytest.mark.parametrize(
         "content",
         [pytest.param(None, id="no_file"), pytest.param("  \n", id="whitespace_only_file")],
     )
-    def test_valve_fallback_when_file_absent(self, tools, content):
-        if content is not None:
+    def test_file_absent_means_no_credential(self, tools, content):
+        if content is None:
+            _no_credential()
+        else:
             data_dir = Path(os.environ["DATA_DIR"])
             (data_dir / "default").mkdir(parents=True, exist_ok=True)
             (data_dir / "default" / CREDENTIAL_FILE).write_text(content)
-        tools.valves.google_refresh_token = "valve-rt"
-        assert youtube_manager._effective_refresh_token(tools.valves) == "valve-rt"
+        assert not youtube_manager._file_refresh_token()
+
+
+class TestNoCredentialPath:
+    """The no-credential path: ReauthNeeded guiding start_auth/finish_auth, no token-endpoint round-trip."""
+
+    # @unit
+    # Scenario: T4-1-S2 (unit) — trace: "the tool should have the mechanism to resolve that first time" + "let the LLM used in OWUI to resolve it"
+    #   Given no stored credential file for the user
+    #   And the token endpoint is mocked (urlopen patched)
+    #   When the _oauth_token no-code path is exercised
+    #   Then ReauthNeeded is raised with a message containing "start_auth" and "finish_auth"
+    #   And the token endpoint was never called
+    def test_no_credential_path_raises_reauth_without_endpoint_call(self, tools, monkeypatch):
+        _no_credential()
+        urlopen = MagicMock()
+        monkeypatch.setattr("youtube_manager.urllib.request.urlopen", urlopen)
+        with pytest.raises(ReauthNeeded) as exc_info:
+            youtube_manager._oauth_token(tools.valves, code=None)
+        assert "start_auth" in str(exc_info.value)
+        assert "finish_auth" in str(exc_info.value)
+        urlopen.assert_not_called()
 
 
 class TestFinishAuthErrors:
@@ -116,6 +141,7 @@ class TestFinishAuthErrors:
     #   Then the response is exactly "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
     #     And no credential file is written
     async def test_no_code_exact_and_no_file(self, tools):
+        _no_credential()
         with patch("youtube_manager._oauth_token"):
             result = await tools.finish_auth("http://127.0.0.1:8085/oauth2callback?error=access_denied")
         expected = "Error: no authorization code found - paste the full redirect URL with ?code= from the browser."
@@ -130,6 +156,7 @@ class TestFinishAuthErrors:
     #     And it contains the start_auth / finish_auth fix instruction
     #     And no credential file is written
     async def test_reauth_pass_through_writes_no_file(self, tools):
+        _no_credential()
         with patch("youtube_manager._oauth_token", side_effect=ReauthNeeded("invalid_grant")):
             result = await tools.finish_auth("some-auth-code")
         assert result.startswith("REAUTH_NEEDED")
@@ -148,6 +175,7 @@ class TestFinishAuthExchangeFailure:
     #   Then the response is exactly "Error: service unavailable - retry later"
     #     And no credential file is written
     async def test_exchange_http_503_maps_to_service_unavailable(self, tools):
+        _no_credential()
         boom = urllib.error.HTTPError(TOKEN_URL, 503, "Service Unavailable", {}, None)
         with patch("youtube_manager._oauth_token", side_effect=boom):
             result = await tools.finish_auth("some-auth-code")

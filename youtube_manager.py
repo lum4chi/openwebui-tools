@@ -4,7 +4,7 @@ author: lum4chi
 author_url: https://github.com/lum4chi/openwebui-tools
 description: Personal YouTube digest - passes the user's taste profile verbatim and gathers candidates from the user's watch later and subscribed channels via the YouTube Data API; search is a separate explicit gather_candidates tool call. State is tracked in Open WebUI Notes.
 requirements: google-api-python-client, google-auth, yt-dlp, youtube-transcript-api
-version: 2.2.1
+version: 2.3.0
 licence: MIT
 required_open_webui_version: 0.5.0
 
@@ -54,7 +54,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 LOOPBACK_REDIRECT = "http://127.0.0.1:8085/oauth2callback"
 NOTE_TASTE, NOTE_FEEDBACK, NOTE_STATE = "taste-profile", "feedback-log", "digest-state"
 CREDENTIAL_TITLE = "google-refresh-token"
-GOOGLE_FIELDS = ("google_client_id", "google_client_secret", "google_refresh_token")
+GOOGLE_FIELDS = ("google_client_id", "google_client_secret")
 DECISIONS = ("watched", "listened", "skipped")
 DATA_API_VERSION = "v3"
 SOURCES = ("watch_later", "search", "subscriptions")
@@ -798,12 +798,8 @@ def _fetch_gated(
         return None
 
 
-def _oauth_set(valves, user_id: str | None = None) -> bool:
-    return (
-        bool(valves.google_client_id)
-        and bool(valves.google_client_secret)
-        and bool(_effective_refresh_token(valves, user_id))
-    )
+def _oauth_set(valves) -> bool:
+    return bool(valves.google_client_id) and bool(valves.google_client_secret)
 
 
 def _oauth_token(valves, code: str | None = None, user_id: str | None = None) -> dict:
@@ -816,9 +812,14 @@ def _oauth_token(valves, code: str | None = None, user_id: str | None = None) ->
             "redirect_uri": LOOPBACK_REDIRECT,
         }
     else:
+        rt = _file_refresh_token(user_id)
+        if not rt:
+            raise ReauthNeeded(
+                "no stored credential for this user - run start_auth, open the URL, then finish_auth with the code"
+            )
         data = {
             "grant_type": "refresh_token",
-            "refresh_token": _effective_refresh_token(valves, user_id),
+            "refresh_token": rt,
             "client_id": valves.google_client_id,
             "client_secret": valves.google_client_secret,
         }
@@ -1027,10 +1028,6 @@ def _state_store(request, user_id: str | None = None):
 def _file_refresh_token(user_id: str | None = None) -> str | None:
     token = _read_doc(_state_store(None, user_id), CREDENTIAL_TITLE)
     return token.strip() if token else None
-
-
-def _effective_refresh_token(valves, user_id: str | None = None) -> str:
-    return _file_refresh_token(user_id) or valves.google_refresh_token
 
 
 def _read_doc(store, title: str) -> str | None:
@@ -1289,9 +1286,6 @@ class Tools:
             default="", description="Google OAuth client ID (installed-app, Production-mode client)"
         )
         google_client_secret: str = Field(default="", description="Google OAuth client secret")
-        google_refresh_token: str = Field(
-            default="", description="Stored OAuth refresh token (scope: https://www.googleapis.com/auth/youtube)"
-        )
         # digest playlist policy
         digest_playlist_title: str = Field(
             default="Open WebUI Digest",
@@ -1319,22 +1313,28 @@ class Tools:
 
     async def check_setup(self, __user__: dict | None = None) -> str:
         user_id = _user_id_from(__user__)
-        oauth_ok = _oauth_set(self.valves, user_id)
-        token_status = _token_status(self.valves, user_id) if oauth_ok else None
+        oauth_ok = _oauth_set(self.valves)
+        has_token = bool(_file_refresh_token(user_id))
         search = self._search_setup_line()
-        if oauth_ok and token_status is None:
-            subscriptions = f"subscriptions: {await self._subscriptions_probe(user_id)}"
-            watch_later = f"watch_later: {await self._watch_later_probe(user_id)}"
-            ready = subscriptions.startswith("subscriptions: ok") and watch_later.startswith("watch_later: ok")
-            overall = "READY" if ready else "NOT READY"
-        elif oauth_ok:
-            subscriptions = f"subscriptions: {token_status}"
-            watch_later = f"watch_later: {token_status}"
-            overall = "NOT READY"
-        else:
+        if not oauth_ok:
             subscriptions = "subscriptions: MISSING - OAuth fields incomplete"
             watch_later = "watch_later: MISSING - OAuth fields incomplete"
             overall = "NOT READY"
+        elif not has_token:
+            subscriptions = "subscriptions: MISSING - no stored credential; run start_auth then finish_auth"
+            watch_later = "watch_later: MISSING - no stored credential; run start_auth then finish_auth"
+            overall = "NOT READY"
+        else:
+            token_status = _token_status(self.valves, user_id)
+            if token_status is None:
+                subscriptions = f"subscriptions: {await self._subscriptions_probe(user_id)}"
+                watch_later = f"watch_later: {await self._watch_later_probe(user_id)}"
+                ready = subscriptions.startswith("subscriptions: ok") and watch_later.startswith("watch_later: ok")
+                overall = "READY" if ready else "NOT READY"
+            else:
+                subscriptions = f"subscriptions: {token_status}"
+                watch_later = f"watch_later: {token_status}"
+                overall = "NOT READY"
         return "\n".join([search, subscriptions, watch_later, overall])
 
     async def start_auth(self) -> str:
@@ -1386,6 +1386,8 @@ class Tools:
         title = self.valves.watch_later_playlist_title
         try:
             playlist_id = self._find_playlist_by_title(title, user_id)
+        except ReauthNeeded:
+            raise
         except Exception as err:
             _note_watch_later_title(notes, f'"{title}" title lookup failed ({_clean_exception(err)})')
             return None
@@ -1613,12 +1615,12 @@ class Tools:
         self, source: str, max_per_source: int, search_query: str, notes: list[str], user_id: str | None = None
     ) -> list[Candidate]:
         if source == "watch_later":
-            if not _oauth_set(self.valves, user_id):
+            if not _oauth_set(self.valves):
                 notes.append("watch_later skipped: OAuth not configured")
                 return []
             return self._fetch_watch_later(max_per_source, notes, user_id)
         if source == "subscriptions":
-            if not _oauth_set(self.valves, user_id):
+            if not _oauth_set(self.valves):
                 notes.append("subscriptions skipped: OAuth not configured")
                 return []
             return self._fetch_subscriptions(max_per_source, notes, user_id)
@@ -1710,7 +1712,7 @@ class Tools:
         reauth_reasons: set[str] = set()
         source_counts: dict[str, int] = {}
         batches: list[list[Candidate]] = []
-        if _oauth_set(self.valves, user_id):
+        if _oauth_set(self.valves):
             gated = (
                 ("watch_later", lambda: self._fetch_watch_later(MAX_PER_SOURCE, None, user_id)),
                 ("subscriptions", lambda: self._fetch_subscriptions(MAX_PER_SOURCE, notes, user_id)),

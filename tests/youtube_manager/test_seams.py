@@ -14,6 +14,7 @@ from yt_dlp.utils import ExtractorError
 
 import youtube_manager
 from youtube_manager import (
+    CREDENTIAL_TITLE,
     QuotaError,
     ReauthNeeded,
     Tools,
@@ -47,10 +48,18 @@ def _valves(**overrides):
     v = Tools().Valves()
     v.google_client_id = "client-id"
     v.google_client_secret = "client-secret"
-    v.google_refresh_token = "stored-rt"
     for key, value in overrides.items():
         setattr(v, key, value)
     return v
+
+
+def _seed_credential(tmp_path, monkeypatch, token: str) -> None:
+    """Seed the default user's credential file under a tmp DATA_DIR (the file store is the only source)."""
+    data_dir = tmp_path / "data"
+    user_dir = data_dir / "default"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    (user_dir / f"{CREDENTIAL_TITLE}.md").write_text(token)
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
 
 
 class TestOauthToken:
@@ -62,8 +71,14 @@ class TestOauthToken:
     #   And when a code is given it uses grant_type=authorization_code with that code
     #   And when the endpoint answers invalid_grant (400) or 401 it raises ReauthNeeded (no other exception type)
 
-    def test_refresh_grant(self):
+    # @unit
+    # Scenario: T4-1-S3 (unit) — trace: "and during execution"
+    #   Given a stored credential file for the user (tmp DATA_DIR)
+    #   When _oauth_token is called without a code and the token endpoint mock returns 200 with an access token
+    #   Then the access token dict is returned and the refresh grant POSTed the file's token
+    def test_refresh_grant(self, tmp_path, monkeypatch):
         token = {"access_token": "AT", "refresh_token": "NEW-RT", "expires_in": 3600}
+        _seed_credential(tmp_path, monkeypatch, "stored-rt")
         with patch("urllib.request.urlopen") as urlopen:
             urlopen.return_value = _FakeResp(json.dumps(token).encode())
             result = _oauth_token(_valves(), code=None)
@@ -92,7 +107,13 @@ class TestOauthToken:
         [400, 401],
         ids=["invalid_grant_400", "unauthorized_401"],
     )
-    def test_reauth_on_bad_grant(self, code):
+    # @unit
+    # Scenario: T4-1-S4 (unit) — trace: "and during execution" (the re-auth loop on a revoked/expired grant)
+    #   Given a stored credential file for the user (tmp DATA_DIR)
+    #   When _oauth_token is called without a code and the token endpoint mock returns 400
+    #   Then ReauthNeeded is raised with the existing stale-credential message (L834) and the REAUTH surfacing carries the start_auth/finish_auth fix guidance
+    def test_reauth_on_bad_grant(self, code, tmp_path, monkeypatch):
+        _seed_credential(tmp_path, monkeypatch, "stored-rt")
         err = urllib.error.HTTPError(
             "https://oauth2.googleapis.com/token", code, "err", Message(), io.BytesIO(b'{"error":"invalid_grant"}')
         )
@@ -113,7 +134,9 @@ class TestOauthToken:
         ["some-auth-code", None],
         ids=["code_present", "code_absent"],
     )
-    def test_reauth_message_branches_on_code_presence(self, code):
+    def test_reauth_message_branches_on_code_presence(self, code, tmp_path, monkeypatch):
+        if code is None:
+            _seed_credential(tmp_path, monkeypatch, "stored-rt")
         err = urllib.error.HTTPError(
             "https://oauth2.googleapis.com/token", 400, "err", Message(), io.BytesIO(b'{"error":"invalid_grant"}')
         )
@@ -126,7 +149,8 @@ class TestOauthToken:
         else:
             assert msg == "Google rejected the grant - stored credential is stale"
 
-    def test_other_http_error_propagates(self):
+    def test_other_http_error_propagates(self, tmp_path, monkeypatch):
+        _seed_credential(tmp_path, monkeypatch, "stored-rt")
         err = urllib.error.HTTPError(
             "https://oauth2.googleapis.com/token", 500, "boom", Message(), io.BytesIO(b"server error")
         )

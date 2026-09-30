@@ -67,8 +67,13 @@ def _canned_probe_api(monkeypatch, raise_for: dict | None = None) -> None:
     )
 
 
+# @unit
+# Scenario: T4-1-S7 (unit, probe half) — trace: "Remove them from the valve" (harness half)
+#   Given the probe prints API evidence only
+#   When its output is redaction-checked
+#   Then the redaction tuple pins exactly (client id, client secret, stored token)
 def _assert_redacted(out: str) -> None:
-    for value in (CLIENT_ID, CLIENT_SECRET, probe._h.DUMMY_REFRESH_TOKEN, STORED_TOKEN):
+    for value in (CLIENT_ID, CLIENT_SECRET, STORED_TOKEN):
         assert value not in out
 
 
@@ -77,7 +82,7 @@ class TestProbeEvidence:
     # Scenario T1-5-S3 (unit): the probe prints API evidence only — never token or secret values
     #   # trace: dispatch task 1 — "The probe output = API evidence only — never token/secret values"
     #   Given the tool seams mocked to return canned responses (a videos.list body, playlist rows, one WL playlist item)
-    #   And the harness dummy valve values (dummy refresh token, client secret) in force
+    #   And the probe's dummy env values (client id, client secret) and the stored token value in force
     #   When the probe main runs with captured stdout and the token file present
     #   Then the output contains the videos.list JSON, the WL playlist title and item count, and one id+title line per playlist
     #   And no token, client-secret or valve value appears in the output

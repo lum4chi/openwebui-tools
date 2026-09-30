@@ -1,12 +1,15 @@
 """T3-1: deterministic subscription ok/failed tally + verbose raw detail + distinct not-configured/failed notes."""
 
+import os
 import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from googleapiclient.errors import HttpError
 
 import youtube_manager
-from youtube_manager import SUBSCRIPTION_CHANNEL_CAP, Tools
+from youtube_manager import CREDENTIAL_TITLE, SUBSCRIPTION_CHANNEL_CAP, Tools
 
 from .conftest import guard_urlopen, playlist_item, sub_channel
 
@@ -270,3 +273,26 @@ class TestSubscriptionNotes:
         assert "subscriptions skipped: OAuth not configured" in notes_a
         assert "subscriptions: 0 ok, 1 failed (e.g. channel UC0 → HTTP 404: Not Found)" in notes_b
         assert "subscriptions skipped: OAuth not configured" not in notes_b
+
+
+class TestNoCredentialGatherSurface:
+    """T4-1-S9: client fields OK + no credential file -> the gated sources surface REAUTH_NEEDED, not a skip note."""
+
+    # @unit
+    # Scenario: T4-1-S9 (unit) — trace: "the tool should have the mechanism to resolve that first time" + "let the LLM used in OWUI to resolve it" (Gate-A iter-1: gather/digest gate semantics)
+    #   Given client id and secret are set
+    #   And no stored credential file for the user
+    #   And the API request seam is mocked
+    #   When a gated gather source is exercised (watch_later or subscriptions via _gather_one)
+    #   Then the source is not reported as "skipped: OAuth not configured"
+    #   And it surfaces REAUTH_NEEDED with the start_auth/finish_auth fix guidance (the existing _reauth_block surface)
+    @pytest.mark.parametrize("source", ["watch_later", "subscriptions"])
+    async def test_no_credential_surfaces_reauth_not_skip_note(self, tools, monkeypatch, source):
+        (Path(os.environ["DATA_DIR"]) / "default" / f"{CREDENTIAL_TITLE}.md").unlink(missing_ok=True)
+        guard_urlopen(monkeypatch)
+
+        result = await tools.gather_candidates(source)
+
+        assert result.startswith("REAUTH_NEEDED")
+        assert "Fix: run start_auth, open the URL, then finish_auth with the new code." in result
+        assert "skipped: OAuth not configured" not in result

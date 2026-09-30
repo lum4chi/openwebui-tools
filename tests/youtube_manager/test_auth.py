@@ -150,6 +150,7 @@ class TestAuth:
         ids=["invalid_grant", "network_error", "http_503"],
     )
     async def test_exchange_failure_mapping(self, tools, boom, expected):
+        (Path(os.environ["DATA_DIR"]) / "default" / "google-refresh-token.md").unlink(missing_ok=True)
         with patch("youtube_manager._oauth_token", side_effect=boom):
             result = await tools.finish_auth("sometoken")
         if expected == "REAUTH_NEEDED":

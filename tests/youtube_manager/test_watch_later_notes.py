@@ -78,7 +78,6 @@ def _probe_api_fake(monkeypatch, found: bool, raise_on: str | None = None) -> li
 def _clear_oauth(tools):
     tools.valves.google_client_id = ""
     tools.valves.google_client_secret = ""
-    tools.valves.google_refresh_token = ""
 
 
 class TestWatchLaterNotes:

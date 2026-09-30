@@ -224,7 +224,7 @@ def _real_path(monkeypatch, pages: list[dict]) -> list:
         return MagicMock(execute=lambda: page)
 
     def fake_oauth(valves, code=None, user_id=None):
-        calls.append((user_id, ym._effective_refresh_token(valves, user_id)))
+        calls.append((user_id, ym._file_refresh_token(user_id)))
         return {"access_token": "AT"}
 
     service = MagicMock()
@@ -266,7 +266,8 @@ class TestListPlaylistsUser:
     #   When list_playlists is called without __user__
     #   Then the requests are made with user_id "default" (anonymous namespace; behavior unchanged)
     async def test_s2_anonymous_fallback_unchanged(self, tools, monkeypatch):
-        _per_user_store(monkeypatch)
+        stores = _per_user_store(monkeypatch)
+        stores.setdefault("default", FakeStateStore()).docs[ym.CREDENTIAL_TITLE] = "refresh-token"
         pages = [{"items": [playlist_row("PL1", "Rust")]}]
         calls = _real_path(monkeypatch, pages)
 

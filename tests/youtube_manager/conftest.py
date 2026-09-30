@@ -1,18 +1,28 @@
 """Shared fixtures and helpers for youtube_manager tests."""
 
+from pathlib import Path
+
 import pytest
 
-from youtube_manager import NOTE_STATE, Candidate, Tools, serialize_digest_state
+from youtube_manager import CREDENTIAL_TITLE, NOTE_STATE, Candidate, Tools, serialize_digest_state
+
+
+def _seed_default_credential(data_dir: Path) -> None:
+    """Seed the default user's credential file (post-T4-1: the file is the sole credential source)."""
+    token_path = data_dir / "default" / f"{CREDENTIAL_TITLE}.md"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text("refresh-token")
 
 
 @pytest.fixture
 def tools(tmp_path, monkeypatch):
-    """Tools with the Google credential set configured; DATA_DIR pointed at a temp dir."""
-    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    """Tools with the Google credential set configured (client fields + seeded default-user credential file)."""
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    _seed_default_credential(data_dir)
     t = Tools()
     t.valves.google_client_id = "client-id"
     t.valves.google_client_secret = "client-secret"
-    t.valves.google_refresh_token = "refresh-token"
     return t
 
 

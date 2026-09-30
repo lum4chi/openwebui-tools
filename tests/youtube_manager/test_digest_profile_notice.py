@@ -18,7 +18,6 @@ TASTE_CHANGED_NOTICE = (
 def _clear_oauth(tools):
     tools.valves.google_client_id = ""
     tools.valves.google_client_secret = ""
-    tools.valves.google_refresh_token = ""
 
 
 class _ChangingTasteStore(FakeStateStore):

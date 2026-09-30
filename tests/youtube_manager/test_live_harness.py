@@ -78,14 +78,12 @@ class TestEnvHygiene:
 
 class TestProductionTopology:
     # @unit
-    # Scenario: T0-1-S3 (unit): initial-condition credential topology (dummy valve, no file token yet)
-    #   Given a filled .env in a tmp dir (client id/secret, user id u1, tmp DATA_DIR — NO tokens)
-    #   When the harness builds the tool
-    #   Then valves are set from env (google_refresh_token == DUMMY_REFRESH_TOKEN — non-empty,
-    #     client id/secret, digest settings)
-    #   And no token file is written (<DATA_DIR>/u1/google-refresh-token.md does NOT exist yet)
-    #   And the topology holds: valve token = the documented non-empty dummy, per-user file token = absent
-    def test_build_tools_dummy_valve_and_no_file_token(self, monkeypatch, tmp_path):
+    # Scenario: T4-1-S7 (unit) — trace: "Remove them from the valve" (harness half) + work-package enumeration (the harness build_tools token-valve setting)
+    #   Given the live harness module is imported
+    #   When build_tools is called with env values
+    #   Then DUMMY_REFRESH_TOKEN is not present in the module
+    #   And the returned tools' Valves model has no google_refresh_token field
+    def test_build_tools_no_token_valve(self, monkeypatch, tmp_path):
         env_file = tmp_path / ".env"
         env_file.write_text(
             "YTM_GOOGLE_CLIENT_ID=client-id\n"
@@ -98,7 +96,8 @@ class TestProductionTopology:
         env = hl.load_env(str(env_file))
         tools = hl.build_tools(env, tmp_path / "data-live")
 
-        assert tools.valves.google_refresh_token == hl.DUMMY_REFRESH_TOKEN
+        assert not hasattr(hl, "DUMMY_REFRESH_TOKEN")
+        assert "google_refresh_token" not in type(tools.valves).model_fields
         assert tools.valves.google_client_id == "client-id"
         assert tools.valves.google_client_secret == "client-secret"
         assert tools.valves.digest_playlist_title == "Open WebUI Digest"

@@ -159,14 +159,13 @@ Personal YouTube digest: gathers candidates from Watch Later and subscribed chan
    |---------|---------|-------------|
    | `google_client_id` | `""` | Google OAuth client ID (installed-app, Production-mode client) |
    | `google_client_secret` | `""` | Google OAuth client secret |
-   | `google_refresh_token` | `""` | Stored OAuth refresh token (scope: `https://www.googleapis.com/auth/youtube`) |
    | `digest_playlist_title` | `Open WebUI Digest` | Title of the managed digest playlist (resolved by exact title match; created if absent) |
    | `watch_later_playlist_title` | `Watch Later` | User-maintained playlist used as the Watch Later source (resolved by exact trimmed title match; 0 candidates if absent) |
    | `digest_max_items` | `50` | Policy cap: keep at most the newest N tool-added items |
    | `digest_max_age_days` | `30` | Policy cap: drop tool-added items older than D days |
    | `verbose` | `False` | Include raw HTTP error detail in source notes |
 
-   Per-user credential file: `finish_auth` stores the acquired refresh token in `data/<user_id>/google-refresh-token.md` (one file per Open WebUI user); the `google_refresh_token` valve is the fallback when that file is absent.
+   Per-user credential file: `finish_auth` stores the acquired refresh token in `data/<user_id>/google-refresh-token.md` (one file per Open WebUI user). The file is the ONLY credential source; the tool resolves it itself - when it is absent or stale, a tool method reports `REAUTH_NEEDED` and the `start_auth` / `finish_auth` flow acquires and stores a new token.
 
 3. Enable the tool for your model:
    - Go to **Workspace** → **Models** → select your model → **Tools**

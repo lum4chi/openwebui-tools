@@ -46,7 +46,6 @@ FEATURES = (
 VALVE_DEFAULTS = {
     "google_client_id": '""',
     "google_client_secret": '""',
-    "google_refresh_token": '""',
     "digest_playlist_title": "Open WebUI Digest",
     "watch_later_playlist_title": "Watch Later",
     "digest_max_items": "50",
@@ -98,7 +97,7 @@ class TestAgentsExistingTools:
 
 class TestReadmeYouTubeManager:
     # Scenario T2-1-S1 (unit): docs are current
-    #   And README.md has a "YouTube Manager" section with the features list, a table covering all 8 valves,
+    #   And README.md has a "YouTube Manager" section with the features list, a table covering all 7 valves,
     #     usage examples, and the live-harness section naming `uv run python dev/youtube_live.py`
     #      plus the "tool reads Valves, not env vars" note
     #      and the re-auth note (delete `.data-live/<user_id>/google-refresh-token.md` to force a new browser auth)
@@ -110,8 +109,13 @@ class TestReadmeYouTubeManager:
     def test_features_list(self, feature):
         assert feature in _section(), f"feature {feature!r} missing from the YouTube Manager section"
 
+    # Scenario T4-2-S1 (unit) — trace: "Remove them from the valve"
+    #   Given the README valve section
+    #   When the valve table is parsed
+    #   Then it lists exactly the seven non-token valves (google_client_id, google_client_secret, digest_playlist_title, watch_later_playlist_title, digest_max_items, digest_max_age_days, verbose)
+    #   And no row for google_refresh_token exists
     @pytest.mark.parametrize("valve, default", list(VALVE_DEFAULTS.items()))
-    def test_valves_table_covers_all_8_with_defaults(self, valve, default):
+    def test_valves_table_covers_all_7_with_defaults(self, valve, default):
         rows = [line for line in _section().split("\n") if line.lstrip().startswith("|")]
         for line in rows:
             cells = [cell.strip() for cell in line.split("|")]
@@ -120,10 +124,32 @@ class TestReadmeYouTubeManager:
                 return
         pytest.fail(f"valve {valve!r} missing from the Valves table")
 
+    # Scenario T4-2-S1 (unit) — trace: "Remove them from the valve"
+    #   Given the README valve section
+    #   When the valve table is parsed
+    #   Then it lists exactly the seven non-token valves (google_client_id, google_client_secret, digest_playlist_title, watch_later_playlist_title, digest_max_items, digest_max_age_days, verbose)
+    #   And no row for google_refresh_token exists
+    def test_valve_table_is_exactly_seven_non_token_valves(self):
+        valve_rows = [line for line in _section().split("\n") if line.lstrip().startswith("| `")]
+        assert len(valve_rows) == 7, f"expected exactly 7 valve rows, got {len(valve_rows)}"
+        assert "google_refresh_token" not in "\n".join(valve_rows), "google_refresh_token row must not exist"
+
+    # Scenario T4-2-S2 (unit) — trace: "the tool does not need the valve itself but has necessary function to let the LLM used in OWUI to resolve it"
+    #   Given the README credential-file note
+    #   When it is read
+    #   Then it states the per-user credential file as the only credential source
+    #   And it references the start_auth/finish_auth resolution flow
+    #   And no valve-fallback sentence remains
     def test_credential_file_note(self):
         section = _section()
-        assert CREDENTIAL_FILE in section, "per-user credential file path missing"
-        assert "the `google_refresh_token` valve is the fallback" in section, "valve-fallback note missing"
+        note = "\n".join(line for line in section.split("\n") if line.strip().startswith("Per-user credential file:"))
+        assert note, "credential-file note missing"
+        assert CREDENTIAL_FILE in note, "per-user credential file path missing"
+        assert "the ONLY credential source" in note, "sole-source statement missing"
+        assert "`start_auth`" in note and "`finish_auth`" in note, (
+            "start_auth/finish_auth resolution flow not referenced"
+        )
+        assert "the `google_refresh_token` valve is the fallback" not in section, "valve-fallback sentence must be gone"
 
     @pytest.mark.parametrize("example", USAGE_EXAMPLES)
     def test_usage_examples(self, example):

@@ -9,6 +9,7 @@ Tool spec: https://docs.openwebui.com/features/extensibility/plugin/tools/
 Existing tools (importable as separate tools):
 - `imap_mailbox.py` — IMAP mailbox + ManageSieve filter manager
 - `pop3_mailbox.py` — POP3 mailbox reader
+- `youtube_manager.py` — YouTube digest: gathers candidates from Watch Later + subscriptions via Google OAuth (per-user file token), digest playlist management, transcript with yt-dlp fallback
 
 ## Engineering Principles
 

@@ -6,6 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
     "sievelib>=1.5.0",
+    "google-api-python-client",
+    "google-auth",
+    "yt-dlp",
+    "youtube-transcript-api",
 ]
 
 [dependency-groups]
@@ -15,6 +19,7 @@ dev = [
     "pytest-cov>=5.0",
     "pyright>=1.1.390",
     "ruff>=0.9.0",
+    "python-dotenv>=1.0",
 ]
 
 [tool.ruff]
@@ -38,6 +43,7 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults
     "E402",   # module level import not at top of file (needed for test subdirectories)
 ]
+per-file-ignores = { "dev/*.py" = ["T201"] }  # the dev-only live harness PRINTS its per-step evidence table by contract
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -53,6 +59,13 @@ fail_under = 100
 precision = 1
 skip_empty = true
 skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "^\\s*if __name__ == .__main__.:",
+    # TYPE_CHECKING-only import in pop3_mailbox.py — never runs at runtime, but the locked
+    # coverage (7.14.1) counts it as an uncovered statement (fresh resolves ≥7.16 auto-skip it).
+    "^    from email\\.message import EmailMessage, Message$",
+]
 
 [tool.coverage.html]
 directory = "htmlcov"
